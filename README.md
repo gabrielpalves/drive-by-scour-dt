@@ -85,3 +85,11 @@ The ground truth is simulated using a physics-based deterioration model:
 * **Torzoni et al. (2024)** - "A digital twin framework for civil engineering structures"
 * **Kamariotis et al. (2024)** - "A framework for quantifying the value of vibration-based structural health monitoring"
 * **Fernandes et al. (2025)** - "Early Multi-damage Classification in Railway Bridges Using Drive-by Numerical Measurements"
+
+
+## TO DO:
+* Value Iteration (repair cost according to the % of damage - check Tulio & Beck's article)
+* Variabilities (speed, temperature, noise, vehicle properties)
+* 1 scenario with inspection (dive or visual, depending on wheter the pillar is submerged or not)
+* 1 scenario without inspection (when the cost is too high or in cases such as the bridge in Curitiba)
+* multi-span bridge?

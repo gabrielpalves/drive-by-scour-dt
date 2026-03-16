@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import pandas as pd
 import random as rnd
+from types import SimpleNamespace
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -11,6 +12,14 @@ from sklearn.preprocessing import MinMaxScaler
 import scipy.io
 import warnings
 import time
+
+# 2D TTBI imports
+from TTBI_2D.a01_train import a01_train
+from TTBI_2D.a02_track import a02_track
+from TTBI_2D.a03_bridge import a03_bridge
+from TTBI_2D.a04_options import a04_options
+from TTBI_2D.b00_calculations import b00_calculations
+from TTBI_2D.d01_data_processing import d01_data_processing
 
 # Check if pgmpy is installed
 try:
@@ -38,6 +47,16 @@ DISCRETIZED_DAMAGE = 5
 # Calculate N_CLASSES dynamically
 DAMAGE_CASES_TO_LOAD = list(range(0, 61, DISCRETIZED_DAMAGE))
 N_CLASSES = len(DAMAGE_CASES_TO_LOAD) # Should be 13
+DAMAGE_TO_LABEL = {dmg: i for i, dmg in enumerate(sorted(DAMAGE_CASES_TO_LOAD, reverse=True))}
+
+# Physical Data Config (Online)
+PHYSICAL_DATA_DIR = 'data_physical_only_noise'
+PHYSICAL_FILE_PREFIX = '' # e.g. '0001.mat'
+PHYSICAL_DAMAGE_STEP = 0.2
+PHYSICAL_MAX_DAMAGE = 60.0
+PHYSICAL_MIN_DAMAGE = 0.0
+# 0001.mat = 60%, 0301.mat = 0%
+NUM_PHYSICAL_FILES = int((PHYSICAL_MAX_DAMAGE - PHYSICAL_MIN_DAMAGE) / PHYSICAL_DAMAGE_STEP) + 1 # 301
 
 DOF_TO_USE = 1             # Row index to use
 PASSAGES_TO_LOAD = 200     # Number of passages to load
@@ -71,7 +90,77 @@ torch.manual_seed(40)
 plt.rcParams["font.family"] = "Times New Roman"
 plt.rcParams["mathtext.fontset"] = "cm"
 
-# --- 3. Preprocessing Function (must match training script) ---
+# --- 3. 2D TTBI simulation ---
+def run_single_passage(damage_percent, speed_kmh=80.0, temp_celsius=25.0, 
+                       add_signal_noise=True, noise_std=0.05, vehicle_props=None):
+    """
+    Executes a single TTBI simulation pass by calling the b00_calculations orchestrator.
+    
+    Args:
+        damage_percent (float): The damage state (0.0 to 1.0, representing 0% to 100%).
+        speed_kmh (float): Train speed in km/h.
+        temp_celsius (float): Ambient temperature in Celsius.
+        add_signal_noise (bool): Whether to apply artificial noise to the final signal.
+        noise_std (float): Standard deviation of the artificial noise.
+        vehicle_props (np.ndarray): Optional 2D array of vehicle properties for variability.
+                                    If None, nominal properties are used.
+                                    
+    Returns:
+        np.ndarray: A 1D array of the processed spatial acceleration for the first vehicle.
+    """
+    
+    # 1. Initialize Configuration Objects
+    Damage = SimpleNamespace()
+    Damage.desvio = noise_std if add_signal_noise else 0.0
+    Damage.DOFStiff_ROT_value = 0
+    Damage.DOF_ChangeRate_value = damage_percent
+    
+    Beam = SimpleNamespace()
+    Beam.Prop = SimpleNamespace()
+    Beam.Prop.E_mod = 1
+    Beam.Prop.n_mod = 100 
+    
+    # 2. Setup Vehicle Properties
+    Nveh = 5
+    Nprop = 3
+    if vehicle_props is None:
+        vehicle_props = np.zeros((Nveh, Nprop))
+        
+    # 3. Initialize Physical Models
+    Train = a01_train(speed_kmh / 3.6, vehicle_props)
+    Track = a02_track()
+    Beam  = a03_bridge(Beam)
+    
+    # Apply Temperature Effects
+    Beam.Prop.E = Beam.Prop.E - Beam.Prop.E * 0.003 * (temp_celsius - 15.0)
+    
+    # Generate Options
+    Calc, Beam, Track = a04_options(Beam, Track)
+    
+    # Suppress console outputs so the DT runs cleanly in the terminal
+    old_stdout = sys.stdout
+    sys.stdout = open(os.devnull, 'w')
+    
+    try:
+        # 4. Core Physics Engine Execution
+        Sol, Calc, Train, Beam, Track = b00_calculations(Calc, Train, Track, Beam, Damage)
+        
+        # 5. Data Processing (Time to Space Domain)
+        data = SimpleNamespace()
+        # Using 0, 0 as dummy indices for the i, j loop architecture in d01
+        data = d01_data_processing(0, 0, Sol, Train, Calc, data)
+        
+    finally:
+        # Restore console output
+        sys.stdout.close()
+        sys.stdout = old_stdout
+
+    # 6. Extract and return the specific DOF
+    processed_signal = data.AceleracaoPrimVag[0, 0][DOF_TO_USE, :]
+    
+    return processed_signal.astype(np.float32)
+
+# --- 4. Preprocessing Function (must match training script) ---
 def fft_preprocess(x, n_fft_bins):
     """Takes a 1D signal and returns its frequency magnitude."""
     fft_coeffs = np.fft.rfft(x)
@@ -86,7 +175,7 @@ def fft_preprocess(x, n_fft_bins):
         fft_mag_resized = fft_mag
     return fft_mag_resized.astype(np.float32)
 
-# --- 4. PyTorch Model Definition (must match training script) ---
+# --- 5. PyTorch Model Definition (must match training script) ---
 # We must redefine the class here so torch.load can reconstruct it.
 class Simple1DCNN(nn.Module):
     """
@@ -132,43 +221,65 @@ class Simple1DCNN(nn.Module):
             x = layer(x)
         return x
 
-# --- 5. Helper Functions ---
+# --- 6. Helper Functions ---
 def normalize_cpd(matrix):
     col_sums = matrix.sum(axis=0, keepdims=True)
     # Avoid division by zero if a column is all zeros
     col_sums[col_sums == 0] = 1
     return matrix / col_sums
 
-def build_mock_confusion_matrix(n_classes, accuracy):
-    """
-    Builds a "blurry" diagonal confusion matrix based on an overall accuracy.
-    This represents P(Predicted | True). We will transpose this
-    for the DBN's P(True | Predicted).
-    """
-    if accuracy < 1.0 / n_classes:
-        accuracy = 1.0 / n_classes
-        
-    # Calculate std dev (sigma) for the Gaussian blur
-    sigma = (1.0 - accuracy) * (n_classes / 10.0) + 0.5 
-    
-    conf_mat = np.zeros((n_classes, n_classes))
-    for i in range(n_classes): # True Label
-        for j in range(n_classes): # Predicted Label
-            dist = abs(i - j)
-            prob = np.exp(-0.5 * (dist / sigma)**2)
-            conf_mat[i, j] = prob
-            
-    # Normalize each *row* to sum to 1 (P(Predicted | True=i) must sum to 1)
-    row_sums = conf_mat.sum(axis=1, keepdims=True)
-    conf_mat = conf_mat / row_sums
-    
-    # We need P(True | Predicted) for the DBN, which is the transpose
-    # and column-normalized.
-    conf_mat_for_dbn = normalize_cpd(conf_mat.T)
-    print("Mock Confusion Matrix (for DBN) built successfully.")
-    return conf_mat_for_dbn
+GLOBAL_PHYSICAL_DATA_STORE = {} 
 
-# --- 6. DBN Framework Classes (Adapted for Scour) ---
+def load_physical_data_store():
+    """
+    Loads all 301 .mat files into memory for the 'Online' simulation.
+    Files: 0001.mat (60% dmg) ... 0301.mat (0% dmg)
+    """
+    print(f"Loading physical data from {PHYSICAL_DATA_DIR}...")
+    
+    if not os.path.exists(PHYSICAL_DATA_DIR):
+        print(f"Error: Directory '{PHYSICAL_DATA_DIR}' not found.")
+        sys.exit()
+
+    count = 0
+    # Loop from 1 to 301
+    for i in range(1, NUM_PHYSICAL_FILES + 1):
+        filename = f"{i:04d}.mat"
+        path = os.path.join(PHYSICAL_DATA_DIR, filename)
+        
+        try:
+            mat = scipy.io.loadmat(path)
+            # Access data.AceleracaoPrimVag
+            # In scipy.io, structs are loaded as numpy object arrays
+            # We need to navigate: data -> [0,0] -> AceleracaoPrimVag
+            data_struct = mat['data'][0, 0]
+            accel_data = data_struct['AceleracaoPrimVag']
+            
+            # accel_data is 1x5 cell array
+            passages = []
+            n_pass = accel_data.shape[1] # Should be 5
+            
+            for p in range(n_pass):
+                # Each cell contains a 3x5831 matrix
+                passage_matrix = accel_data[0, p]
+                # We want row 2 (index 1), all columns
+                signal = passage_matrix[1, :] 
+                passages.append(signal)
+            
+            # Store list of 5 signals in global store
+            # Key is the file index (1 to 301)
+            GLOBAL_PHYSICAL_DATA_STORE[i] = passages
+            count += 1
+            
+            if i % 50 == 0:
+                print(f"  Loaded {i}/{NUM_PHYSICAL_FILES} files...")
+                
+        except Exception as e:
+            print(f"Error loading {filename}: {e}")
+            
+    print(f"Successfully loaded {count} physical data files.")
+
+# --- 7. DBN Framework Classes (Adapted for Scour) ---
 
 class GetSetup:
     """
@@ -324,8 +435,7 @@ class ScourModel:
     def __init__(self):
         self.current_X = 0.0  # Internal state X(t) from Kamariotis
         self.sample_parameters()
-        self.X_MAX_FOR_MAPPING = 20.0 # Assumed max X(t)
-        self.DAMAGE_CASE_MAX = 60.0   # 60% damage
+        self.DAMAGE_CASE_MAX = 60  # 60% damage
         self.time = 0.0
 
     def sample_parameters(self):
@@ -340,7 +450,7 @@ class ScourModel:
 
     def evolve(self, delta_t):
         """Evolves the *gradual* damage (no shock) over one time step."""
-        t_avg = self.time + delta_t / 2.0 
+        t_avg = self.time + delta_t / 2.0
         gradual_rate = self.A * self.B * (t_avg ** (self.B - 1))
         
         omega_k_mean = -0.005; omega_k_cov = 0.10
@@ -354,7 +464,8 @@ class ScourModel:
 
     def get_current_damage_case(self):
         """Maps the internal state X(t) to your [0-60] damage case scale."""
-        damage_case = (self.current_X / self.X_MAX_FOR_MAPPING) * self.DAMAGE_CASE_MAX
+        # damage_case = 1/(1 + self.current_X)
+        damage_case = self.current_X * 1.0
         return min(damage_case, self.DAMAGE_CASE_MAX) # Cap at max damage
 
     def repair(self):
@@ -363,44 +474,6 @@ class ScourModel:
         self.current_X = 0.0
         self.time = 0.0
         self.sample_parameters()
-
-def simulate_2d_ttbi_model(continuous_damage_percent):
-    """
-    (PLACEHOLDER FUNCTION)
-    This function simulates a call to your 2D TTBI model.
-    It takes the *true* damage, calculates stiffness, and returns a
-    mock sensor signal that the classifier can process.
-    """
-    # 1. Calculate stiffness based on damage
-    # 0% damage -> 100% stiffness
-    # 60% damage -> 40% stiffness
-    stiffness_percent = 100.0 - continuous_damage_percent
-    
-    # This is where you would call your MATLAB/Python TTBI model
-    # print(f"  (Simulating TTBI model with stiffness = {stiffness_percent:.2f}%)")
-    
-    # 2. Create a mock signal
-    # We must return a realistic-looking signal, otherwise the
-    # loaded classifier (which was trained on real FFTs) will fail.
-    # We create a base signal (e.g., sine waves)
-    
-    # *** FIX: This must match the length of the data your scaler was fit on ***
-    # This value (5831) comes from the error message.
-    # If your load_data function finds a different length, update this.
-    N_COLS_EXPECTED = N_RAW_FEATURES 
-    
-    t = np.linspace(0, 1, N_COLS_EXPECTED)
-    mock_signal = np.sin(2 * np.pi * 30 * t) + np.sin(2 * np.pi * 75 * t)
-    
-    # Add a "hint" of the damage.
-    # We shift the frequency slightly based on damage.
-    damage_shift_freq = 75 * (stiffness_percent / 100.0)
-    mock_signal += np.sin(2 * np.pi * damage_shift_freq * t)
-    
-    # Add random noise (simulating 'data_only_noise')
-    mock_signal += np.random.normal(0, 0.5, N_COLS_EXPECTED)
-    
-    return mock_signal.astype(np.float32)
 
 
 class PhysicalAsset:
@@ -417,15 +490,29 @@ class PhysicalAsset:
             print("Error: N_RAW_FEATURES is not set. Run a data-loading script first.")
             # Set a default to avoid crashing, but this is a problem
             global N_RAW_FEATURES
-            N_RAW_FEATURES = 5831 
-
-
+            N_RAW_FEATURES = 5831
+    
     def get_observation_signal(self):
         """
-        Gets a new, raw sensor signal from the bridge by calling
-        the (placeholder) TTBI simulation.
+        Calls the dynamic physics engine on-the-fly to get the sensor signal.
         """
-        return simulate_2d_ttbi_model(self.state_continuous)
+        print(f"  -> Simulating TTBI passage for damage: {self.state_continuous:.2f}%")
+
+        # The physics engine expects damage as a decimal (0.0 to 1.0)
+        damage_decimal = self.state_continuous / 100.0
+
+        # You can inject DT-controlled variability here if desired!
+        current_temp = np.random.uniform(10.0, 30.0) 
+        current_speed = np.random.uniform(70.0, 90.0)
+
+        # Run the physics engine
+        signal = run_single_passage(
+            damage_percent=damage_decimal,
+            speed_kmh=current_speed,
+            temp_celsius=current_temp,
+            add_signal_noise=True
+        )
+        return signal
 
     def update_physical_state(self, action_str):
         """Update the physical state given the current p_state and an action."""
@@ -716,6 +803,8 @@ if __name__ == '__main__':
     model_path = "best_cnn_model.pth"
     scaler_path = "scaler.pkl"
     cm_path = "conf_mat_dbn.npy"
+    
+    load_physical_data_store()
 
     # These are the hyperparameters from your successful training run
     my_saved_params = {
