@@ -7,6 +7,11 @@ __pycache__/
 
 # Data
 data*
+*.db
+*.csv
+*.pth
+*.npy
+results_*
 
 # C extensions
 *.so

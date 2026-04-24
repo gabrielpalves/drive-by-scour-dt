@@ -41,10 +41,11 @@ def b02_boundary_conditions(Beam, Damage):
 
     # Array with the same length as the number of supports with different stiffness
     # Note: Hardcoded for 3 supports as per the original MATLAB script
+    retained_stiffness = 1.0 - Damage.DOF_ChangeRate_value
     Beam.BC.DOF_stiff_values = np.array([
-        DOF_Original_value,                                # Vertical Support 1
-        Damage.DOF_ChangeRate_value * DOF_Original_value,  # Vertical Support 2
-        DOF_Original_value                                 # Vertical Support 3
+        DOF_Original_value,                       # Vertical Support 1
+        retained_stiffness * DOF_Original_value,  # Vertical Support 2
+        DOF_Original_value                        # Vertical Support 3
     ])
 
     # -- Fixed rotational DOF with stiffness values --

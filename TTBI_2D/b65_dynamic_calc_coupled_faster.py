@@ -303,8 +303,8 @@ def b65_dynamic_calc_coupled_faster(Veh, Model, Calc, Track, Sol, Damage):
         Sol.Veh[v].A = Coup_A[Veh[v].global_ind, :]
         
         # Generates measurement noise on the first 3 DOFs (simulating sensors)
-        noise = Damage.desvio * Sol.Veh[v].A[0:3, :] * np.random.randn(3, num_t)
-        Sol.Veh[v].A[0:3, :] += noise
+        # noise = Damage.desvio * Sol.Veh[v].A[0:3, :] * np.random.randn(3, num_t)
+        # Sol.Veh[v].A[0:3, :] += noise
 
     Sol.Model.Nodal.U = Coup_U[track_offset:, :]
     Sol.Model.Nodal.V = Coup_V[track_offset:, :]

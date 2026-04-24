@@ -91,74 +91,87 @@ plt.rcParams["font.family"] = "Times New Roman"
 plt.rcParams["mathtext.fontset"] = "cm"
 
 # --- 3. 2D TTBI simulation ---
+import numpy as np
+from a01_train import a01_train
+from a02_track import a02_track
+from a03_bridge import a03_bridge
+from a04_options import a04_options
+from b00_calculations import b00_calculations
+from d01_data_processing import d01_data_processing
+
+class EmptyObj:
+    """Simple container for dynamic attribute assignment to match MATLAB struct behavior."""
+    pass
+
 def run_single_passage(damage_percent, speed_kmh=80.0, temp_celsius=25.0, 
-                       add_signal_noise=True, noise_std=0.05, vehicle_props=None):
+                       add_signal_noise=True, noise_std=0.05,
+                       Nveh=5, Nprop=3, vehicle_props=None):
     """
-    Executes a single TTBI simulation pass by calling the b00_calculations orchestrator.
+    Runs a single TTBI physics simulation and returns the 8 specific DOFs.
     
-    Args:
-        damage_percent (float): The damage state (0.0 to 1.0, representing 0% to 100%).
-        speed_kmh (float): Train speed in km/h.
-        temp_celsius (float): Ambient temperature in Celsius.
-        add_signal_noise (bool): Whether to apply artificial noise to the final signal.
-        noise_std (float): Standard deviation of the artificial noise.
-        vehicle_props (np.ndarray): Optional 2D array of vehicle properties for variability.
-                                    If None, nominal properties are used.
-                                    
     Returns:
-        np.ndarray: A 1D array of the processed spatial acceleration for the first vehicle.
+        signal (np.ndarray): Shape (8, Sequence_Length) containing the spatial signals.
     """
-    
-    # 1. Initialize Configuration Objects
-    Damage = SimpleNamespace()
+    # 1. Setup Damage Configuration
+    Damage = EmptyObj()
     Damage.desvio = noise_std if add_signal_noise else 0.0
     Damage.DOFStiff_ROT_value = 0
     Damage.DOF_ChangeRate_value = damage_percent
-    
-    Beam = SimpleNamespace()
-    Beam.Prop = SimpleNamespace()
-    Beam.Prop.E_mod = 1
-    Beam.Prop.n_mod = 100 
-    
-    # 2. Setup Vehicle Properties
-    Nveh = 5
-    Nprop = 3
-    if vehicle_props is None:
-        vehicle_props = np.zeros((Nveh, Nprop))
-        
-    # 3. Initialize Physical Models
-    Train = a01_train(speed_kmh / 3.6, vehicle_props)
-    Track = a02_track()
-    Beam  = a03_bridge(Beam)
-    
-    # Apply Temperature Effects
-    Beam.Prop.E = Beam.Prop.E - Beam.Prop.E * 0.003 * (temp_celsius - 15.0)
-    
-    # Generate Options
-    Calc, Beam, Track = a04_options(Beam, Track)
-    
-    # Suppress console outputs so the DT runs cleanly in the terminal
-    old_stdout = sys.stdout
-    sys.stdout = open(os.devnull, 'w')
-    
-    try:
-        # 4. Core Physics Engine Execution
-        Sol, Calc, Train, Beam, Track = b00_calculations(Calc, Train, Track, Beam, Damage)
-        
-        # 5. Data Processing (Time to Space Domain)
-        data = SimpleNamespace()
-        # Using 0, 0 as dummy indices for the i, j loop architecture in d01
-        data = d01_data_processing(0, 0, Sol, Train, Calc, data)
-        
-    finally:
-        # Restore console output
-        sys.stdout.close()
-        sys.stdout = old_stdout
 
-    # 6. Extract and return the specific DOF
-    processed_signal = data.AceleracaoPrimVag[0, 0][DOF_TO_USE, :]
+    # 2. Setup Bridge Configuration
+    Beam = EmptyObj()
+    Beam.Prop = EmptyObj()
+    Beam.Prop.E_mod = 1
+    Beam.Prop.n_mod = 100
+
+    # 3. Setup Velocidade (m/s)
+    Velocidade = speed_kmh / 3.6
+
+    # 4. Setup Vehicle Variability
+    if vehicle_props is None:
+        # If no variability is passed, use a zero-noise baseline
+        x_veh_single = np.zeros((Nveh, Nprop))
+    else:
+        # Squeeze or format to ensure it's (Nveh, Nprop)
+        x_veh_single = np.array(vehicle_props).reshape(Nveh, Nprop)
+
+    # 5. Core Physics Pipeline
+    Train = a01_train(Velocidade, x_veh_single)
+    Track = a02_track()
+    Beam = a03_bridge(Beam)
     
-    return processed_signal.astype(np.float32)
+    # Apply Temperature Degradation Effect
+    Beam.Prop.E = Beam.Prop.E - Beam.Prop.E * 0.003 * (temp_celsius - 15)
+
+    # Calculations
+    Calc, Beam, Track = a04_options(Beam, Track)
+    Sol, Calc, Train, Beam, Track = b00_calculations(Calc, Train, Track, Beam, Damage)
+
+    # 6. Data Processing & Spatial Interpolation
+    data = EmptyObj()
+    # We pass i=0, j=0 since we are only running a single passage
+    data = d01_data_processing(0, 0, Sol, Train, Calc, Damage, data)
+
+    # 7. Extract and Stack the exactly requested 8 DOFs
+    # The output from d01_data_processing is stored under the (0, 0) dictionary key
+    acel_bogie = data.AcelPrimVag[0, 0]        # 3 Rows (CarBody, FrontBogie, RearBogie Vert)
+    acel_wheel = data.AcelRodaPrimVag[0, 0]    # 4 Rows (Wheels 1 through 4)
+    pitch_bogie = data.PitchPrimVag[0, 0]      # 3 Rows (CarBody, FrontBogie, RearBogie Pitch)
+
+    # Stack them strictly following your dof_names mapping
+    signal = np.vstack((
+        acel_bogie[0, :],   # 0: CarBody_Vert
+        acel_bogie[1, :],   # 1: FrontBogie_Vert
+        acel_bogie[2, :],   # 2: RearBogie_Vert
+        acel_wheel[0, :],   # 3: Wheel1_Vert
+        acel_wheel[1, :],   # 4: Wheel2_Vert
+        pitch_bogie[0, :],  # 5: CarBody_Pitch
+        pitch_bogie[1, :],  # 6: FrontBogie_Pitch
+        pitch_bogie[2, :]   # 7: RearBogie_Pitch
+    ))
+
+    # Return as a float32 array for PyTorch compatibility
+    return signal.astype(np.float32)
 
 # --- 4. Preprocessing Function (must match training script) ---
 def fft_preprocess(x, n_fft_bins):
@@ -174,6 +187,25 @@ def fft_preprocess(x, n_fft_bins):
     else:
         fft_mag_resized = fft_mag
     return fft_mag_resized.astype(np.float32)
+
+class DTConfig:
+    def __init__(self):
+        # Physical Asset / Simulator Config
+        self.n_veh = 5
+        self.n_prop = 3
+        self.damage_step = 0.2
+        self.max_damage = 60.0
+        
+        # Machine Learning / Signal Config
+        self.dofs_to_use = [1]        # Use a list! [1] for single, [1, 2, 3] for Multi-DOF
+        self.signal_transform = 'FFT' # Easy switch later: 'FFT' or 'CWT'
+        self.n_segments = 512
+        self.n_classes = 13
+        
+        # DT Framework Config
+        self.sim_years = 60
+        self.monitoring_interval = 1.0
+        self.repair_threshold_label = 6
 
 # --- 5. PyTorch Model Definition (must match training script) ---
 # We must redefine the class here so torch.load can reconstruct it.
@@ -480,17 +512,11 @@ class PhysicalAsset:
     """
     Physical Asset class. Simulates the ground truth.
     """
-    def __init__(self, degradation_law="scour_gradual"):
+    def __init__(self, config, degradation_law="scour_gradual"):
+        self.config = config  # Store the config
         self.scour_model = ScourModel()
-        self.state_continuous = 0.0 # True continuous damage (e.g., 23.4%)
-        self.degradation_law = degradation_law
+        self.state_continuous = 0.0 
         self.time = 0.0
-        # This global must be set by the load_data function
-        if 'N_RAW_FEATURES' not in globals():
-            print("Error: N_RAW_FEATURES is not set. Run a data-loading script first.")
-            # Set a default to avoid crashing, but this is a problem
-            global N_RAW_FEATURES
-            N_RAW_FEATURES = 5831
     
     def get_observation_signal(self):
         """
@@ -501,16 +527,20 @@ class PhysicalAsset:
         # The physics engine expects damage as a decimal (0.0 to 1.0)
         damage_decimal = self.state_continuous / 100.0
 
-        # You can inject DT-controlled variability here if desired!
-        current_temp = np.random.uniform(10.0, 30.0) 
+        # Variability
+        current_temp = np.random.uniform(3.0, 33.0)
         current_speed = np.random.uniform(70.0, 90.0)
+        veh_variability = np.random.randn(self.config.n_veh, self.config.n_prop)
 
         # Run the physics engine
         signal = run_single_passage(
             damage_percent=damage_decimal,
             speed_kmh=current_speed,
             temp_celsius=current_temp,
-            add_signal_noise=True
+            add_signal_noise=True,
+            Nveh=self.config.n_veh,
+            Nprop=self.config.n_prop,
+            vehicle_props=veh_variability
         )
         return signal
 
@@ -540,21 +570,23 @@ class DigitalAsset:
     """
     Digital Asset class. Loads the trained classifier and performs predictions.
     """
-    def __init__(self, model, scaler, n_classes, n_segments):
+    def __init__(self, model, scaler, config):
+        self.config = config
         self.model = model
         self.scaler = scaler
-        self.n_classes = n_classes
-        self.n_segments = n_segments # for FFT
         self.model.to(DEVICE)
-        self.model.eval() # Set model to evaluation mode
+        self.model.eval()
 
     def estimate_state(self, raw_signal_obs):
         """
         Takes a raw sensor observation, preprocesses it, and predicts a state.
         This is the "online" inference pipeline.
         """
-        # 1. Preprocess the raw signal
-        signal_fft = fft_preprocess(raw_signal_obs, self.n_segments)
+        # 1. Switch preprocessing dynamically based on config!
+        if self.config.signal_transform == 'FFT':
+            signal_processed = fft_preprocess(raw_signal_obs, self.config.n_segments)
+        elif self.config.signal_transform == 'CWT':
+            signal_processed = cwt_preprocess(raw_signal_obs, self.config.n_segments) # Future function
         
         # 2. Scale the signal using the *loaded* scaler
         # scaler.transform expects a 2D array
