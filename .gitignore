@@ -6,7 +6,7 @@ __pycache__/
 *vscode/
 
 # Data
-data*
+/data*
 *.db
 *.csv
 *.pth

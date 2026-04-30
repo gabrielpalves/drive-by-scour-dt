@@ -1,0 +1,40 @@
+{
+    "model_name": "15_PAA_NHiTS",
+    "preprocessing_method": "PAA",
+    "active_dofs": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+    ],
+    "architecture_flags": {
+        "use_space2vec": false,
+        "use_lstm": false,
+        "use_nhits": true,
+        "model_type": "1D_MODULAR"
+    },
+    "optimal_hyperparameters": {
+        "lr": 0.00045260603231949613,
+        "weight_decay": 0.0001246282707610085,
+        "n_conv_layers": 3,
+        "n_dense_layers": 2,
+        "n_filters_l0": 80,
+        "kernel_size_l0": 7,
+        "pooling_l0": true,
+        "n_filters_l1": 48,
+        "kernel_size_l1": 2,
+        "pooling_l1": true,
+        "n_filters_l2": 128,
+        "kernel_size_l2": 7,
+        "pooling_l2": false,
+        "n_dense_units_l0": 224,
+        "dropout_l0": 0.10255342878066648,
+        "n_dense_units_l1": 128,
+        "dropout_l1": 0.10124159237015881,
+        "nhits_pool_rates_key": "1_3_6"
+    }
+}

@@ -1,1002 +1,195 @@
+"""
+drive_by_DT.py
+==============
+Drive-by digital twin for scour damage monitoring.
+
+This script is the entry point for the online simulation phase.
+It contains only configuration and execution — no class or function
+definitions.  All implementation lives in the digital_twin/ and core/
+packages built from the ablation study outputs.
+
+What this script does
+---------------------
+1. Load the offline package produced by the ablation
+   (model weights, scaler, architecture metadata).
+2. Configure the DBN from the champion model's confusion matrix.
+3. Instantiate the four framework objects: PhysicalAsset, DigitalAsset,
+   Planner, and Graph.
+4. Run the filtering simulation for sim_years steps.
+5. Run a forward prediction from the final belief.
+6. Save figures and history CSVs.
+
+What to edit between runs
+-------------------------
+Only the block labelled CONFIGURATION below.  Everything else derives
+from the metadata JSON or carries sensible defaults.
+"""
+
 import os
 import sys
+
 import numpy as np
-import pandas as pd
-import random as rnd
-from types import SimpleNamespace
-import matplotlib.pyplot as plt
 import torch
-import torch.nn as nn
-import pickle
-from sklearn.preprocessing import MinMaxScaler
-import scipy.io
-import warnings
-import time
 
-# 2D TTBI imports
-from TTBI_2D.a01_train import a01_train
-from TTBI_2D.a02_track import a02_track
-from TTBI_2D.a03_bridge import a03_bridge
-from TTBI_2D.a04_options import a04_options
-from TTBI_2D.b00_calculations import b00_calculations
-from TTBI_2D.d01_data_processing import d01_data_processing
+# ── Digital twin framework ────────────────────────────────────────────────────
+from digital_twin.config  import DTConfig
+from digital_twin.assets  import PhysicalAsset, DigitalAsset
+from digital_twin.dbn     import GetSetup, Graph, normalize_cpd
+from digital_twin.planner import Planner
+from digital_twin.dt_plots import Plot
 
-# Check if pgmpy is installed
+# ── pgmpy — hard dependency for the DBN ──────────────────────────────────────
 try:
-    from pgmpy.models import DynamicBayesianNetwork as DBN
-    from pgmpy.factors.discrete import TabularCPD
-    from pgmpy.inference import DBNInference
+    from pgmpy.models import DynamicBayesianNetwork   # noqa: F401 (import check)
 except ImportError:
-    print("ImportError: pgmpy not found.")
-    print("Please install pgmpy: pip install pgmpy")
-    sys.exit()
-
-# Check if plotters is available, otherwise disable plotting
-try:
-    from plotters.plotter import Plot # Assuming this is in a 'plotters' folder
-    PLOTTING_ENABLED = True
-except ImportError:
-    # print("Warning: 'plotters.plotter.Plot' not found. Plotting will be disabled.")
-    # print("Simulation will still run and save CSV results.")
-    PLOTTING_ENABLED = False
-
-
-# --- 1. Classifier/Data Configuration (for reference) ---
-# These parameters defined the "offline" model we are loading
-DISCRETIZED_DAMAGE = 5
-# Calculate N_CLASSES dynamically
-DAMAGE_CASES_TO_LOAD = list(range(0, 61, DISCRETIZED_DAMAGE))
-N_CLASSES = len(DAMAGE_CASES_TO_LOAD) # Should be 13
-DAMAGE_TO_LABEL = {dmg: i for i, dmg in enumerate(sorted(DAMAGE_CASES_TO_LOAD, reverse=True))}
-
-# Physical Data Config (Online)
-PHYSICAL_DATA_DIR = 'data_physical_only_noise'
-PHYSICAL_FILE_PREFIX = '' # e.g. '0001.mat'
-PHYSICAL_DAMAGE_STEP = 0.2
-PHYSICAL_MAX_DAMAGE = 60.0
-PHYSICAL_MIN_DAMAGE = 0.0
-# 0001.mat = 60%, 0301.mat = 0%
-NUM_PHYSICAL_FILES = int((PHYSICAL_MAX_DAMAGE - PHYSICAL_MIN_DAMAGE) / PHYSICAL_DAMAGE_STEP) + 1 # 301
-
-DOF_TO_USE = 1             # Row index to use
-PASSAGES_TO_LOAD = 200     # Number of passages to load
-FILE_DIRECTORY = 'data_only_noise' 
-N_PAA_SEGMENTS = 512  # Must match the model's training! (Using FFT)
-TEST_SET_SIZE = 0.20
-N_KFOLD_SPLITS = 5
-N_OPTUNA_TRIALS = 20
-EPOCHS_FINAL = 35
-EPOCHS_OPTUNA = 25
-BATCH_SIZE = 32
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# This will be populated by the 'load_data' function
-# Based on your error, it's 5831
-N_RAW_FEATURES = 5831 
-
-# --- 2. DT Simulation Configuration ---
-SIMULATION_YEARS = 60
-MONITORING_INTERVAL = 1.0 # (Years) How often drive-by monitoring happens
-MODEL_ACCURACY = 0.94   # Your test accuracy
-# "30% damage or more" -> 30% damage is case 30.
-# Mapped label = (60 - 30) // 5 = 6
-# So, labels 0-6 (more damaged) trigger repair.
-DAMAGE_LABEL_THRESHOLD = 6  
-
-rnd.seed(42)
-np.random.seed(40)
-torch.manual_seed(40)
-
-plt.rcParams["font.family"] = "Times New Roman"
-plt.rcParams["mathtext.fontset"] = "cm"
-
-# --- 3. 2D TTBI simulation ---
-import numpy as np
-from a01_train import a01_train
-from a02_track import a02_track
-from a03_bridge import a03_bridge
-from a04_options import a04_options
-from b00_calculations import b00_calculations
-from d01_data_processing import d01_data_processing
-
-class EmptyObj:
-    """Simple container for dynamic attribute assignment to match MATLAB struct behavior."""
-    pass
-
-def run_single_passage(damage_percent, speed_kmh=80.0, temp_celsius=25.0, 
-                       add_signal_noise=True, noise_std=0.05,
-                       Nveh=5, Nprop=3, vehicle_props=None):
-    """
-    Runs a single TTBI physics simulation and returns the 8 specific DOFs.
-    
-    Returns:
-        signal (np.ndarray): Shape (8, Sequence_Length) containing the spatial signals.
-    """
-    # 1. Setup Damage Configuration
-    Damage = EmptyObj()
-    Damage.desvio = noise_std if add_signal_noise else 0.0
-    Damage.DOFStiff_ROT_value = 0
-    Damage.DOF_ChangeRate_value = damage_percent
-
-    # 2. Setup Bridge Configuration
-    Beam = EmptyObj()
-    Beam.Prop = EmptyObj()
-    Beam.Prop.E_mod = 1
-    Beam.Prop.n_mod = 100
-
-    # 3. Setup Velocidade (m/s)
-    Velocidade = speed_kmh / 3.6
-
-    # 4. Setup Vehicle Variability
-    if vehicle_props is None:
-        # If no variability is passed, use a zero-noise baseline
-        x_veh_single = np.zeros((Nveh, Nprop))
-    else:
-        # Squeeze or format to ensure it's (Nveh, Nprop)
-        x_veh_single = np.array(vehicle_props).reshape(Nveh, Nprop)
-
-    # 5. Core Physics Pipeline
-    Train = a01_train(Velocidade, x_veh_single)
-    Track = a02_track()
-    Beam = a03_bridge(Beam)
-    
-    # Apply Temperature Degradation Effect
-    Beam.Prop.E = Beam.Prop.E - Beam.Prop.E * 0.003 * (temp_celsius - 15)
-
-    # Calculations
-    Calc, Beam, Track = a04_options(Beam, Track)
-    Sol, Calc, Train, Beam, Track = b00_calculations(Calc, Train, Track, Beam, Damage)
-
-    # 6. Data Processing & Spatial Interpolation
-    data = EmptyObj()
-    # We pass i=0, j=0 since we are only running a single passage
-    data = d01_data_processing(0, 0, Sol, Train, Calc, Damage, data)
-
-    # 7. Extract and Stack the exactly requested 8 DOFs
-    # The output from d01_data_processing is stored under the (0, 0) dictionary key
-    acel_bogie = data.AcelPrimVag[0, 0]        # 3 Rows (CarBody, FrontBogie, RearBogie Vert)
-    acel_wheel = data.AcelRodaPrimVag[0, 0]    # 4 Rows (Wheels 1 through 4)
-    pitch_bogie = data.PitchPrimVag[0, 0]      # 3 Rows (CarBody, FrontBogie, RearBogie Pitch)
-
-    # Stack them strictly following your dof_names mapping
-    signal = np.vstack((
-        acel_bogie[0, :],   # 0: CarBody_Vert
-        acel_bogie[1, :],   # 1: FrontBogie_Vert
-        acel_bogie[2, :],   # 2: RearBogie_Vert
-        acel_wheel[0, :],   # 3: Wheel1_Vert
-        acel_wheel[1, :],   # 4: Wheel2_Vert
-        pitch_bogie[0, :],  # 5: CarBody_Pitch
-        pitch_bogie[1, :],  # 6: FrontBogie_Pitch
-        pitch_bogie[2, :]   # 7: RearBogie_Pitch
-    ))
-
-    # Return as a float32 array for PyTorch compatibility
-    return signal.astype(np.float32)
-
-# --- 4. Preprocessing Function (must match training script) ---
-def fft_preprocess(x, n_fft_bins):
-    """Takes a 1D signal and returns its frequency magnitude."""
-    fft_coeffs = np.fft.rfft(x)
-    fft_mag = np.abs(fft_coeffs)
-    if len(fft_mag) != n_fft_bins:
-        fft_mag_resized = np.interp(
-            np.linspace(0, len(fft_mag), n_fft_bins),
-            np.arange(len(fft_mag)),
-            fft_mag
-        )
-    else:
-        fft_mag_resized = fft_mag
-    return fft_mag_resized.astype(np.float32)
-
-class DTConfig:
-    def __init__(self):
-        # Physical Asset / Simulator Config
-        self.n_veh = 5
-        self.n_prop = 3
-        self.damage_step = 0.2
-        self.max_damage = 60.0
-        
-        # Machine Learning / Signal Config
-        self.dofs_to_use = [1]        # Use a list! [1] for single, [1, 2, 3] for Multi-DOF
-        self.signal_transform = 'FFT' # Easy switch later: 'FFT' or 'CWT'
-        self.n_segments = 512
-        self.n_classes = 13
-        
-        # DT Framework Config
-        self.sim_years = 60
-        self.monitoring_interval = 1.0
-        self.repair_threshold_label = 6
-
-# --- 5. PyTorch Model Definition (must match training script) ---
-# We must redefine the class here so torch.load can reconstruct it.
-class Simple1DCNN(nn.Module):
-    """
-    Dynamic 1D CNN for time series classification.
-    The architecture is defined by the hyperparameters passed from a params dict.
-    """
-    def __init__(self, n_segments, n_classes, params):
-        super(Simple1DCNN, self).__init__()
-        self.params = params
-        self.layers = nn.ModuleList()
-        in_channels = 1
-        current_seq_len = n_segments
-        
-        n_conv_layers = self.params['n_conv_layers']
-        
-        for i in range(n_conv_layers):
-            out_channels = self.params[f'n_filters_l{i}']
-            kernel_size = self.params[f'kernel_size_l{i}']
-            self.layers.append(nn.Conv1d(in_channels, out_channels, kernel_size=kernel_size, padding='same'))
-            self.layers.append(nn.ReLU())
-            if self.params[f'pooling_l{i}']:
-                self.layers.append(nn.MaxPool1d(kernel_size=2, stride=2))
-                current_seq_len = current_seq_len // 2
-            in_channels = out_channels
-            
-        self.layers.append(nn.Flatten())
-        flattened_size = current_seq_len * in_channels
-        
-        n_dense_layers = self.params['n_dense_layers']
-        in_features = flattened_size
-        
-        for i in range(n_dense_layers):
-            out_features = self.params[f'n_dense_units_l{i}']
-            self.layers.append(nn.Linear(in_features, out_features))
-            self.layers.append(nn.ReLU())
-            self.layers.append(nn.Dropout(self.params[f'dropout_l{i}']))
-            in_features = out_features
-            
-        self.layers.append(nn.Linear(in_features, n_classes))
-        
-    def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
-        return x
-
-# --- 6. Helper Functions ---
-def normalize_cpd(matrix):
-    col_sums = matrix.sum(axis=0, keepdims=True)
-    # Avoid division by zero if a column is all zeros
-    col_sums[col_sums == 0] = 1
-    return matrix / col_sums
-
-GLOBAL_PHYSICAL_DATA_STORE = {} 
-
-def load_physical_data_store():
-    """
-    Loads all 301 .mat files into memory for the 'Online' simulation.
-    Files: 0001.mat (60% dmg) ... 0301.mat (0% dmg)
-    """
-    print(f"Loading physical data from {PHYSICAL_DATA_DIR}...")
-    
-    if not os.path.exists(PHYSICAL_DATA_DIR):
-        print(f"Error: Directory '{PHYSICAL_DATA_DIR}' not found.")
-        sys.exit()
-
-    count = 0
-    # Loop from 1 to 301
-    for i in range(1, NUM_PHYSICAL_FILES + 1):
-        filename = f"{i:04d}.mat"
-        path = os.path.join(PHYSICAL_DATA_DIR, filename)
-        
-        try:
-            mat = scipy.io.loadmat(path)
-            # Access data.AceleracaoPrimVag
-            # In scipy.io, structs are loaded as numpy object arrays
-            # We need to navigate: data -> [0,0] -> AceleracaoPrimVag
-            data_struct = mat['data'][0, 0]
-            accel_data = data_struct['AceleracaoPrimVag']
-            
-            # accel_data is 1x5 cell array
-            passages = []
-            n_pass = accel_data.shape[1] # Should be 5
-            
-            for p in range(n_pass):
-                # Each cell contains a 3x5831 matrix
-                passage_matrix = accel_data[0, p]
-                # We want row 2 (index 1), all columns
-                signal = passage_matrix[1, :] 
-                passages.append(signal)
-            
-            # Store list of 5 signals in global store
-            # Key is the file index (1 to 301)
-            GLOBAL_PHYSICAL_DATA_STORE[i] = passages
-            count += 1
-            
-            if i % 50 == 0:
-                print(f"  Loaded {i}/{NUM_PHYSICAL_FILES} files...")
-                
-        except Exception as e:
-            print(f"Error loading {filename}: {e}")
-            
-    print(f"Successfully loaded {count} physical data files.")
-
-# --- 7. DBN Framework Classes (Adapted for Scour) ---
-
-class GetSetup:
-    """
-    Creates the probabilistic graphical model.
-    Adapted for 1D scour damage states [0, 1, ..., 12].
-    """
-    def __init__(self, states_list, actions_list, conf_mat_dt):
-        self.states_list = states_list
-        self.actions_list = actions_list
-        self.n_states = len(states_list)
-        self.conf_mat_dt = conf_mat_dt
-    
-    def _get_low_diag_transition(self, prob_adv):
-        """
-        Returns a lower diagonal transition matrix.
-        Damage state can only stay the same or increase by one.
-        State 0 is max damage (60%). State 12 is healthy (0%).
-        So, "damage" means moving from 12 -> 11 -> 10 ...
-        """
-        n_states = self.n_states
-        trans = np.zeros((n_states, n_states))
-        
-        for i in range(n_states):
-            if i == 0: # First state (max damage)
-                trans[i, i] = 1.0 # Stays at max damage
-            else:
-                trans[i, i] = 1 - prob_adv  # Prob of staying in this state
-                trans[i-1, i] = prob_adv  # Prob of moving to next damage state (i-1)
-        return trans
-    
-    def _get_restart_trainsition(self):
-        """Returns a transition matrix for the perfect maintenance action."""
-        trans = np.zeros((self.n_states, self.n_states))
-        # After repair, state is "healthy" (last state, e.g., index 12)
-        trans[self.n_states - 1, :] = 1.0
-        return trans
-        
-    def _get_combined_transition(self, t1, t2):
-        """Combines two cpds: p(D_t | D_t-1, U_t-1) * p(D_t | D_NN_t)"""
-        n_states = t1.shape[0]
-        card_1 = t1.shape[1]
-        card_2 = t2.shape[1]
-        comb = np.zeros((n_states, card_1 * card_2))
-        for i in range(n_states):
-            for j in range(card_1):
-                for k in range(card_2):
-                    comb[i, j * card_2 + k] = t1[i, j] * t2[i, k]
-        return normalize_cpd(comb)
-
-    def get_transitions(self, p_nothing):
-        """Returns the transition matrix for each possible action."""
-        # p(D_t | D_t-1, U_t-1=do_nothing):
-        trans_prob_nothing = self._get_low_diag_transition(prob_adv=p_nothing)
-        # p(D_t | D_t-1, U_t-1=perfect_repair):
-        trans_prob_perfect = self._get_restart_trainsition()
-        return np.stack((trans_prob_nothing, trans_prob_perfect), 0)
-    
-    def get_graph(self, cpd_d_to_u, transitions):
-        """Returns all the structures required to create the main graph."""
-        states = self.states_list
-        Ns = self.n_states
-        actions = self.actions_list
-        Na = len(actions)
-        
-        graph_structure = ([(('U^{A}_{-1}', 0), ('D', 0)),
-                            (('D_{NN}', 0), ('D', 0)),
-                            (('D', 0), ('U^{P}', 0)),
-                            (('D', 0), ('D', 1)),
-                            (('U^{A}_{-1}', 1), ('D', 1)),
-                            (('D_{NN}', 1), ('D', 1)),
-                            (('D', 1), ('U^{P}', 1)),])
-        
-        digital_subgraph = ([(('D', 0), ('U', 0)),
-                             (('D', 0), ('D', 1)), 
-                             (('U', 0), ('D', 1)),
-                             (('D', 1), ('U', 1))])
-        
-        # p(D_t | D_t-1, U_t-1=do_nothing) * p(D_t | D_NN_t)
-        cond_d_nothing = self._get_combined_transition(t1=self.conf_mat_dt, t2=transitions[0])
-        # p(D_t | D_t-1, U_t-1=perfect_repair) * p(D_t | D_NN_t)
-        cond_d_perfect = self._get_combined_transition(t1=self.conf_mat_dt, t2=transitions[1])
-        cond_d = np.concatenate((cond_d_nothing, cond_d_perfect), 1)
-        
-        # --- Define CPDs ---
-        U_a_0_cpd = TabularCPD(('U^{A}_{-1}', 0), Na, np.ones((Na, 1))/Na,
-                               state_names={('U^{A}_{-1}', 0): actions})
-                
-        D_NN_0_cpd = TabularCPD(('D_{NN}', 0), Ns, np.ones((Ns, 1))/Ns,
-                                state_names = {('D_{NN}', 0): states})
-    
-        # p(D_0 | U_A_-1, D_NN_0)
-        # At t=0, D_0 does not depend on D_-1. So p(D_0|...) = p(D_0|D_NN_0)
-        init_trans = np.tile(self.conf_mat_dt, (1, Na))
-        D_0_cpd = TabularCPD(('D', 0), Ns, init_trans,
-                             evidence=[('U^{A}_{-1}', 0),('D_{NN}', 0)],
-                             evidence_card=[Na, Ns],
-                             state_names={('D', 0): states,
-                                          ('U^{A}_{-1}', 0): actions,
-                                          ('D_{NN}', 0): states})
-        
-        U_p_0_cpd = TabularCPD(('U^{P}', 0), Na, cpd_d_to_u,
-                               evidence=[('D', 0)], evidence_card=[Ns],
-                               state_names={('U^{P}', 0): actions, ('D', 0): states})
-    
-        D_0_sub_cpd = TabularCPD(('D', 0), Ns, np.ones((Ns, 1))/Ns, 
-                                 state_names={('D', 0): states})
-    
-        U_0_sub_cpd = TabularCPD(('U', 0), Na, cpd_d_to_u,
-                                 evidence=[('D', 0)], evidence_card=[Ns],
-                                 state_names={('U', 0): actions, ('D', 0): states})
-        
-        U_a_1_cpd = TabularCPD(('U^{A}_{-1}', 1), Na, np.ones((Na, 1))/Na,
-                               state_names={('U^{A}_{-1}', 1): actions})
-    
-        D_NN_1_cpd = TabularCPD(('D_{NN}', 1), Ns, np.ones((Ns, 1))/Ns,
-                                state_names = {('D_{NN}', 1): states})
-    
-        # This is the main transition CPD: p(D_t | D_t-1, U_t-1, D_NN_t)
-        D_1_cpd = TabularCPD(('D', 1), Ns, cond_d,
-                             evidence=[('U^{A}_{-1}', 1), ('D_{NN}', 1), ('D', 0)],
-                             evidence_card=[Na, Ns, Ns],
-                             state_names={('D', 1): states,
-                                          ('U^{A}_{-1}', 1): actions,
-                                          ('D_{NN}', 1): states,
-                                          ('D', 0): states})
-        
-        U_p_1_cpd = TabularCPD(('U^{P}', 1), Na, cpd_d_to_u,
-                               evidence=[('D', 1)], evidence_card=[Ns],
-                               state_names={('U^{P}', 1): actions, ('D', 1): states})
-    
-        D_1_sub_cpd = TabularCPD(('D', 1), Ns, np.concatenate(np.array([transitions[i] for i in range(Na)]),1),
-                                 evidence=[('U', 0),('D', 0)], evidence_card=[Na, Ns],
-                                 state_names={('D', 1): states,
-                                              ('U', 0): actions,
-                                              ('D', 0): states})
-        
-        U_1_sub_cpd = TabularCPD(('U', 1), Na, cpd_d_to_u,
-                                 evidence=[('D', 1)], evidence_card=[Ns],
-                                 state_names={('U', 1): actions, ('D', 1): states})
-    
-        list_cpd_graph = [U_a_0_cpd, D_NN_0_cpd, D_0_cpd, U_p_0_cpd, 
-                          U_a_1_cpd, D_NN_1_cpd, D_1_cpd, U_p_1_cpd]
-        list_cpd_subgraph = [D_0_sub_cpd, U_0_sub_cpd, D_1_sub_cpd, U_1_sub_cpd]
-        
-        return graph_structure, digital_subgraph, list_cpd_graph, list_cpd_subgraph
-
-
-class ScourModel:
-    """
-    Represents the *physical* bridge and its *true* damage state.
-    Evolves using the Kamariotis et al. (2024) gradual scour model.
-    """
-    def __init__(self):
-        self.current_X = 0.0  # Internal state X(t) from Kamariotis
-        self.sample_parameters()
-        self.DAMAGE_CASE_MAX = 60  # 60% damage
-        self.time = 0.0
-
-    def sample_parameters(self):
-        """Samples the stochastic parameters for the gradual model."""
-        A_mean = 1.94e-4; A_cov = 0.4
-        A_sigma = np.log(A_cov**2 + 1)**0.5
-        A_mu = np.log(A_mean) - 0.5 * A_sigma**2
-        self.A = np.random.lognormal(mean=A_mu, sigma=A_sigma) 
-        
-        B_mean = 2.0; B_cov = 0.10
-        self.B = np.random.normal(loc=B_mean, scale=B_mean * B_cov)
-
-    def evolve(self, delta_t):
-        """Evolves the *gradual* damage (no shock) over one time step."""
-        t_avg = self.time + delta_t / 2.0
-        gradual_rate = self.A * self.B * (t_avg ** (self.B - 1))
-        
-        omega_k_mean = -0.005; omega_k_cov = 0.10
-        omega_k = np.random.normal(loc=omega_k_mean, scale=np.abs(omega_k_mean * omega_k_cov))
-        
-        delta_X_gradual = gradual_rate * delta_t * np.exp(omega_k)
-        
-        self.current_X += delta_X_gradual
-        self.time += delta_t
-        return self.get_current_damage_case()
-
-    def get_current_damage_case(self):
-        """Maps the internal state X(t) to your [0-60] damage case scale."""
-        # damage_case = 1/(1 + self.current_X)
-        damage_case = self.current_X * 1.0
-        return min(damage_case, self.DAMAGE_CASE_MAX) # Cap at max damage
-
-    def repair(self):
-        """Resets the physical state to "new"."""
-        print(f"  -> PHYSICAL ACTION: Bridge repaired. Damage reset to 0.")
-        self.current_X = 0.0
-        self.time = 0.0
-        self.sample_parameters()
-
-
-class PhysicalAsset:
-    """
-    Physical Asset class. Simulates the ground truth.
-    """
-    def __init__(self, config, degradation_law="scour_gradual"):
-        self.config = config  # Store the config
-        self.scour_model = ScourModel()
-        self.state_continuous = 0.0 
-        self.time = 0.0
-    
-    def get_observation_signal(self):
-        """
-        Calls the dynamic physics engine on-the-fly to get the sensor signal.
-        """
-        print(f"  -> Simulating TTBI passage for damage: {self.state_continuous:.2f}%")
-
-        # The physics engine expects damage as a decimal (0.0 to 1.0)
-        damage_decimal = self.state_continuous / 100.0
-
-        # Variability
-        current_temp = np.random.uniform(3.0, 33.0)
-        current_speed = np.random.uniform(70.0, 90.0)
-        veh_variability = np.random.randn(self.config.n_veh, self.config.n_prop)
-
-        # Run the physics engine
-        signal = run_single_passage(
-            damage_percent=damage_decimal,
-            speed_kmh=current_speed,
-            temp_celsius=current_temp,
-            add_signal_noise=True,
-            Nveh=self.config.n_veh,
-            Nprop=self.config.n_prop,
-            vehicle_props=veh_variability
-        )
-        return signal
-
-    def update_physical_state(self, action_str):
-        """Update the physical state given the current p_state and an action."""
-        if action_str == "perfect_repair":
-            self.scour_model.repair()
-            
-        # Evolve *after* action
-        if self.degradation_law == "scour_gradual":
-            self.state_continuous = self.scour_model.evolve(delta_t=MONITORING_INTERVAL)
-        else:
-            # Placeholder for other laws
-            self.state_continuous += 0.5 
-            
-        self.time += MONITORING_INTERVAL
-        
-    def get_true_mapped_label(self):
-        """Gets the true continuous state and maps it to the closest discrete label."""
-        # Map: (60 - 23.4) // 5 = 7
-        # Label 0 = 60% (max damage), Label 12 = 0% (healthy)
-        true_label = round((60 - self.state_continuous) / DISCRETIZED_DAMAGE)
-        return int(max(0, min(N_CLASSES - 1, true_label)))
-
-
-class DigitalAsset:
-    """
-    Digital Asset class. Loads the trained classifier and performs predictions.
-    """
-    def __init__(self, model, scaler, config):
-        self.config = config
-        self.model = model
-        self.scaler = scaler
-        self.model.to(DEVICE)
-        self.model.eval()
-
-    def estimate_state(self, raw_signal_obs):
-        """
-        Takes a raw sensor observation, preprocesses it, and predicts a state.
-        This is the "online" inference pipeline.
-        """
-        # 1. Switch preprocessing dynamically based on config!
-        if self.config.signal_transform == 'FFT':
-            signal_processed = fft_preprocess(raw_signal_obs, self.config.n_segments)
-        elif self.config.signal_transform == 'CWT':
-            signal_processed = cwt_preprocess(raw_signal_obs, self.config.n_segments) # Future function
-        
-        # 2. Scale the signal using the *loaded* scaler
-        # scaler.transform expects a 2D array
-        signal_scaled = self.scaler.transform(signal_fft.reshape(1, -1))
-        
-        # 3. Convert to PyTorch Tensor
-        # Add channel dimension: (N, C, L) -> (1, 1, n_segments)
-        signal_tensor = torch.tensor(signal_scaled).float().unsqueeze(0).to(DEVICE)
-        
-        # 4. Predict
-        with torch.no_grad():
-            outputs = self.model(signal_tensor)
-            probabilities = torch.softmax(outputs, dim=1)
-            _, predicted_label = torch.max(probabilities.data, 1)
-            
-        return predicted_label.item()
-            
-class Planner:
-    """
-    Planner class. Uses a simple threshold policy.
-    """
-    def __init__(self, states_list, actions_list, threshold_label):
-        self.states_list = states_list
-        self.actions_list = actions_list
-        self.threshold_label = threshold_label # Mapped label (e.g., 6)
-        self.policy = self.compute_threshold_policy()
-
-    def compute_threshold_policy(self):
-        """
-        Builds a deterministic policy matrix based on the threshold.
-        Labels 0-6 (damaged) -> Action 1 (repair)
-        Labels 7-12 (healthy) -> Action 0 (do nothing)
-        """
-        Ns = len(self.states_list)
-        Na = len(self.actions_list)
-        policy = np.zeros([Ns, Na])
-        
-        # state_list[0] = '0' (max damage)
-        # state_list[12] = '12' (healthy)
-        # threshold_label = 6 (maps to 30% damage)
-        for s in range(Ns):
-            state_label = int(self.states_list[s])
-            if state_label <= self.threshold_label: # 0, 1, 2, 3, 4, 5, 6
-                policy[s, 1] = 1.0 # Action 1: "perfect_repair"
-            else: # 7, 8, 9, 10, 11, 12
-                policy[s, 0] = 1.0 # Action 0: "do_nothing"
-        
-        return policy
-
-class Graph:
-    """
-    Graph class. Manages the DBN and the simulation loop.
-    """
-    def __init__(self, physical_asset, digital_asset, states_list, actions_list, planner):
-        self.physical_asset = physical_asset
-        self.digital_asset = digital_asset
-        self.states_list = states_list
-        self.actions_list = actions_list
-        self.dbn = DBN()
-        self.dbn_predict = DBN()
-        self.hist_var = None
-        self.hist_d_state_prob = None
-        self.hist_actions_prob = None
-        self.time_index = -1
-        self.planner = planner
-
-    def assemble_graph(self, graph_structure, cpd_list, digital_subgraph, list_cpd_subgraph):
-        """Adds nodes, edges, and CPDs to the DBN."""
-        self.dbn.add_edges_from(graph_structure)
-        for cpd_table in cpd_list:
-            cpd_table.normalize()
-            self.dbn.add_cpds(cpd_table)
-        self.dbn.check_model()
-        print("\nMain DBN assembled and checked.")
-
-        self.dbn_predict.add_edges_from(digital_subgraph)
-        for cpd_table in list_cpd_subgraph:
-            cpd_table.normalize()
-            self.dbn_predict.add_cpds(cpd_table)
-        self.dbn_predict.check_model()
-        print("Prediction DBN assembled and checked.")
-        self.time_index = -1
-        
-    def _label_to_damage(self, label):
-        """Helper to convert a label (0-12) back to damage % (60-0)."""
-        # label 0 = 60, label 12 = 0
-        # formula: damage = 60 - label * 5
-        damage_pct = 60 - (label * DISCRETIZED_DAMAGE)
-        return damage_pct
-    
-    def simulate(self, n_steps, n_samples):
-        """Runs the main simulation loop."""
-        
-        # Initialization
-        if self.time_index == -1:
-            self.time_index = 0
-            
-            # 1. Physical asset starts at t=0 and evolves for first interval
-            self.physical_asset.update_physical_state(action_str="do_nothing")
-            
-            # 2. Get first observation
-            raw_signal = self.physical_asset.get_observation_signal()
-            
-            # 3. DT estimates state
-            predicted_label = self.digital_asset.estimate_state(raw_signal)
-            
-            # 4. Get initial belief (from D_0_cpd)
-            # We use the DBN to get the initial belief P(D_0 | D_NN_0)
-            dbn_infer_init = DBNInference(self.dbn)
-            evid_init = {('D_{NN}', 0): self.states_list[predicted_label],
-                         ('U^{A}_{-1}', 0): 'do_nothing'} # Assume "do_nothing" at t=-1
-            inf = dbn_infer_init.forward_inference([('D', 0)], evidence=evid_init)
-            last_d_state_prob = inf[('D', 0)].values
-
-            # 5. Get first action
-            current_action_prob = np.matmul(self.planner.policy.T, last_d_state_prob)
-            current_action = self.actions_list[np.argmax(current_action_prob)]
-            
-            # 6. Initialize History
-            true_label = self.physical_asset.get_true_mapped_label()
-            self.hist_var = {
-                'p_state': self.physical_asset.state_continuous,
-                'p_state_discrete': self.states_list[true_label],
-                'd_state': str(self.states_list[np.argmax(last_d_state_prob)]),
-                'd_state_nn': self.states_list[predicted_label],
-                'current_action': current_action,
-            }
-            self.hist_var = pd.DataFrame(self.hist_var, index=[0,])
-            
-            self.hist_d_state_prob = pd.DataFrame([last_d_state_prob.tolist()])
-            self.hist_d_state_prob.columns = self.states_list
-
-            self.hist_actions_prob = pd.DataFrame([current_action_prob.tolist()])
-            self.hist_actions_prob.columns = self.actions_list
-
-        # Main Simulation Loop
-        dbn_infer = DBNInference(self.dbn)
-        
-        for i in range(n_steps):
-            self.time_index += 1
-            print(f'\nSimulation step = {i + 1} of {n_steps}, Time index = {self.time_index}')
-
-            # 1. Get last action and belief
-            last_action = self.hist_var.current_action.iloc[-1]
-            last_d_state_prob = self.hist_d_state_prob.iloc[-1].to_numpy()
-
-            # 2. Update physical state based on action
-            self.physical_asset.update_physical_state(action_str=last_action)
-            
-            # 3. Get new observation from physical asset
-            raw_signal = self.physical_asset.get_observation_signal()
-            
-            # 4. DT estimates new state (D_NN)
-            predicted_label = self.digital_asset.estimate_state(raw_signal)
-
-            # 5. DBN Inference
-            evid = {}
-            evid[('U^{A}_{-1}', 1)] = last_action
-            evid[('D_{NN}', 1)] = self.states_list[predicted_label]
-
-            # Sample from the *previous* belief distribution for D_0
-            sampled = np.random.choice(len(self.states_list), size=n_samples, p=last_d_state_prob)
-            
-            new_d_state_prob = np.zeros(len(self.states_list))
-            new_action_prob = np.zeros(len(self.actions_list))
-
-            for j in range(n_samples):
-                evid[('D', 0)] = self.states_list[sampled[j]]
-                inf = dbn_infer.forward_inference([('D', 1),('U^{P}', 1)], evidence=evid)
-                new_d_state_prob += inf[('D', 1)].values
-                new_action_prob += inf[('U^{P}', 1)].values
-
-            # Normalize distributions
-            last_d_state_prob = normalize_cpd(new_d_state_prob)
-            current_action_prob = normalize_cpd(new_action_prob)
-            
-            # 6. Get new action
-            current_action = self.actions_list[np.argmax(current_action_prob)]
-            
-            # 7. Update History
-            true_label = self.physical_asset.get_true_mapped_label()
-            new_var = {
-                'p_state': self.physical_asset.state_continuous,
-                'p_state_discrete': self.states_list[true_label],
-                'd_state': str(self.states_list[np.argmax(last_d_state_prob)]),
-                'd_state_nn': self.states_list[predicted_label],
-                'current_action': current_action,
-            }
-            
-            self.hist_var = pd.concat([self.hist_var, pd.DataFrame(new_var, index=[0,])], ignore_index=True)
-            
-            new_prob_df = pd.DataFrame([last_d_state_prob.tolist()], columns=self.states_list)
-            self.hist_d_state_prob = pd.concat([self.hist_d_state_prob, new_prob_df], ignore_index=True)
-            
-            new_action_df = pd.DataFrame([current_action_prob.tolist()], columns=self.actions_list)
-            self.hist_actions_prob = pd.concat([self.hist_actions_prob, new_action_df], ignore_index=True)
-            
-            # --- Enhanced Printing ---
-            true_dmg = self.physical_asset.state_continuous
-            guess_label = predicted_label
-            guess_dmg = self._label_to_damage(guess_label)
-            belief_label = np.argmax(last_d_state_prob)
-            belief_dmg = self._label_to_damage(belief_label)
-            
-            print(f"  True State:       {true_dmg:.2f}% damage (Label {true_label})")
-            print(f"  Classifier Guess: {guess_dmg}% damage (Label {guess_label})")
-            print(f"  DT Belief (MAP):  {belief_dmg}% damage (Label {belief_label})")
-            print(f"  DT Action:        {current_action}")
-
-    def predict(self, n_steps, n_samples):
-        """Future state prediction for digital asset only."""
-        print(f'\nFuture prediction from time index = {self.time_index}')
-        
-        # Get the DBN's *current belief* as the starting point
-        current_belief = self.hist_d_state_prob.iloc[self.time_index].to_list()
-        evid = [[prob] for prob in current_belief]
-        
-        sim = self.dbn_predict.simulate(
-            n_time_slices=n_steps+1, 
-            n_samples=n_samples, 
-            virtual_evidence=[TabularCPD(('D', 0), len(self.states_list), evid)],
-            show_progress=False
-        )
-        sim = sim.to_numpy()
-
-        prob_D = np.zeros((n_steps+1, len(self.states_list)))
-        prob_U = np.zeros((n_steps+1, len(self.actions_list)))
-
-        for i in range(n_steps+1):
-            for j in range(n_samples):
-                prob_D[i, sim[j, 2*i]] += 1
-                prob_U[i, sim[j, 2*i+1]] += 1
-
-        prob_D = normalize_cpd(prob_D.T).T
-        result_D = pd.DataFrame(prob_D.tolist(), columns=self.states_list)
-        prob_U = normalize_cpd(prob_U.T).T
-        result_U = pd.DataFrame(prob_U.tolist(), columns=self.actions_list)
-        return result_D, result_U
-         
-if __name__ == '__main__':
-    
-    print(f"--- Initializing Scour Digital Twin ---")
-    print(f"Total damage classes: {N_CLASSES}") # Should be 13
-    
-    # --- 1. Load Offline-Trained Models ---
-    model_path = "best_cnn_model.pth"
-    scaler_path = "scaler.pkl"
-    cm_path = "conf_mat_dbn.npy"
-    
-    load_physical_data_store()
-
-    # These are the hyperparameters from your successful training run
-    my_saved_params = {
-        'lr': 0.0007692906789968344,
-        'n_conv_layers': 3,
-        'n_filters_l0': 68,
-        'kernel_size_l0': 7,
-        'pooling_l0': True,
-        'n_filters_l1': 116,
-        'kernel_size_l1': 5,
-        'pooling_l1': True,
-        'n_filters_l2': 107,
-        'kernel_size_l2': 7,
-        'pooling_l2': False,
-        'n_dense_layers': 2,
-        'n_dense_units_l0': 71,
-        'dropout_l0': 0.25977147662915395,
-        'n_dense_units_l1': 49,
-        'dropout_l1': 0.32846734092972624
-    }
-
-    if not os.path.exists(model_path) or not os.path.exists(scaler_path) or not os.path.exists(cm_path):
-        print(f"--- OFFLINE FILES NOT FOUND ---")
-        print(f"  Model: {model_path} {' (Found)' if os.path.exists(model_path) else ' (MISSING)'}")
-        print(f"  Scaler: {scaler_path} {' (Found)' if os.path.exists(scaler_path) else ' (MISSING)'}")
-        print(f"  Conf Mat: {cm_path} {' (Found)' if os.path.exists(cm_path) else ' (MISSING)'}")
-        print("\nRunning the 'offline' classifier training pipeline first...")
-        
-        # 1. Import the necessary functions from the classifier script
-        try:
-            # We assume the classifier script is named 'cnn_classifier_fixed.py'
-            from cnn_classifier_fixed import load_data, run_classifier_pipeline
-        except ImportError:
-            print("\n--- CRITICAL ERROR ---")
-            print("Could not import 'classifier.py'.")
-            print("Please make sure 'classifier.py' is in the same directory as this script.")
-            sys.exit()
-        except Exception as e:
-            print(f"\nAn error occurred during import: {e}")
-            sys.exit()
-
-        # 2. Load the data using the settings from this file
-        print(f"\nLoading data from: {FILE_DIRECTORY}")
-        X_data, y_labels, X_flat, y_flat_original = load_data(
-            damage_cases=DAMAGE_CASES_TO_LOAD,
-            dof=DOF_TO_USE,
-            Npass=PASSAGES_TO_LOAD,
-            file_path=FILE_DIRECTORY
-        )
-        
-        if X_flat is None:
-            print("Data loading failed during offline phase. Exiting.")
-            sys.exit()
-            
-        # 3. Run the full training pipeline
-        # We pass `best_params=None` to force it to run Optuna
-        print("\nStarting offline training pipeline (this may take a while)...")
-        # This will train and save 'best_cnn_model.pth', 'scaler.pkl', and 'conf_mat_dbn.npy'
-        _, _, my_saved_params = run_classifier_pipeline(
-            X_flat, y_flat_original, N_CLASSES, best_params=None
-        )
-        print("--- Offline training complete. Files saved. ---")
-        
-    else:
-        print("--- Offline files found. Loading them. ---")
-        # Files exist, so my_saved_params remains the one hard-coded above
-        pass
-    
-    # --- Load "Offline" Assets ---
-    print(f"\nLoading classifier from: {model_path}")
-    print(f"Loading scaler from: {scaler_path}")
-    
-    # Load the scaler
-    with open(scaler_path, 'rb') as f:
-        scaler = pickle.load(f)
-        
-    # **Check the loaded scaler's features**
-    if scaler.n_features_in_ != N_PAA_SEGMENTS:
-        print(f"Error: Scaler feature mismatch!")
-        print(f"  Scaler expects {scaler.n_features_in_} features.")
-        print(f"  Script is set to generate {N_PAA_SEGMENTS} features (from N_PAA_SEGMENTS).")
-        print(f"  Please ensure N_PAA_SEGMENTS in this script ({N_PAA_SEGMENTS})")
-        print(f"  matches the N_PAA_SEGMENTS used to train the model.")
-        sys.exit()
-        
-    # Load the model
-    model = Simple1DCNN(N_PAA_SEGMENTS, N_CLASSES, my_saved_params)
-    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
-    model.eval()
-    print("Classifier and scaler loaded successfully.")
-
-    # --- 2. Setup the DBN ---
-    
-    # array of all the possible states (mapped labels 0-12)
-    # State 0 = 60% damage, State 12 = 0% damage
-    possible_states = [str(i) for i in range(N_CLASSES)]
-
-    # array of all the possible actions
-    possible_actions = ["do_nothing", "perfect_repair"]
-
-    # Confusion matrix based on our accuracy
-    print(f"Loading confusion matrix from: {cm_path}")
-    conf_mat_dt = np.load(cm_path)
-
-    setup_frame = GetSetup(states_list=possible_states,
-                           actions_list=possible_actions,
-                           conf_mat_dt=conf_mat_dt)
-
-    # Assume a 5% chance of deteriorating to the next state each year
-    transitions = setup_frame.get_transitions(p_nothing=0.05)
-
-    planner_frame = Planner(states_list=possible_states,
-                            actions_list=possible_actions,
-                            threshold_label=DAMAGE_LABEL_THRESHOLD)
-
-    # cpd_d_to_u is the policy matrix
-    cpd_d_to_u = planner_frame.policy.T 
-
-    graph_structure, digital_subgraph, list_cpd_graph, list_cpd_subgraph = \
-        setup_frame.get_graph(cpd_d_to_u, transitions)
-
-    # --- 3. Instantiate Assets and Graph ---
-    frame = PhysicalAsset(degradation_law="scour_gradual")
-    
-    digital_frame = DigitalAsset(model=model,
-                                 scaler=scaler,
-                                 n_classes=N_CLASSES,
-                                 n_segments=N_PAA_SEGMENTS)
-
-    graph_frame = Graph(physical_asset=frame,
-                        digital_asset=digital_frame,
-                        states_list=possible_states, 
-                        actions_list=possible_actions,
-                        planner=planner_frame)
-
-    graph_frame.assemble_graph(graph_structure=graph_structure,
-                                cpd_list=list_cpd_graph,
-                                digital_subgraph=digital_subgraph,
-                                list_cpd_subgraph=list_cpd_subgraph)
-
-    # --- 4. Run Simulation ---
-    graph_frame.simulate(n_steps=SIMULATION_YEARS, n_samples=100)
-    
-    # --- 5. Plot Results ---
-    if PLOTTING_ENABLED:
-        try:
-            # Create directory if it doesn't exist
-            plot_dir = './plotters/scour_dt_results'
-            if not os.path.exists(plot_dir):
-                os.makedirs(plot_dir)
-                
-            plotting_frame = Plot(graph_frame, plot_dir)
-            plotting_frame.plot_history_all_together()
-            plotting_frame.plot_prediction_all_together(n_steps=20, n_samples=1000)
-            print(f"\nPlots saved to '{plot_dir}'")
-        except Exception as e:
-            print(f"\nAn error occurred during plotting: {e}")
-            PLOTTING_ENABLED = False
-
-    if not PLOTTING_ENABLED:
-        print("Saving history data to CSV.")
-        graph_frame.hist_var.to_csv("dt_history.csv")
-        graph_frame.hist_d_state_prob.to_csv("dt_belief_history.csv")
+    print("ERROR: pgmpy is not installed.  Run:  pip install pgmpy")
+    sys.exit(1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIGURATION — edit only this block between runs
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Paths to the DT package written by export_digital_twin_package.
+# Point these at whichever champion output folder the ablation produced.
+CHAMPION_DIR   = "results_architectures_ntv_DOF_0_1_2_3_4_5_6_7_disc1/7_PAA_S2V_NHiTS"
+METADATA_PATH  = os.path.join(CHAMPION_DIR, "DT_metadata.json")
+WEIGHTS_PATH   = os.path.join(CHAMPION_DIR, "DT_champion_weights.pth")
+SCALER_PATH    = os.path.join(CHAMPION_DIR, "DT_scaler.pkl")
+CONF_MAT_PATH  = os.path.join(CHAMPION_DIR, "DT_conf_matrix.npy")
+
+# Simulation parameters — these do NOT live in the metadata.
+SIM_YEARS             = 60       # total monitoring horizon (years)
+MONITORING_INTERVAL   = 1.0      # years between drive-by passages
+REPAIR_THRESHOLD_LABEL = 6       # labels ≥ this → repair  (label 6 = 30% damage when disc=5)
+P_DETERIORATION       = 0.05     # annual probability of advancing one damage class
+
+# DBN inference samples — higher = more accurate but slower per step.
+N_DBN_SAMPLES  = 100
+
+# Forward prediction horizon.
+PREDICT_STEPS  = 20
+PREDICT_SAMPLES = 1_000
+
+# Output directory for figures and CSVs.
+PLOT_DIR = "./dt_results"
+
+# Reproducibility.
+SEED = 42
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Validate paths before doing anything expensive
+# ─────────────────────────────────────────────────────────────────────────────
+
+missing = [p for p in (METADATA_PATH, WEIGHTS_PATH, SCALER_PATH, CONF_MAT_PATH)
+           if not os.path.exists(p)]
+if missing:
+    print("ERROR: The following offline package files are missing:")
+    for p in missing:
+        print(f"  {p}")
+    print("\nRun the ablation notebook through to completion (including "
+          "export_digital_twin_package) before launching this script.")
+    sys.exit(1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+config = DTConfig.from_metadata(
+    metadata_path=METADATA_PATH,
+    repair_threshold_label=REPAIR_THRESHOLD_LABEL,
+    sim_years=SIM_YEARS,
+    monitoring_interval=MONITORING_INTERVAL,
+)
+print(f"\n{config}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. DBN setup
+# ─────────────────────────────────────────────────────────────────────────────
+
+possible_states  = [str(i) for i in range(config.n_classes)]
+possible_actions = ["do_nothing", "perfect_repair"]
+
+conf_mat = np.load(CONF_MAT_PATH)
+if conf_mat.shape != (config.n_classes, config.n_classes):
+    print(
+        f"ERROR: Confusion matrix shape {conf_mat.shape} does not match "
+        f"n_classes={config.n_classes}.  "
+        f"Ensure CONF_MAT_PATH points to the correct champion's matrix."
+    )
+    sys.exit(1)
+
+setup       = GetSetup(
+    states_list=possible_states,
+    actions_list=possible_actions,
+    conf_mat_dt=conf_mat,
+)
+transitions = setup.get_transitions(p_nothing=P_DETERIORATION)
+planner     = Planner(
+    states_list=possible_states,
+    actions_list=possible_actions,
+    threshold_label=REPAIR_THRESHOLD_LABEL,
+)
+graph_structure, digital_subgraph, list_cpd_graph, list_cpd_subgraph = \
+    setup.get_graph(cpd_d_to_u=planner.policy.T, transitions=transitions)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Asset instantiation
+# ─────────────────────────────────────────────────────────────────────────────
+
+physical = PhysicalAsset(
+    config=config,
+    degradation_law="scour_gradual",
+    monitoring_interval=MONITORING_INTERVAL,
+)
+
+digital = DigitalAsset(
+    model_path=WEIGHTS_PATH,
+    metadata_path=METADATA_PATH,
+    scaler_path=SCALER_PATH,
+    config=config,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Graph assembly
+# ─────────────────────────────────────────────────────────────────────────────
+
+graph = Graph(
+    physical_asset=physical,
+    digital_asset=digital,
+    states_list=possible_states,
+    actions_list=possible_actions,
+    planner=planner,
+)
+graph.assemble_graph(
+    graph_structure=graph_structure,
+    cpd_list=list_cpd_graph,
+    digital_subgraph=digital_subgraph,
+    list_cpd_subgraph=list_cpd_subgraph,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Simulation
+# ─────────────────────────────────────────────────────────────────────────────
+
+print(f"\n--- Running simulation: {SIM_YEARS} steps ---\n")
+graph.simulate(n_steps=SIM_YEARS, n_samples=N_DBN_SAMPLES)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Results
+# ─────────────────────────────────────────────────────────────────────────────
+
+plotter = Plot(graph=graph, output_dir=PLOT_DIR)
+plotter.plot_history_all_together()
+plotter.plot_prediction_all_together(n_steps=PREDICT_STEPS, n_samples=PREDICT_SAMPLES)
+plotter.save_history_csv()
+
+print(f"\nDone.  Results saved to '{PLOT_DIR}'.")
