@@ -4,6 +4,7 @@ import numpy as np
 # Import block: from file_name import function_name
 from b43_model_geometry import b43_model_geometry
 from b07_options_processing import b07_options_processing
+from damage_config import apply_cracks
 from b01_elements_and_coordinates import b01_elements_and_coordinates
 from b02_boundary_conditions import b02_boundary_conditions
 from b03_beam_matrices import b03_beam_matrices
@@ -58,11 +59,17 @@ def b00_calculations(Calc, Train, Track, Beam, Damage):
     # Elements and coordinates
     Beam = b01_elements_and_coordinates(Beam, Calc)
 
-    # MATLAB uses 1-based indexing. If n_mod contains indices, ensure they are 
+    # MATLAB uses 1-based indexing. If n_mod contains indices, ensure they are
     # 0-based in Python before this step, or subtract 1: Beam.Prop.n_mod - 1
     Beam.Prop.E_n[Beam.Prop.n_mod] = Beam.Prop.E * Beam.Prop.E_mod
 
-    # Boundary conditions 
+    # ---- Crack damage (bridge only) ----
+    # Local EI reduction (Sinha et al.) at one or more deck locations, applied
+    # here so it only affects the bridge beam (not the rail, which is re-meshed
+    # via b01 below). See damage_config.apply_cracks.
+    Beam = apply_cracks(Beam, Damage)
+
+    # Boundary conditions
     Beam, Damage = b02_boundary_conditions(Beam, Damage)
     # Beam system matrices (Mass and Stiffness)
     Beam = b03_beam_matrices(Beam)
@@ -112,6 +119,10 @@ def b00_calculations(Calc, Train, Track, Beam, Damage):
     Train.Veh = b47_veh_static_loads(Train.Veh, Calc)
 
     # ---- Irregularity profile ----
+    # Route the rail-irregularity intensity toggle (a damage feature) into Calc
+    # so b19 can scale the generated profile amplitude. Default 1.0 = unchanged.
+    Calc.Profile.intensity = float(getattr(Damage, 'profile_intensity',
+                                           getattr(Calc.Profile, 'intensity', 1.0)))
     # Generation
     Calc = b19_generate_profile(Calc)
     # Assigning profile to each wheel

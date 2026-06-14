@@ -1,0 +1,167 @@
+"""
+damage_config.py
+================
+Single, central place to switch damage scenarios on/off for the TTBI-2D engine.
+
+The TTBI functions read damage from a plain attribute container (``Damage``)
+and bridge geometry from ``Beam.Prop``. This module provides the builders so a
+*main script* (offline dataset generator or the online DT) configures an entire
+scenario in one call, instead of poking fields across several files:
+
+    from damage_config import make_damage, configure_bridge
+
+    # geometry — evenly spaced, or custom support positions (fractions of L)
+    Beam   = configure_bridge(Beam, length=100.0, num_spans=4)
+    # Beam = configure_bridge(Beam, length=100.0, support_locs=[0, .2, .25, .6, 1.0])
+
+    Damage = make_damage(
+        num_supports     = 5,                       # = number of supports
+        scour_rates      = [0, .30, 0, .20, 0],     # per-support vertical-stiffness loss (0..1)
+        bearing_rot_stiff= [1e9, 0, 0, 0, 0],       # per-support rot. stiffness [Nm/rad]; abutments only
+        crack_locs       = [55.0],                  # crack location(s) along the deck [m]
+        crack_intensity  = 0.22,                    # 0..1 EI loss per crack (scalar or list)
+        crack_lc         = 0.0,                     # effective half-length each side of crack [m]
+        profile_intensity= 1.0,                     # rail-irregularity amplitude multiplier
+        noise_std        = 0.0,                      # additive sensor-noise std (Damage.desvio)
+    )
+
+Everything defaults to the healthy / legacy single-foundation behaviour, so a
+feature is "off" simply by leaving its argument at the default.
+
+Damage semantics
+----------------
+* scour            — fraction in [0,1]; retained vertical stiffness = (1 - rate) * 3.44e8 N/m
+                     (healthy kv = 3.44e5 kN/m, per Fernandes 2025).
+* bearing          — absolute rotational stiffness [Nm/rad]; 0 = free (healthy),
+                     1e9 = min detectable "seized" bearing (Feng/O'Brien/Khan).
+                     Only the abutments (first/last support) carry a bearing.
+* crack            — local EI reduction (Sinha et al.): each element within
+                     [loc-lc, loc+lc] has its I scaled by (1 - intensity).
+                     lc<=0 cracks only the single element containing `loc`.
+                     Fernandes: ratios 0.05/0.1 -> ~14%/22% EI loss on a 30 cm element.
+* profile_intensity— multiplies the generated rail-irregularity amplitude.
+
+Note on support spacing: when two supports are close, their scour parameters
+should be generated with statistical dependence (copula) per Adnan 2026 — that
+belongs in the DT scour model, not here; this module only consumes per-support
+scour_rates.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+class EmptyObj:
+    """Attribute container mimicking the MATLAB struct style used by TTBI."""
+    pass
+
+
+def configure_bridge(Beam, length: float = 40.0, num_spans: int = 2,
+                     support_locs=None):
+    """Set bridge geometry toggles before a03_bridge / b07 expand them.
+
+    length      : deck length [m].
+    num_spans   : evenly-spaced supports = num_spans + 1 on [0, length].
+                  num_spans=2 reproduces the legacy 40 m, 3-support bridge.
+    support_locs: optional list of support positions as FRACTIONS of length
+                  (e.g. [0, 0.25, 0.6, 1.0]); overrides num_spans and allows
+                  unevenly-spaced / closely-spaced piers.
+    """
+    if not hasattr(Beam, "Prop"):
+        Beam.Prop = EmptyObj()
+    Beam.Prop.L = float(length)
+    if support_locs is not None:
+        fr = np.atleast_1d(np.asarray(support_locs, dtype=float))
+        Beam.Prop.support_locs = fr            # fractions of L, consumed by b07
+        Beam.Prop.num_spans = int(len(fr) - 1)
+    else:
+        Beam.Prop.num_spans = int(num_spans)
+    return Beam
+
+
+def make_damage(
+    num_supports: int = 3,
+    scour_rates=None,
+    bearing_rot_stiff=None,
+    crack_locs=None,
+    crack_intensity=0.0,
+    crack_lc: float = 0.0,
+    profile_intensity: float = 1.0,
+    noise_std: float = 0.0,
+):
+    """Build a fully-specified Damage container (all features default to healthy)."""
+    d = EmptyObj()
+
+    # --- scour (per support) ---
+    d.scour_rates = _as_len(scour_rates, num_supports, 0.0)
+    d.DOF_ChangeRate_value = float(d.scour_rates[num_supports // 2]) if num_supports else 0.0
+
+    # --- bearing (per support, Nm/rad; abutments only are actually used) ---
+    d.bearing_rot_stiff = _as_len(bearing_rot_stiff, num_supports, 0.0)
+    d.DOFStiff_ROT_value = 0  # legacy field, unused by the generalised b02
+
+    # --- crack(s): location(s) in metres + per-crack EI-loss fraction ---
+    if crack_locs is None:
+        d.crack_locs = []
+        d.crack_intensity = []
+    else:
+        d.crack_locs = list(np.atleast_1d(np.asarray(crack_locs, dtype=float)))
+        ci = np.atleast_1d(np.asarray(crack_intensity, dtype=float))
+        if ci.size == 1:
+            ci = np.full(len(d.crack_locs), float(ci[0]))
+        d.crack_intensity = list(ci)
+    d.crack_lc = float(crack_lc)
+
+    # --- rail profile irregularity intensity ---
+    d.profile_intensity = float(profile_intensity)
+
+    # --- sensor noise ---
+    d.desvio = float(noise_std)
+
+    return d
+
+
+def apply_cracks(Beam, Damage):
+    """Apply crack damage as a local EI reduction (Sinha et al.).
+
+    Called from b00_calculations on the BRIDGE only, after the per-element
+    properties (Beam.Prop.I_n) and node coordinates exist. Each crack at
+    location `loc` [m] scales the second moment of area I of every element whose
+    midpoint lies within [loc-lc, loc+lc] by (1 - intensity). With lc<=0, only
+    the single element containing `loc` is affected.
+    """
+    locs = list(getattr(Damage, "crack_locs", []) or [])
+    if not locs:
+        return Beam
+    intens = list(getattr(Damage, "crack_intensity", []) or [])
+    lc = float(getattr(Damage, "crack_lc", 0.0) or 0.0)
+
+    acum = np.asarray(Beam.Mesh.Nodes.acum, dtype=float)
+    mid = 0.5 * (acum[:-1] + acum[1:])          # element midpoints
+    n_ele = len(mid)
+
+    for k, loc in enumerate(locs):
+        intensity = float(intens[k]) if k < len(intens) else 0.0
+        if intensity == 0.0:
+            continue
+        if lc > 0:
+            sel = np.where(np.abs(mid - loc) <= lc)[0]
+        else:
+            sel = np.array([int(np.argmin(np.abs(mid - loc)))])
+        sel = sel[(sel >= 0) & (sel < n_ele)]
+        if sel.size == 0:
+            print(f"b00/apply_cracks: crack at {loc} m hit no element — ignored.")
+            continue
+        Beam.Prop.I_n[sel] *= (1.0 - intensity)
+    return Beam
+
+
+def _as_len(values, n: int, fill: float) -> np.ndarray:
+    """Return a length-n float array, padding/truncating `values` (None -> all fill)."""
+    out = np.full(n, fill, dtype=float)
+    if values is not None:
+        v = np.atleast_1d(np.asarray(values, dtype=float))
+        m = min(n, len(v))
+        out[:m] = v[:m]
+    return out

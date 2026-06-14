@@ -1,8 +1,38 @@
 import numpy as np
 
+
+def _per_support(Damage, name, n):
+    """Return (length-n float array, was_provided) for a per-support damage spec.
+
+    Pads with zeros / truncates to n. Returns (zeros, False) when the field is
+    absent so callers can fall back to legacy behaviour.
+    """
+    val = getattr(Damage, name, None)
+    out = np.zeros(n, dtype=float)
+    if val is None:
+        return out, False
+    v = np.atleast_1d(np.asarray(val, dtype=float))
+    m = min(n, len(v))
+    out[:m] = v[:m]
+    return out, True
+
+
 def b02_boundary_conditions(Beam, Damage):
     """
-    Definition of DOF with boundary conditions for different configurations.
+    Definition of DOF with boundary conditions — generalised to any number of
+    supports, with per-support scour (vertical) and bearing (rotational) damage.
+
+    Damage interface (all optional, default = healthy):
+      Damage.scour_rates       per-support fraction in [0,1]; retained vertical
+                               stiffness = (1 - rate) * DOF_Original_value.
+      Damage.bearing_rot_stiff per-support rotational stiffness [Nm/rad]; only
+                               used where Beam.BC.rot_stiff > 0 (abutments).
+                               0 = free rotation (healthy bearing).
+    Legacy fallback: if scour_rates is absent, Damage.DOF_ChangeRate_value is
+    applied to the middle support only (reproduces the original 3-support model).
+
+    Note: this runs for the bridge *and* the rail. With redux=0 the rail has no
+    supports (loc=[]), so the per-support loops below simply do nothing for it.
     """
 
     # Convert inputs to NumPy arrays for logical indexing and operations
@@ -12,56 +42,58 @@ def b02_boundary_conditions(Beam, Damage):
     acum = np.array(Beam.Mesh.Nodes.acum)
 
     # Number of supports
-    Beam.BC.supp_num = len(loc) 
+    Beam.BC.supp_num = len(loc)
+    n = Beam.BC.supp_num
 
-    # Supports location index
-    if Beam.BC.supp_num > 0:
-        # Broadcasting: loc[:, np.newaxis] is (N, 1), acum[np.newaxis, :] is (1, M)
-        # This creates an NxM matrix of differences cleanly without explicitly multiplying by ones()
+    # Supports location index (nearest mesh node to each support)
+    if n > 0:
         diffs = np.abs(acum[np.newaxis, :] - loc[:, np.newaxis])
-        # argmin across axis 1 (rows) gives the 0-based node index closest to the support
         Beam.BC.loc_ind = np.argmin(diffs, axis=1)
     else:
         Beam.BC.loc_ind = np.array([], dtype=int)
 
-    # Fixed vertical displacement DOF (0-based indexing: node * 2)
+    # Fixed DOFs (perfectly stiff supports, flag == -1)
     fixed_vert = Beam.BC.loc_ind[vert_stiff == -1] * 2
-
-    # Fixed rotational DOF (0-based indexing: node * 2 + 1)
     fixed_rot = Beam.BC.loc_ind[rot_stiff == -1] * 2 + 1
-
-    # Sorting fixed DOF
     Beam.BC.DOF_fixed = np.sort(np.concatenate((fixed_vert, fixed_rot))).astype(int)
 
-    # -- Vertical displacement DOF with stiffness values --
-    vert_with_values = Beam.BC.loc_ind[vert_stiff > 0] * 2
-
-    # I included
     DOF_Original_value = 344e6
 
-    # Array with the same length as the number of supports with different stiffness
-    # Note: Hardcoded for 3 supports as per the original MATLAB script
-    retained_stiffness = 1.0 - Damage.DOF_ChangeRate_value
-    Beam.BC.DOF_stiff_values = np.array([
-        DOF_Original_value,                       # Vertical Support 1
-        retained_stiffness * DOF_Original_value,  # Vertical Support 2
-        DOF_Original_value                        # Vertical Support 3
-    ])
+    # ---- Per-support damage specifications ----
+    scour_rates, scour_given = _per_support(Damage, 'scour_rates', n)
+    if not scour_given:
+        # Legacy single-foundation behaviour: scour on the middle support only.
+        legacy = float(getattr(Damage, 'DOF_ChangeRate_value', 0.0))
+        if n > 0:
+            scour_rates[n // 2] = legacy
+    bearing_rot, _ = _per_support(Damage, 'bearing_rot_stiff', n)
 
-    # -- Fixed rotational DOF with stiffness values --
-    rot_with_values = Beam.BC.loc_ind[rot_stiff > 0] * 2 + 1
+    # ---- Vertical (scour) support springs ----
+    vert_with_values, vert_values = [], []
+    for i in range(n):
+        if vert_stiff[i] > 0:
+            vert_with_values.append(Beam.BC.loc_ind[i] * 2)
+            vert_values.append((1.0 - scour_rates[i]) * DOF_Original_value)
 
-    # Combine vertical and rotational DOFs with values
-    Beam.BC.DOF_with_values = np.concatenate((vert_with_values, rot_with_values)).astype(int)
+    # ---- Rotational (bearing) support springs ----
+    # value 0 (healthy/free) adds nothing to the diagonal, so the healthy model
+    # is identical whether or not the abutments are marked bearing-capable.
+    rot_with_values, rot_values = [], []
+    for i in range(n):
+        if rot_stiff[i] > 0:
+            rot_with_values.append(Beam.BC.loc_ind[i] * 2 + 1)
+            rot_values.append(bearing_rot[i])
 
-    # Sorting DOFs with values and aligning the stiffness array to match
-    aux2 = np.argsort(Beam.BC.DOF_with_values)
-    Beam.BC.DOF_with_values = Beam.BC.DOF_with_values[aux2]
-    
-    # Ensure DOF_stiff_values is only sorted if its length matches (preventing broadcast errors 
-    # if there are rot_stiff values added but not accounted for in the hardcoded array above)
-    if len(Beam.BC.DOF_stiff_values) == len(aux2):
-        Beam.BC.DOF_stiff_values = Beam.BC.DOF_stiff_values[aux2]
+    # Combine vertical and rotational DOFs with values, and align the values
+    Beam.BC.DOF_with_values = np.array(vert_with_values + rot_with_values, dtype=int)
+    stiff_values = np.array(vert_values + rot_values, dtype=float)
+
+    if Beam.BC.DOF_with_values.size:
+        aux2 = np.argsort(Beam.BC.DOF_with_values)
+        Beam.BC.DOF_with_values = Beam.BC.DOF_with_values[aux2]
+        Beam.BC.DOF_stiff_values = stiff_values[aux2]
+    else:
+        Beam.BC.DOF_stiff_values = stiff_values
 
     # Auxiliary variables
     Beam.BC.num_DOF_fixed = len(Beam.BC.DOF_fixed)

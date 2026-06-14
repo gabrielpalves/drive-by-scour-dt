@@ -26,6 +26,7 @@ from TTBI_2D.a03_bridge        import a03_bridge
 from TTBI_2D.a04_options       import a04_options
 from TTBI_2D.b00_calculations  import b00_calculations
 from TTBI_2D.d01_data_processing import d01_data_processing
+from TTBI_2D.damage_config     import configure_bridge
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -73,6 +74,10 @@ def run_single_passage(
     n_veh:            int               = 5,
     n_prop:           int               = 3,
     vehicle_props:    np.ndarray | None = None,
+    damage:           object            = None,
+    bridge_length:    float             = 40.0,
+    num_spans:        int               = 2,
+    support_locs:     list | None       = None,
 ) -> np.ndarray:
     """
     Run one TTBI vehicle-bridge passage and return all eight DOF signals.
@@ -128,15 +133,23 @@ def run_single_passage(
           vehicle_props when variability is required (see PhysicalAsset).
     """
     # ── 1. Structs ────────────────────────────────────────────────────────────
-    damage            = EmptyObj()
-    damage.desvio     = noise_std if add_signal_noise else 0.0
-    damage.DOFStiff_ROT_value  = 0
-    damage.DOF_ChangeRate_value = damage_percent
+    # Damage: use a caller-supplied multi-damage object (from
+    # damage_config.make_damage) when given, else the legacy single-foundation
+    # scour scenario built from damage_percent. The noise toggle is always
+    # honoured here so callers don't have to manage it.
+    if damage is None:
+        damage = EmptyObj()
+        damage.DOFStiff_ROT_value   = 0
+        damage.DOF_ChangeRate_value = damage_percent
+    damage.desvio = noise_std if add_signal_noise else 0.0
 
     beam            = EmptyObj()
     beam.Prop       = EmptyObj()
     beam.Prop.E_mod = 1
     beam.Prop.n_mod = 100
+    # Geometry toggles (default = legacy 40 m, 2-span / 3-support bridge).
+    beam = configure_bridge(beam, length=bridge_length, num_spans=num_spans,
+                            support_locs=support_locs)
 
     speed_ms = speed_kmh / 3.6
 

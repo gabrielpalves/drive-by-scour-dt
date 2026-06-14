@@ -108,6 +108,10 @@ class DTConfig:
     sim_years:             int   = 60
     monitoring_interval:   float = 1.0
     repair_threshold_label: int  = 6
+    # Enable the Kamariotis shock (flood) term in the scour evolution. Off by
+    # default to preserve gradual-only behaviour; turn on for the flood-decision
+    # study. See ScourModel.
+    enable_shock:          bool  = False
 
     # ── Derived (computed in __post_init__; do not pass at construction) ──────
     n_classes:      int  = field(init=False, repr=True)
@@ -128,11 +132,10 @@ class DTConfig:
         max_damage.
 
         damage_to_label maps each physical damage value (0, 5, 10, …, 60
-        when discretization=5) to its integer class label.  Labels run
-        from 0 (maximum damage) to n_classes-1 (healthy), so the mapping
-        reverses the physical ordering:
+        when discretization=5) to its integer class label.  Convention:
+        label 0 = healthy (0 %), label n_classes-1 = maximum damage (60 %):
 
-            60 % → label 0,  55 % → label 1,  …,  0 % → label 12
+            0 % → label 0,  5 % → label 1,  …,  60 % → label 12
         """
         damage_cases     = list(range(0, int(self.max_damage) + 1, self.discretization))
         self.n_classes   = len(damage_cases)

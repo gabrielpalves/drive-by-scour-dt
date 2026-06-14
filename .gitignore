@@ -215,3 +215,18 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- Drive-by DT: heavy local-only artefacts (do NOT commit) ---
+PC7/
+PC11/
+Torzoni2024/
+Torzoni2026/
+_paper_cache/
+cache/
+ablation_analysis/
+papers/
+
+# Keep the committed DT champion model (override the global *.pth/*.npy ignores)
+!models/
+!models/**/*.pth
+!models/**/*.npy

@@ -132,13 +132,16 @@ class GetSetup:
 
     def _restart_transition(self) -> np.ndarray:
         """
-        Transition matrix for perfect repair: all states map to healthy (N-1).
+        Transition matrix for perfect repair: all states map to healthy (label 0).
+
+        Convention: label 0 = healthy, label N-1 = maximum damage (60 %). A
+        perfect repair therefore resets every state to label 0.
 
         Returns:
-            np.ndarray: (n_states, n_states).
+            np.ndarray: (n_states, n_states), column-stochastic.
         """
         T = np.zeros((self.n_states, self.n_states))
-        T[self.n_states - 1, :] = 1.0
+        T[0, :] = 1.0   # repair -> healthy (label 0); was N-1 (stale convention)
         return T
 
     def _fuse_transitions(

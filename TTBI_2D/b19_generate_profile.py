@@ -242,6 +242,13 @@ def b19_generate_profile(Calc):
             print(f"Error loading .mat files in B19: {e}")
             raise # Stop the simulation
 
+    # ---- Rail-irregularity intensity toggle ----
+    # Scale the irregularity amplitude (proxy for track degradation severity).
+    # Default 1.0 leaves the profile unchanged; 0.0 -> perfectly smooth.
+    intensity = float(getattr(Calc.Profile, 'intensity', 1.0))
+    if intensity != 1.0:
+        Calc.Profile.h = Calc.Profile.h * intensity
+
     # ---- Plotting profile ----
     if hasattr(Calc, 'Plot') and getattr(Calc.Plot, 'Profile_original', 0) == 1:
         plt.figure(figsize=(10, 3))

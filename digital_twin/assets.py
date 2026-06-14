@@ -79,13 +79,27 @@ class ScourModel:
     DAMAGE_MAX: float = 60.0   # physical cap on scour damage (%)
 
     # ── Stochastic parameter distributions (Kamariotis et al. 2024) ──────────
+    # GRADUAL part (Eq. 17, first term): power-law rate A·t^B with process noise.
     _A_MEAN: float = 1.94e-4;  _A_COV: float  = 0.40
     _B_MEAN: float = 2.0;      _B_COV: float  = 0.10
     _OMEGA_MEAN: float = -0.005; _OMEGA_COV: float = 0.10
 
-    def __init__(self):
+    # SHOCK part (Eq. 17, second term): homogeneous Compound Poisson Process —
+    # flood arrivals ~ Poisson(rate λ); each flood adds an i.i.d. lognormal scour
+    # jump [%]. These are environmental (site/river) properties, NOT resampled on
+    # repair. NOTE: defaults are reasonable placeholders — set to Kamariotis 2024
+    # Table 1 once read off the paper (the table did not OCR cleanly here).
+    _LAMBDA_FLOOD: float = 0.10   # flood occurrence rate [events/year]
+    _JUMP_MEAN:    float = 5.0    # mean scour increment per flood [%]
+    _JUMP_COV:     float = 0.60   # COV of the jump magnitude
+
+    def __init__(self, enable_shock: bool = False):
+        self.enable_shock: bool = enable_shock
         self.current_X: float = 0.0
         self.time:      float = 0.0
+        # Diagnostics for the decision layer (e.g. "a flood just happened").
+        self.last_flood_count:     int   = 0
+        self.last_shock_magnitude: float = 0.0
         self._sample_parameters()
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -100,6 +114,7 @@ class ScourModel:
         Returns:
             float: Current damage in [0, DAMAGE_MAX] %.
         """
+        # ── Gradual deterioration (Kamariotis Eq. 17, first term) ──────────────
         t_mid          = self.time + delta_t / 2.0
         gradual_rate   = self._A * self._B * (t_mid ** (self._B - 1.0))
 
@@ -107,9 +122,30 @@ class ScourModel:
         omega_k        = np.random.normal(loc=self._OMEGA_MEAN, scale=omega_sigma)
 
         self.current_X += gradual_rate * delta_t * np.exp(omega_k)
-        self.time       += delta_t
+
+        # ── Shock deterioration (Eq. 17, second term: Compound Poisson) ────────
+        # Number of floods in this interval ~ Poisson(λ·Δt); each adds an i.i.d.
+        # lognormal scour jump. Captures the "flood event" the DT must react to.
+        self.last_flood_count     = 0
+        self.last_shock_magnitude = 0.0
+        if self.enable_shock:
+            n_floods = int(np.random.poisson(self._LAMBDA_FLOOD * delta_t))
+            if n_floods > 0:
+                j_sigma = np.sqrt(np.log(self._JUMP_COV ** 2 + 1.0))
+                j_mu    = np.log(self._JUMP_MEAN) - 0.5 * j_sigma ** 2
+                jumps   = np.random.lognormal(mean=j_mu, sigma=j_sigma, size=n_floods)
+                shock   = float(jumps.sum())
+                self.current_X           += shock
+                self.last_flood_count     = n_floods
+                self.last_shock_magnitude = shock
+
+        self.time += delta_t
 
         return self.get_current_damage_case()
+
+    def flood_occurred_last_step(self) -> bool:
+        """True if one or more floods (shocks) occurred in the last evolve()."""
+        return self.last_flood_count > 0
 
     def get_current_damage_case(self) -> float:
         """Map internal state X(t) to damage % capped at DAMAGE_MAX."""
@@ -167,9 +203,14 @@ class PhysicalAsset:
         self.config               = config
         self.degradation_law      = degradation_law      # bug-fix: was never stored
         self.monitoring_interval  = monitoring_interval
-        self.scour_model          = ScourModel()
+        self.scour_model          = ScourModel(
+            enable_shock=getattr(config, 'enable_shock', False)
+        )
         self.state_continuous:    float = 0.0
         self.time:                float = 0.0
+        # Set True whenever a flood (shock) occurred in the last state update —
+        # the trigger for the "inspect now vs wait for next train" decision.
+        self.flood_this_step:     bool  = False
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -221,9 +262,11 @@ class PhysicalAsset:
             self.state_continuous = self.scour_model.evolve(
                 delta_t=self.monitoring_interval
             )
+            self.flood_this_step = self.scour_model.flood_occurred_last_step()
         else:
             # Placeholder for future degradation laws
             self.state_continuous += 0.5
+            self.flood_this_step = False
 
         self.time += self.monitoring_interval
 

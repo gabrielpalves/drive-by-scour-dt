@@ -218,11 +218,29 @@ def b07_options_processing(Calc, Train, Track, Beam):
         Beam.BC.rot_stiff = [-1, -1]
         Beam.BC.text_long = 'Fixed-Fixed'
     elif Beam.BC.text == 'UD':
-        Beam.BC.loc = [0, Beam.Prop.L / 2, Beam.Prop.L]  # 2*(Beam.Prop.L)/2 simplified
-        Beam.BC.vert_stiff = [1, 1, 1]              # Vertical stiffness of supports (-1 perfectly stiff, >0 has stiffness)
-        Beam.BC.rot_stiff = [0, 0, 0]               # Rotational stiffness (-1 perfectly stiff, 0 Free rotation)
+        # Support locations: custom fractions of L if provided (allows uneven /
+        # closely-spaced piers), else num_spans+1 evenly-spaced supports.
+        # num_spans=2 (default) reproduces the legacy [0, L/2, L] 3-support bridge.
+        support_locs = getattr(Beam.Prop, 'support_locs', None)
+        if support_locs is not None:
+            fr = np.atleast_1d(np.asarray(support_locs, dtype=float))
+            Beam.BC.loc = list(fr * Beam.Prop.L)
+        else:
+            num_spans = int(getattr(Beam.Prop, 'num_spans', 2))
+            Beam.BC.loc = list(np.linspace(0, Beam.Prop.L, num_spans + 1))
+        n_supp = len(Beam.BC.loc)
+        # All supports: vertical spring (>0), scour-capable.
+        Beam.BC.vert_stiff = [1] * n_supp
+        # Abutments (first/last): bearing-capable (rot spring marked active);
+        # the *value* is set in b02 and is 0 (=free rotation) unless bearing
+        # damage is requested, so the healthy model is unchanged. Interior
+        # piers keep free rotation (0).
+        rot = [0] * n_supp
+        rot[0] = 1
+        rot[-1] = 1
+        Beam.BC.rot_stiff = rot
         Beam.BC.text = 'User-defined'
-        Beam.BC.text_long = '2-span bridge'
+        Beam.BC.text_long = f'{n_supp - 1}-span bridge'
 
     # Default calculation of Beam natural frequencies
     if not hasattr(Calc.Options, 'calc_beam_frq'):
