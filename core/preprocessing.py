@@ -236,18 +236,34 @@ class TTBIPreprocessor:
     # ──────────────────────────────────────────────────────────────────────────
 
     def save_scaler(self, filepath: str) -> None:
-        """Persist the fitted scaler for the digital twin online phase."""
-        with open(filepath, 'wb') as f:
-            pickle.dump(self.scaler, f)
-        print(f"Scaler saved → {filepath}")
+        """Persist the fitted scaler. Uses joblib (or a text sentinel when no
+        scaler was used), matching core.dataset._save_scaler so the online
+        DigitalAsset can load packages produced by the training pipeline."""
+        import joblib
+        if self.scaler is None:
+            with open(filepath, 'w') as f:
+                f.write("NO_SCALER_USED")
+        else:
+            joblib.dump(self.scaler, filepath)
+        print(f"Scaler saved -> {filepath}")
 
     def load_scaler(self, filepath: str) -> None:
         """
         Load a previously saved scaler so transform() can be called without
         re-fitting.  Call this in DigitalAsset.__init__() when loading the
-        offline package.
+        offline package. Handles the formats written by the training pipeline:
+        a 'NO_SCALER_USED' text sentinel, or a joblib-dumped sklearn scaler.
         """
-        with open(filepath, 'rb') as f:
-            self.scaler = pickle.load(f)
+        import joblib
+        try:
+            with open(filepath, 'r') as f:
+                if f.read(20).strip() == "NO_SCALER_USED":
+                    self.scaler = None
+                    self.is_fit = True
+                    print(f"Scaler: none used <- {filepath}")
+                    return
+        except (UnicodeDecodeError, ValueError):
+            pass   # binary file -> a real (joblib) scaler
+        self.scaler = joblib.load(filepath)
         self.is_fit = True
-        print(f"Scaler loaded ← {filepath}")
+        print(f"Scaler loaded <- {filepath}")

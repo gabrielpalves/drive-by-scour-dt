@@ -41,7 +41,8 @@ N_STEPS  = 360           # 360 months = 30 years
 N_SEEDS  = 30            # Monte-Carlo trajectories per planner (mock)
 
 ENABLE_SHOCK = True      # Kamariotis flood (Compound Poisson) term
-P_ADVANCE    = 0.03      # belief-filter deterioration prior per step (monthly)
+P_ADVANCE    = 0.007     # belief-filter deterioration prior per step (monthly);
+                         # calibrated from the true ScourModel — see digital_twin/calibrate.py
 
 # Cost model (verified Kamariotis € figures; tune fragility/downtime as needed).
 COST = CostModel()

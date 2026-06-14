@@ -230,3 +230,6 @@ papers/
 !models/
 !models/**/*.pth
 !models/**/*.npy
+
+# Presentation materials (local only)
+presentation/
