@@ -83,8 +83,16 @@ class SignalLibrary:
             fp = os.path.join(folder, f"{idx + 1:04d}.mat")
             if not os.path.exists(fp):
                 break
-            dmg = float(damage_values[idx]) if damage_values is not None else float(idx)
             d = sio.loadmat(fp)["data"][0, 0]
+            names = d.dtype.names or ()
+            # Prefer the true scour value saved in the file (A00 stores data.Dano
+            # as a fraction 0-0.60 -> %); else explicit damage_values; else index.
+            if damage_values is not None:
+                dmg = float(damage_values[idx])
+            elif "Dano" in names:
+                dmg = float(np.ravel(d["Dano"])[0]) * 100.0
+            else:
+                dmg = float(idx)
             avail = d["AcelPrimVag"].shape[1]
             for p in range(min(n_passages, avail)):
                 chans = [d[_DOF_SOURCE[k][0]][0, p][_DOF_SOURCE[k][1], :] for k in dofs]

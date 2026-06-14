@@ -233,3 +233,7 @@ papers/
 
 # Presentation materials (local only)
 presentation/
+
+# MATLAB autosave + generated output
+*.asv
+scour_MATLAB/Results/
