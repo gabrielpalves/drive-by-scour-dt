@@ -28,10 +28,14 @@ from digital_twin.harness import run_comparison
 # =========================================================================== #
 #  CONFIGURATION
 # =========================================================================== #
-MODE = "mock"            # "mock" (fast) | "live" (TTBI + champion classifier)
+MODE = "mock"            # "mock" (fast) | "library" (champion + held-out signals) | "live" (TTBI)
 
-# Champion model folder (used only in live mode).
+# Champion model folder (live/library modes).
 CHAMPION_DIR = "models/champion_PAA_NHiTS_full8dof"
+# Held-out signal library folder (library mode) — generate this with the MATLAB
+# pipeline (per-state .mat passages, unseen seeds). 'data/data_all_variabilities'
+# is only a dev stand-in (it overlaps the training set -> optimistic).
+LIBRARY_DIR = "data/held_out"
 
 PLANNERS = ["do_nothing", "cost_vi", "heuristic", "pomdp", "hybrid"]
 
@@ -49,13 +53,16 @@ COST = CostModel()
 
 # =========================================================================== #
 def main() -> None:
+    # library/live modes use the real 61-class champion (disc=1); mock uses 13.
+    disc = 1.0 if MODE in ("library", "live") else 5.0
     if MODE == "live":
-        N = 24            # keep tiny in live mode (minutes per passage)
-        seeds = 1
+        N, seeds = 24, 1          # minutes per passage — keep tiny
         print(f"LIVE mode — champion: {CHAMPION_DIR}  ({N} steps, {seeds} seed)")
+    elif MODE == "library":
+        N, seeds = N_STEPS, max(3, N_SEEDS // 5)
+        print(f"LIBRARY mode — champion: {CHAMPION_DIR} | library: {LIBRARY_DIR}")
     else:
-        N = N_STEPS
-        seeds = N_SEEDS
+        N, seeds = N_STEPS, N_SEEDS
 
     df = run_comparison(
         planner_names=PLANNERS,
@@ -64,9 +71,11 @@ def main() -> None:
         n_seeds=seeds,
         enable_shock=ENABLE_SHOCK,
         p_advance=P_ADVANCE,
+        discretization=disc,
         cost_model=COST,
         mode=MODE,
         champion_dir=CHAMPION_DIR,
+        library_dir=LIBRARY_DIR,
     )
 
     print(f"\n=== Value-of-SHM comparison ({MODE}, "
