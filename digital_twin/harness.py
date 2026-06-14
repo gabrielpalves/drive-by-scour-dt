@@ -52,17 +52,23 @@ class _DoNothing:
     def decide(self, belief, context=None): return "do_nothing"
 
 
-def build_planner(name, states, cost_model, p_advance):
+def build_planner(name, states, cost_model, p_advance, discretization=5.0,
+                  max_damage=60.0):
     """Return (planner, actions_list, uses_inspect)."""
     a3 = ["do_nothing", "inspect", "repair"]
     a2 = ["do_nothing", "repair"]
     if name == "do_nothing":
         return _DoNothing(), a2, False
     if name == "cost_vi":
-        return (CostBenefitPlanner(states, a2, cost_model, p_advance=p_advance),
+        return (CostBenefitPlanner(states, a2, cost_model, max_damage=max_damage,
+                                   discretization=discretization, p_advance=p_advance),
                 a2, False)
     if name == "heuristic":
-        return (HeuristicPlanner(states, a3, repair_threshold=4, inspect_threshold=3,
+        # Thresholds in % -> labels, so they hold at any discretisation
+        # (the cost/POMDP planners use damage fractions and adapt automatically).
+        rep = max(1, round(20.0 / discretization))   # repair ~20% scour
+        ins = max(1, round(15.0 / discretization))   # watch from ~15%
+        return (HeuristicPlanner(states, a3, repair_threshold=rep, inspect_threshold=ins,
                                  inspect_after_flood=True, entropy_frac=0.9),
                 a3, True)
     if name == "pomdp":
@@ -113,6 +119,8 @@ def run_comparison(
     cost_model: CostModel | None = None,
     mode: str = "mock",
     champion_dir: str | None = None,
+    library_dir: str | None = None,
+    n_passages: int = 8,
     driveby_sigma: float = 0.7,
     inspect_sigma: float = 0.25,
 ) -> pd.DataFrame:
@@ -124,6 +132,10 @@ def run_comparison(
     if mode == "live":
         L_drive, L_insp, make_phys, make_obs = _live_setup(
             champion_dir, n, dt_years, enable_shock, inspect_sigma)
+    elif mode == "library":
+        L_drive, L_insp, make_phys, make_obs = _library_setup(
+            champion_dir, library_dir, n, dt_years, enable_shock,
+            inspect_sigma, n_passages, discretization)
     else:
         L_drive = banded_like(n, driveby_sigma)
         L_insp = banded_like(n, inspect_sigma)
@@ -137,7 +149,8 @@ def run_comparison(
         costs, ninsp, nrep, finals = [], [], [], []
         for s in range(n_seeds):
             np.random.seed(s)
-            planner, actions, use_insp = build_planner(name, states, cm, p_advance)
+            planner, actions, use_insp = build_planner(
+                name, states, cm, p_advance, discretization, max_damage)
             sim = DTSimulator(
                 make_phys(s), planner, cm, states, actions,
                 driveby_observe=make_obs(L_drive), driveby_like=L_drive,
@@ -192,6 +205,44 @@ def _live_setup(champion_dir, n, dt_years, enable_shock, inspect_sigma):
     def make_obs(L):
         if L is L_drive:
             return lambda phys: digital.estimate_state(phys.get_observation_signal())
+        return lambda phys: int(np.random.choice(n, p=L[phys.get_true_mapped_label()]))
+
+    return L_drive, L_insp, make_phys, make_obs
+
+
+def _library_setup(champion_dir, library_dir, n, dt_years, enable_shock,
+                   inspect_sigma, n_passages, discretization):
+    """Wire the champion classifier + a held-out SignalLibrary (no live TTBI).
+
+    Drive-by observations are real signals sampled from the held-out library and
+    classified by the champion — the production path, free of train/serve skew.
+    """
+    import sys
+    repo = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(repo / "TTBI_2D"))
+    from digital_twin.assets import DigitalAsset
+    from digital_twin.config import DTConfig
+    from digital_twin.signal_library import SignalLibrary, library_observe
+
+    cdir = Path(champion_dir)
+    L_drive = row_normalise(np.load(cdir / "DT_conf_matrix.npy").astype(float))
+    L_insp = banded_like(n, inspect_sigma)
+
+    config = DTConfig.from_metadata(str(cdir / "DT_metadata.json"),
+                                    monitoring_interval=dt_years)
+    config.enable_shock = enable_shock
+    digital = DigitalAsset(str(cdir / "DT_champion_weights.pth"),
+                           str(cdir / "DT_metadata.json"),
+                           str(cdir / "DT_scaler.pkl"), config)
+    lib = SignalLibrary.from_mat_folder(library_dir, n_passages=n_passages, n_states=n)
+    obs_rng = np.random.default_rng(123)
+
+    def make_phys(seed):
+        return MockPhysical(dt_years, enable_shock, seed, discretization, n)
+
+    def make_obs(L):
+        if L is L_drive:
+            return library_observe(lib, digital, obs_rng)
         return lambda phys: int(np.random.choice(n, p=L[phys.get_true_mapped_label()]))
 
     return L_drive, L_insp, make_phys, make_obs

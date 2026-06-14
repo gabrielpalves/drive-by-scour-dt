@@ -55,6 +55,8 @@ def execute_ablation_pipeline(
     n_trials:         int  = 50,
     epochs:           int  = 50,
     skip_robustness:  bool = True,
+    optuna_seed:      int  = 42,
+    use_pruner:       bool = False,
 ) -> list[dict]:
     """
     Run the full ablation pipeline for every model configuration in
@@ -109,7 +111,7 @@ def execute_ablation_pipeline(
                     'Stochastic_Mean_MSE', 'Stochastic_Std_MSE', 'UCB_95_MSE'.
     """
     os.makedirs(cache_dir_name, exist_ok=True)
-    set_global_seed(42)
+    set_global_seed(optuna_seed)
 
     all_results: list[dict] = []
 
@@ -123,7 +125,9 @@ def execute_ablation_pipeline(
 
         # ── 1. Optuna study ───────────────────────────────────────────────────
         study = _create_or_resume_study(
-            step['name'], database_name, n_trials
+            step['name'], database_name, n_trials,
+            sampler_seed=optuna_seed,
+            use_pruner=use_pruner,
         )
 
         remaining = n_trials - len(study.trials)
@@ -229,6 +233,11 @@ def export_digital_twin_package(
             'model_type':    config.get('model_type',    '1D_MODULAR'),
         },
         'optimal_hyperparameters': study.best_params,
+        # Persist the label discretisation so the online DTConfig reconstructs the
+        # right number of classes (the ablation uses 1% steps -> 61 classes; a
+        # missing value previously defaulted to 5 -> 13 classes, breaking the DT).
+        'discretization': config.get('discretization', 1),
+        'n_segments':     config.get('n_segments', 512),
     }
     with open(os.path.join(output_dir, 'DT_metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=4)
@@ -262,15 +271,34 @@ def _create_or_resume_study(
     study_name:    str,
     storage:       str,
     n_trials:      int,
+    sampler_seed:  int  = 42,
+    use_pruner:    bool = False,
 ) -> optuna.Study:
-    """Create a new TPE study or resume an existing one from storage."""
+    """
+    Create a new TPE study or resume an existing one from storage.
+
+    When `use_pruner=True`, attaches a SuccessiveHalvingPruner. The trainer
+    already calls `trial.report(val_mse, epoch)` and `trial.should_prune()`,
+    so unpromising trials get killed off after a few epochs — typically
+    saves 30-50 % of compute on noisy losses without hurting the picked
+    optimum. Default False keeps the pre-existing behaviour (Optuna's
+    built-in MedianPruner).
+    """
     n_startup = max(10, n_trials // 4)
     sampler   = optuna.samplers.TPESampler(
-        seed=42,
+        seed=sampler_seed,
         n_startup_trials=n_startup,
         multivariate=True,
         constant_liar=True,
         warn_independent_sampling=False,
+    )
+    pruner = (
+        optuna.pruners.SuccessiveHalvingPruner(
+            min_resource=4,           # at least 4 epochs before any pruning
+            reduction_factor=3,       # keep top 1/3 at each rung
+            min_early_stopping_rate=0,
+        )
+        if use_pruner else None
     )
     return optuna.create_study(
         study_name=study_name,
@@ -278,6 +306,7 @@ def _create_or_resume_study(
         direction='minimize',
         load_if_exists=True,
         sampler=sampler,
+        pruner=pruner,
     )
 
 

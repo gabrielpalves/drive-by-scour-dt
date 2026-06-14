@@ -217,7 +217,9 @@ class DTConfig:
         with open(metadata_path) as f:
             meta = json.load(f)
 
-        discretization = int(meta.get('discretization', 5))
+        # The ablation uses 1% damage steps (61 classes); default to 1 (not 5)
+        # when older metadata omits the field, matching the trained champions.
+        discretization = int(meta.get('discretization', 1))
         n_segments     = int(meta.get('n_segments', 512))
 
         # Infer n_segments from best_params if not stored explicitly.
