@@ -38,11 +38,20 @@ def d01_data_processing(i, j, Sol, Train, Calc, Damage, data):
     xi = np.arange(1, dim_space + 1)
     xx = np.linspace(1, dim_space, dim_acel)
 
+    # Spatial crop window, generalised for any bridge length (space domain is
+    # 100 samples/m). Window = 10 m approach skip + bridge span + 18.31 m of
+    # vehicle crossing/after. Rounding L_bridge to the nearest metre reproduces
+    # the original 40 m window exactly (cols 1000:6831 = 5831 samples), while a
+    # longer bridge now captures its whole passage. Keep this in sync with the
+    # MATLAB D01_DataProcessing crop.
+    crop_start = 1000                                          # ~10 m approach skip
+    bridge_samp = int(round(Calc.Profile.L_bridge)) * 100      # bridge span [samples]
+    crop_end = min(crop_start + bridge_samp + 1831, dim_space)  # + crossing/after
+
     # Helper function to interpolate and slice in one step
     def interpolate_and_slice(signal):
         f_interp = interp1d(xx, signal, axis=1, kind='linear', fill_value="extrapolate")
-        # Slice assignments (Python 0-based index: 1000 to 6831 covers MATLAB's 1001 to 6831)
-        return f_interp(xi)[:, 1000:6831]
+        return f_interp(xi)[:, crop_start:crop_end]
 
     # 6. Apply interpolation and assign to the data object
     data.AcelPrimVag[i, j] = interpolate_and_slice(acel_bogie)

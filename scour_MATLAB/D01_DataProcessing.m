@@ -66,9 +66,19 @@ for ii = 1:length(data.AceleracaoPrimVag{i,j}(:,1))
     
 end
 
-data.AceleracaoPrimVag{i,j} = AcelEspacoPrimVag(:, 1001:5000+1831);
-data.AcelRodaPrimVag{i,j} = AcelRodaPrimVag(:, 1001:5000+1831);
-data.PitchPrimVag{i,j} = PitchPrimVag(:, 1001:5000+1831);
+% Spatial crop window, generalised for any bridge length (space domain is
+% 100 samples/m). Window = 10 m approach skip + bridge span + 18.31 m of
+% vehicle crossing/after. Rounding L_bridge to the nearest metre reproduces the
+% original 40 m window exactly (cols 1001:6831 = 5831 samples), while a longer
+% bridge now captures its whole passage. Keep this in sync with the Python
+% d01_data_processing crop.
+crop_start  = 1001;                                   % ~10 m approach skip
+bridge_samp = round(Calc.Profile.L_bridge) * 100;     % bridge span [samples]
+crop_end    = min(crop_start - 1 + bridge_samp + 1831, DimSpace);  % + crossing/after
+
+data.AceleracaoPrimVag{i,j} = AcelEspacoPrimVag(:, crop_start:crop_end);
+data.AcelRodaPrimVag{i,j} = AcelRodaPrimVag(:, crop_start:crop_end);
+data.PitchPrimVag{i,j} = PitchPrimVag(:, crop_start:crop_end);
 
 % Plot Vehicle vertical acceleration
 % inputFolder = 'C:\Users\CLIENTE\Desktop\Thiago\Scour_TTBaseline';
