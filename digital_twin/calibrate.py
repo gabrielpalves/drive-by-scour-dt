@@ -70,8 +70,8 @@ def estimate_p_advance(
 
 
 def fragility_sensitivity(
-    midpoints=(0.6, 0.7, 0.8, 0.9),
-    steepnesses=(8.0, 12.0),
+    medians=(0.6, 0.7, 0.8, 0.9),
+    betas=(0.05, 0.3, 0.4),
     dt_years: float = 1.0 / 12.0,
     n_steps: int = 360,
     n_seeds: int = 12,
@@ -79,13 +79,15 @@ def fragility_sensitivity(
     discretization: float = 5.0,
     max_damage: float = 60.0,
 ) -> pd.DataFrame:
-    """Sweep the fragility curve; report cost-optimal repair threshold + ranking."""
+    """Sweep the lognormal fragility (median θ × dispersion β); report the
+    cost-optimal repair threshold + planner ranking. β grid brackets the
+    literature: 0.05 brittle (masonry arch) … 0.3–0.4 deep piers."""
     n = int(max_damage / discretization) + 1
     states = [str(i) for i in range(n)]
     rows = []
-    for mid in midpoints:
-        for st in steepnesses:
-            cm = CostModel(fragility_midpoint=mid, fragility_steepness=st)
+    for med in medians:
+        for beta in betas:
+            cm = CostModel(fragility_median=med, fragility_beta=beta)
             cvi = CostBenefitPlanner(states, ["do_nothing", "repair"], cm,
                                      max_damage=max_damage,
                                      discretization=discretization,
@@ -99,8 +101,8 @@ def fragility_sensitivity(
             ranking = " < ".join(df.planner.tolist())
             thr = cvi.threshold_label
             rows.append(dict(
-                fragility_midpoint=mid,
-                fragility_steepness=st,
+                fragility_median=med,
+                fragility_beta=beta,
                 repair_threshold_label=thr,
                 repair_threshold_pct=None if thr is None else thr * discretization,
                 best_planner=df.iloc[0].planner,

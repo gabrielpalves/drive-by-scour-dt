@@ -75,6 +75,9 @@ class MultiScourModel:
         self.current_X = np.zeros(self.n)      # scour [%] per support
         self.last_flood_count = 0
         self.last_shock = np.zeros(self.n)
+        # Dimensionless severity of the last flood = worst-support shock / mean
+        # jump (the latent driver the river gauge observes; digital_twin.flood).
+        self.last_severity = 0.0
         self._sample_parameters()
 
     # ── correlation structure ──────────────────────────────────────────────────
@@ -114,6 +117,7 @@ class MultiScourModel:
 
         self.last_flood_count = 0
         self.last_shock = np.zeros(self.n)
+        self.last_severity = 0.0
         if self.enable_shock:
             n_floods = int(self.rng.poisson(self._LAMBDA_FLOOD * delta_t))     # shared arrival
             if n_floods > 0:
@@ -125,12 +129,18 @@ class MultiScourModel:
                 self.current_X += shock
                 self.last_flood_count = n_floods
                 self.last_shock = shock
+                # Worst-hit support drives the (single) external severity signal.
+                self.last_severity = float(shock.max()) / self._JUMP_MEAN
 
         self.time += delta_t
         return self.get_scour_fractions()
 
     def flood_occurred_last_step(self) -> bool:
         return self.last_flood_count > 0
+
+    def flood_severity(self) -> float:
+        """Dimensionless severity of the last flood (0 if none); gauge driver."""
+        return self.last_severity
 
     def get_scour_fractions(self) -> np.ndarray:
         """Per-support scour fraction in [0, 1] (= damage% / DAMAGE_MAX, capped)."""

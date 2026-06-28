@@ -66,13 +66,19 @@ class SignalLibrary:
         folder: str,
         n_passages: int = 10,
         damage_values: list[float] | None = None,
-        n_states: int = 61,
+        n_states: int | None = None,
     ) -> "SignalLibrary":
         """Load a folder of NNNN.mat files (same format as the training data).
 
         folder        : path to the held-out dataset folder.
-        n_passages    : passages to load per state (a small pool is enough).
-        damage_values : damage % for each file in order; default 0..n_states-1.
+        n_passages    : passages to load per state (a small pool is enough; this
+                        caps memory, so keep it modest even if the .mat hold more).
+        damage_values : damage % for each file in order; default reads data.Dano.
+        n_states      : optional CAP on the number of files to read. Default None
+                        = read EVERY NNNN.mat present. The true damage of each
+                        state comes from data.Dano, NOT from the class count, so a
+                        fine 600-state grid loads fully (do not cap it at the 61
+                        classifier classes — that would only load 0..6 % scour).
         """
         if not os.path.isdir(folder):
             raise FileNotFoundError(f"Signal library folder not found: {folder}")
@@ -99,7 +105,7 @@ class SignalLibrary:
                 signals.append(np.vstack(chans).astype(np.float32))   # (8, L)
                 states_pct.append(dmg)
             idx += 1
-            if damage_values is None and idx >= n_states:
+            if n_states is not None and idx >= n_states:
                 break
         if not signals:
             raise RuntimeError(f"No passages loaded from {folder}")

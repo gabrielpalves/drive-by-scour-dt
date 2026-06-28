@@ -78,6 +78,7 @@ def run_single_passage(
     bridge_length:    float             = 40.0,
     num_spans:        int               = 2,
     support_locs:     list | None       = None,
+    profile_type:     int | None        = None,
 ) -> np.ndarray:
     """
     Run one TTBI vehicle-bridge passage and return all eight DOF signals.
@@ -168,6 +169,12 @@ def run_single_passage(
 
     # ── 4. Numerical integration ──────────────────────────────────────────────
     calc, beam, track           = a04_options(beam, track)
+    # Override the rail-irregularity profile mode if requested. a04_options
+    # defaults to Type 2 (load the fixed FRA profile used to train the champion);
+    # Type 0 = smooth (no irregularity) is useful for skew debugging / a
+    # controlled deterministic baseline, Type 1 = freshly generated FRA profile.
+    if profile_type is not None:
+        calc.Profile.Type = int(profile_type)
     sol, calc, train, beam, track = b00_calculations(calc, train, track, beam, damage)
 
     # ── 5. Spatial interpolation ──────────────────────────────────────────────

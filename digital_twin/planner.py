@@ -32,6 +32,8 @@ Imported by:
 
 import numpy as np
 
+from digital_twin.risk import RiskModel
+
 
 class Planner:
     """
@@ -220,6 +222,14 @@ class POMDPPlanner:
     POMDP approximation — interpretable and € quantifiable — and can later be
     upgraded to a point-based POMDP solver.
 
+    Risk perception (digital_twin.risk.RiskModel): the perceived cost of *not*
+    acting is `risk.perceived_cost(failure_costs, belief)` — a risk measure over
+    the belief, not a plain expectation. A risk-averse model up-weights the
+    dangerous tail of the belief, so the planner both inspects more (resolving a
+    tail that a risk-neutral mean would ignore) and repairs earlier (perceiving
+    that tail as costlier). Default attitude='neutral' reproduces the plain
+    expected-cost POMDP exactly.
+
     Args:
         states_list, actions_list : must include 'do_nothing', 'inspect', and a
                                     repair action ('repair'/'perfect_repair').
@@ -228,6 +238,8 @@ class POMDPPlanner:
         inspect_conf              : (n, n) observation model p(obs | true state)
                                     for an inspection; default = sharp (accurate)
                                     so inspecting yields near-ground-truth.
+        risk_model                : digital_twin.risk.RiskModel; default neutral
+                                    (= expected-cost POMDP).
     """
 
     def __init__(
@@ -238,6 +250,7 @@ class POMDPPlanner:
         max_damage:     float = 60.0,
         discretization: float = 5.0,
         inspect_conf:   np.ndarray | None = None,
+        risk_model:     RiskModel | None = None,
     ):
         self.states_list = states_list
         self.actions_list = actions_list
@@ -245,6 +258,9 @@ class POMDPPlanner:
         self.n = len(states_list)
         self.fracs = np.array([(int(s) * discretization) / max_damage
                                for s in states_list])
+        self.risk = risk_model or RiskModel()
+        self._failcosts = np.array([self.cm.expected_failure_cost(f)
+                                    for f in self.fracs])
         self._repair = next(a for a in ("repair", "perfect_repair")
                             if a in actions_list)
         self.inspect_conf = (self._default_inspect_conf()
@@ -263,8 +279,9 @@ class POMDPPlanner:
     # ── decision-cost building blocks ───────────────────────────────────────────
 
     def _cost_do_nothing(self, belief: np.ndarray) -> float:
-        return float(np.sum(belief * np.array(
-            [self.cm.expected_failure_cost(f) for f in self.fracs])))
+        # Risk-adjusted perceived cost of the failure-risk distribution under the
+        # belief (plain expectation when the risk model is neutral).
+        return self.risk.perceived_cost(self._failcosts, belief)
 
     def _cost_repair(self, belief: np.ndarray) -> float:
         return self.cm.action_cost(self._repair)
@@ -418,6 +435,152 @@ class CostBenefitPlanner(Planner):
         self.threshold_label = int(repaired.min()) if repaired.size else None
         return policy
 
+class FloodResponsePlanner:
+    """Decision branch for an observed major flood (Step 2).
+
+    A river gauge has just declared a major flood and the belief over damage has
+    been WIDENED to represent the uncertain scour shock (digital_twin.flood). The
+    owner must now choose how hard to intervene, among four actions of rising
+    cost and protection:
+
+        do_nothing          — accept the widened belief, run the line normally.
+        restrict_operations — a reduced-risk PROBE: a few low-mass / low-speed
+                              instrumented passages → a WIDER (lower-SNR) drive-by
+                              observation. Cheap, but its information is degraded
+                              and can be lost if the sensors are faulty.
+        inspect             — a sharp human/diver survey (sensor-independent).
+        interrupt           — close the line now (so it carries NO failure risk
+                              this step) AND inspect.
+
+    Choice rule — risk-adjusted one-step lookahead (the same Value-of-Information
+    logic as POMDPPlanner, generalised to several information actions with
+    different cost, observation model, and protection):
+
+        R(b)        = risk.perceived_cost(failure_costs, b)         # carried risk
+        commit(b)   = min(R(b), c_repair)                          # best follow-up
+        E_commit(b,L) = Σ_o p(o|b) · commit(posterior(b, L, o))    # after observing
+
+        J(do_nothing) = expo·R(b) + commit(b)
+        J(restrict)   = c_restrict + expo·R(b)
+                        + reliab·E_commit(b, L_probe) + (1−reliab)·commit(b)
+        J(inspect)    = c_inspect  + expo·R(b) + E_commit(b, L_inspect)
+        J(interrupt)  = c_interrupt              + E_commit(b, L_inspect)
+
+    and the action with the smallest J is taken. The `expo·R(b)` term is the
+    failure risk the OPEN line carries during the acute post-flood window; it
+    cancels among the three open-line actions (so they are ranked by cost-vs-VoI,
+    exactly the POMDP) but is removed by `interrupt`, which is therefore chosen
+    precisely when R(widened) is large — a near-threshold belief hit by a severe
+    flood. The `reliab` factor is the probability the probe yields usable data
+    (from the sensor-health layer); a low value collapses the probe's VoI and
+    makes the planner escalate to inspect / interrupt — the sensor-corruption
+    escalation, expressed at the decision level. Risk aversion (RiskModel) up-
+    weights the dangerous tail of the widened belief, lowering the bar for
+    inspect / interrupt; neutral reproduces expected-cost behaviour.
+
+    Args:
+        states_list:    ordered damage labels (0 = healthy).
+        cost_model:     digital_twin.costs.CostModel (uses restrict_operations,
+                        inspect, interrupt, repair action costs).
+        probe_conf:     (n,n) observation model L[true,pred] for the restricted-ops
+                        probe (WIDER than drive-by; assumed now, measurable from a
+                        MATLAB low-mass/low-speed batch later — §6.5).
+        inspect_conf:   (n,n) sharp observation model for the inspection/interrupt.
+        risk_model:     digital_twin.risk.RiskModel; default neutral.
+        exposure_frac:  fraction of the post-flood window the OPEN line carries
+                        the elevated failure risk before the survey result is in
+                        (≈ inspection latency / step; ~0.02 ≈ same-day survey on a
+                        monthly clock). Small: interrupt is reserved for the
+                        genuinely severe corner where R(widened) is large; raising
+                        it makes the owner close more readily.
+    """
+
+    FLOOD_ACTIONS = ("do_nothing", "restrict_operations", "inspect", "interrupt")
+
+    def __init__(
+        self,
+        states_list:    list[str],
+        cost_model,
+        probe_conf:     np.ndarray,
+        inspect_conf:   np.ndarray,
+        max_damage:     float = 60.0,
+        discretization: float = 5.0,
+        risk_model:     RiskModel | None = None,
+        exposure_frac:  float = 0.02,
+    ):
+        self.states_list = states_list
+        self.cm = cost_model
+        self.n = len(states_list)
+        self.fracs = np.array([(int(s) * discretization) / max_damage
+                               for s in states_list])
+        self.risk = risk_model or RiskModel()
+        self._failcosts = np.array([self.cm.expected_failure_cost(f)
+                                    for f in self.fracs])
+        self.exposure_frac = float(exposure_frac)
+        self.L_probe = self._colnorm(probe_conf)
+        self.L_inspect = self._colnorm(inspect_conf)
+        self._c_restrict = self.cm.action_cost("restrict_operations")
+        self._c_inspect = self.cm.action_cost("inspect")
+        self._c_interrupt = self.cm.action_cost("interrupt")
+        self._c_repair = self.cm.action_cost(
+            next(a for a in ("repair", "perfect_repair") if a in self.cm._action_cost))
+
+    @staticmethod
+    def _colnorm(M: np.ndarray) -> np.ndarray:
+        """Row-normalise L[true, pred] over predictions (matches the convention in
+        DTSimulator.row_normalise: row=true state, column=predicted label)."""
+        M = np.asarray(M, dtype=float)
+        return M / np.clip(M.sum(axis=1, keepdims=True), 1e-12, None)
+
+    # ── building blocks ─────────────────────────────────────────────────────────
+
+    def _R(self, belief: np.ndarray) -> float:
+        return self.risk.perceived_cost(self._failcosts, belief)
+
+    def _commit(self, belief: np.ndarray) -> float:
+        return min(self._R(belief), self._c_repair)
+
+    def _exp_commit(self, belief: np.ndarray, L: np.ndarray) -> float:
+        """E over observations of commit(posterior) after observing through L."""
+        p_obs = belief @ L                                   # p(pred=o | belief)
+        acc = 0.0
+        for o in range(self.n):
+            if p_obs[o] <= 0:
+                continue
+            post = L[:, o] * belief
+            tot = post.sum()
+            if tot <= 0:
+                continue
+            acc += p_obs[o] * self._commit(post / tot)
+        return float(acc)
+
+    # ── decision ────────────────────────────────────────────────────────────────
+
+    def score(self, belief: np.ndarray, probe_reliability: float = 1.0) -> dict:
+        """Risk-adjusted expected € cost J of each flood action (smaller = better)."""
+        belief = np.asarray(belief, dtype=float)
+        R0 = self._R(belief)
+        commit0 = min(R0, self._c_repair)
+        expo = self.exposure_frac * R0
+        rel = float(np.clip(probe_reliability, 0.0, 1.0))
+        ec_probe = self._exp_commit(belief, self.L_probe)
+        ec_sharp = self._exp_commit(belief, self.L_inspect)
+        return {
+            "do_nothing":          expo + commit0,
+            "restrict_operations": self._c_restrict + expo
+                                   + rel * ec_probe + (1.0 - rel) * commit0,
+            "inspect":             self._c_inspect + expo + ec_sharp,
+            "interrupt":           self._c_interrupt + ec_sharp,
+        }
+
+    def decide(self, belief, context: dict | None = None) -> str:
+        """Return the lowest-cost flood action. context may carry
+        'probe_reliability' (default 1.0) from the sensor-health layer."""
+        ctx = context or {}
+        J = self.score(belief, ctx.get("probe_reliability", 1.0))
+        return min(J, key=J.get)
+
+
 class HybridPlanner:
     """
     Hybrid planner: POMDP Value-of-Information for the *inspect* decision and a
@@ -432,6 +595,10 @@ class HybridPlanner:
         1. if the cost-VI policy says repair  -> repair
         2. elif inspecting is worth it (VoI > c_inspect) -> inspect
         3. else -> do_nothing
+
+    Risk perception (RiskModel) is applied to the inspection decision through the
+    embedded POMDP planner; the repair timing comes from the (risk-neutral)
+    cost-VI lookahead. Default neutral reproduces the original behaviour.
     """
 
     def __init__(
@@ -443,6 +610,7 @@ class HybridPlanner:
         discretization: float = 5.0,
         p_advance: float = 0.10,
         gamma: float = 0.95,
+        risk_model: RiskModel | None = None,
     ):
         self.actions = actions_list
         self.cm = cost_model
@@ -451,7 +619,8 @@ class HybridPlanner:
             states_list, [a for a in actions_list if a != "inspect"],
             cost_model, max_damage, discretization, p_advance, gamma)
         self._inspect_planner = POMDPPlanner(
-            states_list, actions_list, cost_model, max_damage, discretization)
+            states_list, actions_list, cost_model, max_damage, discretization,
+            risk_model=risk_model)
 
     def decide(self, belief, context=None) -> str:
         if self._repair_planner.decide(belief) == self._repair:

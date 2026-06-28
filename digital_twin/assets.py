@@ -100,6 +100,9 @@ class ScourModel:
         # Diagnostics for the decision layer (e.g. "a flood just happened").
         self.last_flood_count:     int   = 0
         self.last_shock_magnitude: float = 0.0
+        # Dimensionless event severity = shock magnitude / mean jump (the latent
+        # driver the river gauge observes; see digital_twin.flood.FloodTrigger).
+        self.last_severity:        float = 0.0
         self._sample_parameters()
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -128,6 +131,7 @@ class ScourModel:
         # lognormal scour jump. Captures the "flood event" the DT must react to.
         self.last_flood_count     = 0
         self.last_shock_magnitude = 0.0
+        self.last_severity        = 0.0
         if self.enable_shock:
             n_floods = int(np.random.poisson(self._LAMBDA_FLOOD * delta_t))
             if n_floods > 0:
@@ -138,6 +142,7 @@ class ScourModel:
                 self.current_X           += shock
                 self.last_flood_count     = n_floods
                 self.last_shock_magnitude = shock
+                self.last_severity        = shock / self._JUMP_MEAN
 
         self.time += delta_t
 
@@ -146,6 +151,10 @@ class ScourModel:
     def flood_occurred_last_step(self) -> bool:
         """True if one or more floods (shocks) occurred in the last evolve()."""
         return self.last_flood_count > 0
+
+    def flood_severity(self) -> float:
+        """Dimensionless severity of the last flood (0 if none); gauge driver."""
+        return self.last_severity
 
     def get_current_damage_case(self) -> float:
         """Map internal state X(t) to damage % capped at DAMAGE_MAX."""
@@ -211,6 +220,9 @@ class PhysicalAsset:
         # Set True whenever a flood (shock) occurred in the last state update —
         # the trigger for the "inspect now vs wait for next train" decision.
         self.flood_this_step:     bool  = False
+        # Severity of that flood (0 when none); the river-gauge observes a noisy
+        # version of it (digital_twin.flood).
+        self.flood_severity:      float = 0.0
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -263,10 +275,12 @@ class PhysicalAsset:
                 delta_t=self.monitoring_interval
             )
             self.flood_this_step = self.scour_model.flood_occurred_last_step()
+            self.flood_severity  = self.scour_model.flood_severity()
         else:
             # Placeholder for future degradation laws
             self.state_continuous += 0.5
             self.flood_this_step = False
+            self.flood_severity  = 0.0
 
         self.time += self.monitoring_interval
 
