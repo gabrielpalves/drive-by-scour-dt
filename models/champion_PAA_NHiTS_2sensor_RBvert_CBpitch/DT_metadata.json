@@ -1,0 +1,37 @@
+{
+    "model_name": "PAA_NHiTS_DOFs_2_5_seed2026",
+    "preprocessing_method": "PAA",
+    "active_dofs": [
+        2,
+        5
+    ],
+    "architecture_flags": {
+        "use_space2vec": false,
+        "use_lstm": false,
+        "use_nhits": true,
+        "model_type": "1D_MODULAR"
+    },
+    "optimal_hyperparameters": {
+        "n_conv_layers": 3,
+        "n_dense_layers": 2,
+        "lr": 0.00035017469492756436,
+        "weight_decay": 2.3092189793874757e-05,
+        "n_filters_l0": 128,
+        "kernel_size_l0": 7,
+        "pooling_l0": false,
+        "n_filters_l1": 64,
+        "kernel_size_l1": 3,
+        "pooling_l1": true,
+        "n_filters_l2": 48,
+        "kernel_size_l2": 7,
+        "pooling_l2": false,
+        "n_dense_units_l0": 256,
+        "dropout_l0": 0.10351619789851821,
+        "n_dense_units_l1": 176,
+        "dropout_l1": 0.3186509244445768,
+        "nhits_pool_rates_key": "1_2_4_8"
+    },
+    "discretization": 1,
+    "n_segments": 512,
+    "n_classes": 61
+}
