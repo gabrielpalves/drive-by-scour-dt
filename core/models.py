@@ -15,6 +15,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from core.task import n_outputs as _task_n_outputs
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. Spatial Embedding Module
@@ -341,21 +343,26 @@ def build_model(
         device (torch.device): Target device.
 
     Returns:
-        (model, n_classes)
+        (model, n_outputs) — n_outputs is the final-layer size: the number of
+        damage CLASSES for a classification config, or the number of target
+        supports (continuous heads) for a regression config (config['task']).
+        The architecture is identical either way; only the head size changes.
     """
     # Resolve N-HiTS string key back to a tuple (Optuna stores it as a string).
     if 'nhits_pool_rates_key' in params:
         params = dict(params)   # don't mutate the caller's dict
         params['nhits_pool_rates'] = _POOL_RATE_MAP[params['nhits_pool_rates_key']]
 
-    disc      = config.get('discretization', 1)
-    n_classes = int(60 / disc) + 1
+    # Output size from the task: classes (classification) or target count
+    # (regression). Defaults to classification when config has no 'task' key,
+    # so existing single-scour champions and the DT are unaffected.
+    n_out = _task_n_outputs(config)
     in_channels = input_shape[1]
 
     if config.get('model_type') == '2D_CNN' or config.get('method') == 'PAA_CWT':
         model = Simple2DCNN(
             in_channels=in_channels,
-            n_classes=n_classes,
+            n_classes=n_out,
             params=params,
             image_height=input_shape[2],
             image_width=input_shape[3],
@@ -363,7 +370,7 @@ def build_model(
     else:
         model = SpaceAwareModularNetwork(
             n_segments=input_shape[2],
-            n_classes=n_classes,
+            n_classes=n_out,
             in_channels=in_channels,
             params=params,
             use_space2vec=config.get('use_space2vec', False),
@@ -371,4 +378,4 @@ def build_model(
             use_nhits=config.get('use_nhits',     False),
         ).to(device)
 
-    return model, n_classes
+    return model, n_out

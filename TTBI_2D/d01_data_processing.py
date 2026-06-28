@@ -14,9 +14,15 @@ def d01_data_processing(i, j, Sol, Train, Calc, Damage, data):
             setattr(data, attr, {})
 
     # 2. Extract base signals for the first vehicle (0-based indexing)
+    #    MATLAB D01 uses A(1:3) for vertical accel and V(4:6) for the PITCH RATES
+    #    (the V field stores vertical velocities in rows 1-3 and pitch/rotational
+    #    rates in rows 4-6). In 0-based Python that is A[0:3] and V[3:6]. Using
+    #    V[0:3] here fed vertical velocities mislabelled as pitch -> a ~10x scale
+    #    mismatch on the pitch channels and the train/serve skew. Keep in sync
+    #    with scour_MATLAB/D01_DataProcessing.m.
     acel_bogie = Sol.Veh[0].A[0:3, :]
     acel_wheel = Sol.Veh[0].acc_under[0:4, :]
-    pitch_bogie = Sol.Veh[0].V[0:3, :]
+    pitch_bogie = Sol.Veh[0].V[3:6, :]
 
     # 3. Apply artificial noise (proportional to signal magnitude)
     num_t = Calc.Solver.num_t

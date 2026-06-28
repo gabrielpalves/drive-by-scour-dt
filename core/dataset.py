@@ -30,15 +30,28 @@ from core.preprocessing import TTBIPreprocessor
 # ──────────────────────────────────────────────────────────────────────────────
 
 def load_ttbi_dataset(
-    filepath:       str,
-    requested_dofs: list[int],
-    n_passages:     int = 200,
+    filepath:        str,
+    requested_dofs:  list[int],
+    n_passages:      int = 200,
+    target_supports: list[int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Load raw TTBI vibration passages from a folder of numbered .mat files
     and return them as NumPy arrays ready for preprocessing.
 
-    Each file (0001.mat … 0061.mat) represents one damage level (0 – 60 %).
+    Two labelling modes
+    -------------------
+    * Single-output (default, target_supports=None) — LEGACY. Each file
+      (0001.mat … 0061.mat) is one damage level and the label is the FILE INDEX
+      (0–60 %). y has shape (N,), int. Used by the single-scour ablation.
+    * Multi-output (target_supports given) — STAGE 0+. Each file holds an
+      independent per-support scour state; the label is the scour VECTOR at the
+      requested support indices, read from data.scour_vector (regression target,
+      % scour). y has shape (N, len(target_supports)), float. All NNNN.mat in the
+      folder are scanned (not capped at 61). `target_supports` are 1-based MATLAB
+      support indices (matching A00's scour_supports), e.g. [2, 3] for the two
+      internal piers of a 3-span bridge.
+
     Up to n_passages passages are loaded per file.
 
     DOF mapping
@@ -84,6 +97,11 @@ def load_ttbi_dataset(
         7: ('PitchPrimVag',    2),
     }
 
+    # ── Multi-output mode: per-pier scour vector labels ───────────────────────
+    if target_supports is not None:
+        return _load_multi_output(dataset_path, requested_dofs, n_passages,
+                                  target_supports, _DOF_SOURCE)
+
     X_list: list[np.ndarray] = []
     y_list: list[int]        = []
 
@@ -119,6 +137,60 @@ def load_ttbi_dataset(
     return X, y
 
 
+def _load_multi_output(
+    dataset_path:    str,
+    requested_dofs:  list[int],
+    n_passages:      int,
+    target_supports: list[int],
+    dof_source:      dict,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Multi-output loader: scan all NNNN.mat, read the per-support scour VECTOR.
+
+    Each file's label is data.scour_vector at the (1-based) `target_supports`
+    indices, in % scour (the MATLAB value is a 0–1 fraction). Returns
+    X (N, C, L) float32 and y (N, n_targets) float32 — a regression target.
+    """
+    tgt0 = [int(s) - 1 for s in target_supports]      # 1-based MATLAB -> 0-based
+    X_list: list[np.ndarray] = []
+    y_list: list[np.ndarray] = []
+
+    idx = 0
+    while True:
+        fname = f"{idx + 1:04d}.mat"
+        fp = os.path.join(dataset_path, fname)
+        if not os.path.exists(fp):
+            break
+        try:
+            data_struct = sio.loadmat(fp)['data'][0, 0]
+            names = data_struct.dtype.names or ()
+            if 'scour_vector' not in names:
+                raise KeyError(
+                    f"{fname}: multi-output load needs data.scour_vector — "
+                    f"regenerate the dataset with A00 damage_mode='multi_scour'.")
+            vec = np.ravel(data_struct['scour_vector']).astype(float)   # per-support fractions
+            label = vec[tgt0] * 100.0                                    # % at the targets
+
+            available = data_struct['AcelPrimVag'].shape[1]
+            for p in range(min(n_passages, available)):
+                channels = [data_struct[dof_source[dof][0]][0, p][dof_source[dof][1], :]
+                            for dof in requested_dofs]
+                X_list.append(np.vstack(channels))                       # (C, L)
+                y_list.append(label.astype(np.float32))
+        except KeyError:
+            raise
+        except Exception as e:
+            print(f"  [!] Error processing {fname}: {e}")
+        idx += 1
+
+    if not X_list:
+        raise RuntimeError(f"No multi-output passages loaded from {dataset_path}")
+    X = np.array(X_list, dtype=np.float32)
+    y = np.array(y_list, dtype=np.float32)                              # (N, n_targets)
+    print(f"  [multi-output] {X.shape[0]} passages, {idx} states, "
+          f"{y.shape[1]} targets (supports {target_supports}).")
+    return X, y
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. Memory-mapped PyTorch Dataset
 # ──────────────────────────────────────────────────────────────────────────────
@@ -144,10 +216,14 @@ class MemmapDataset(torch.utils.data.Dataset):
         X_memmap: np.ndarray,
         y_memmap: np.ndarray,
         indices:  np.ndarray,
+        label_dtype: torch.dtype = torch.long,
     ):
-        self.X       = X_memmap
-        self.y       = y_memmap
-        self.indices = indices
+        self.X           = X_memmap
+        self.y           = y_memmap
+        self.indices     = indices
+        # long for classification (class index), float for regression (continuous
+        # per-pier scour vector). See core.task.label_dtype.
+        self.label_dtype = label_dtype
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -156,7 +232,7 @@ class MemmapDataset(torch.utils.data.Dataset):
         real_idx = self.indices[idx]
         # .copy() releases the memmap lock so the GC can reclaim the page
         x = torch.tensor(self.X[real_idx].copy()).float()
-        y = torch.tensor(self.y[real_idx].copy()).long()
+        y = torch.tensor(self.y[real_idx].copy()).to(self.label_dtype)
         return x, y
 
 
@@ -176,7 +252,13 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     clean   = os.path.splitext(os.path.basename(dataset_name))[0]
     dof_str = "_".join(map(str, config['dofs']))
     disc    = config.get('discretization', 1)
-    return f"{clean}_{config['method']}_dofs_{dof_str}_disc{disc}"
+    stem    = f"{clean}_{config['method']}_dofs_{dof_str}_disc{disc}"
+    # Regression labels differ from classification (continuous per-pier vector),
+    # so give them a distinct cache; classification stems stay byte-identical.
+    if config.get('task') == 'regression':
+        tgt = "_".join(map(str, config.get('target_supports', [])))
+        stem += f"_reg_t{tgt}"
+    return stem
 
 
 def get_or_create_cache(
@@ -234,12 +316,17 @@ def get_or_create_cache(
 
     # ── Slow path: cache miss — process and save ──────────────────────────────
     dof_str = "_".join(map(str, config['dofs']))
-    print(f"  [CACHE MISS] Processing '{config['method']}' data (DOFs: {dof_str})...")
+    regression = config.get('task') == 'regression'
+    print(f"  [CACHE MISS] Processing '{config['method']}' data (DOFs: {dof_str}"
+          f"{', regression' if regression else ''})...")
 
     X_raw, y_raw = load_ttbi_dataset(
         filepath=dataset_name,
         requested_dofs=config['dofs'],
         n_passages=200,
+        # Regression reads the per-pier scour VECTOR at the target supports;
+        # classification (target_supports=None) keeps the file-index class label.
+        target_supports=config.get('target_supports') if regression else None,
     )
 
     # Canonical train partition for leak-free scaler fitting (seed fixed at 42)
@@ -255,13 +342,18 @@ def get_or_create_cache(
         fit_indices=canonical_train_idx,
     )
 
-    # Discretise labels: damage 0–60 → class 0–(60/disc)
-    disc   = config.get('discretization', 1)
-    y_disc = np.round(y_raw / disc).astype(int)
+    if regression:
+        # Continuous per-pier scour targets (%), shape (N, n_targets) — no
+        # discretisation. The model regresses these directly (MSE loss).
+        y_out = y_raw.astype(np.float32)
+    else:
+        # Discretise labels: damage 0–60 → class 0–(60/disc)
+        disc  = config.get('discretization', 1)
+        y_out = np.round(y_raw / disc).astype(int)
 
     # Persist feature and label arrays
     np.save(feat_path,  X_processed)
-    np.save(label_path, y_disc)
+    np.save(label_path, y_out)
 
     # Persist scaler
     _save_scaler(preprocessor.scaler, scaler_path)

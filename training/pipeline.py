@@ -31,7 +31,8 @@ import joblib
 import optuna
 import torch
 
-from core.dataset  import get_or_create_cache
+from core          import task
+from core.dataset  import get_or_create_cache, _cache_stem
 from core.utils    import set_global_seed, DOF_NAME_TO_IDX
 from plotting.confusion        import plot_cached_confusion_matrix
 from plotting.robustness_plots import generate_optuna_robustness_plots, plot_stochastic_summary
@@ -57,6 +58,7 @@ def execute_ablation_pipeline(
     skip_robustness:  bool = True,
     optuna_seed:      int  = 42,
     use_pruner:       bool = False,
+    run_robustness:   bool = True,
 ) -> list[dict]:
     """
     Run the full ablation pipeline for every model configuration in
@@ -147,13 +149,17 @@ def execute_ablation_pipeline(
 
         print(f"  Best MSE: {study.best_value:.4f}  (trial {study.best_trial.number})")
 
-        # ── 2. Confusion matrix ───────────────────────────────────────────────
-        plot_cached_confusion_matrix(
-            study=study, config=step,
-            dataset_name=dataset,
-            cache_dir=cache_dir_name,
-            output_dir=output_dir,
-        )
+        # ── 2. Confusion matrix (classification only) ─────────────────────────
+        # A confusion matrix is a class-label artefact; multi-output regression
+        # has no class axis, so it is skipped (per-pier MSE / parity plots are
+        # the regression diagnostics — produced from the scorecard instead).
+        if not task.is_regression(step):
+            plot_cached_confusion_matrix(
+                study=study, config=step,
+                dataset_name=dataset,
+                cache_dir=cache_dir_name,
+                output_dir=output_dir,
+            )
 
         # ── 3. DT export ──────────────────────────────────────────────────────
         export_digital_twin_package(
@@ -164,16 +170,20 @@ def execute_ablation_pipeline(
         )
 
         # ── 4. Stochastic stress-test ─────────────────────────────────────────
-        scorecard = evaluate_stochastic_robustness(
-            study=study, config=step,
-            dataset_name=dataset,
-            n_epochs=epochs,
-            cache_dir=cache_dir_name,
-            output_dir=output_dir,
-            skip_robustness=skip_robustness,
-        )
-        if scorecard:
-            all_results.append({'Model': step['name'], **scorecard})
+        # run_robustness=False skips the multi-seed Monte-Carlo entirely (the
+        # reduced multi-damage grid runs a single seed); the default-True path is
+        # unchanged for the single-scour ablation.
+        if run_robustness:
+            scorecard = evaluate_stochastic_robustness(
+                study=study, config=step,
+                dataset_name=dataset,
+                n_epochs=epochs,
+                cache_dir=cache_dir_name,
+                output_dir=output_dir,
+                skip_robustness=skip_robustness,
+            )
+            if scorecard:
+                all_results.append({'Model': step['name'], **scorecard})
 
         # ── 5. Optuna slice plots ─────────────────────────────────────────────
         generate_optuna_robustness_plots(
@@ -238,6 +248,10 @@ def export_digital_twin_package(
         # missing value previously defaulted to 5 -> 13 classes, breaking the DT).
         'discretization': config.get('discretization', 1),
         'n_segments':     config.get('n_segments', 512),
+        # Task descriptor so the loader/DT rebuilds the right head: classification
+        # (default) or multi-output regression over the listed target supports.
+        'task':            config.get('task', 'classification'),
+        'target_supports': config.get('target_supports'),
     }
     with open(os.path.join(output_dir, 'DT_metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=4)
@@ -321,14 +335,10 @@ def _copy_scaler(
     DT_scaler.pkl (or DT_scaler.pt for PyTorch scalers).
 
     The cache filename follows the same naming convention as
-    core/dataset._cache_stem so the two modules stay in sync.
+    core/dataset._cache_stem so the two modules stay in sync (regression caches
+    carry an extra _reg_t<targets> tag — reusing _cache_stem keeps them aligned).
     """
-    import re
-
-    clean    = re.sub(r'\.[^.]+$', '', os.path.basename(dataset_name))
-    dof_str  = '_'.join(map(str, config['dofs']))
-    disc     = config.get('discretization', 1)
-    stem     = f"scaler_{clean}_{config['method']}_dofs_{dof_str}_disc{disc}"
+    stem     = f"scaler_{_cache_stem(dataset_name, config)}"
 
     pkl_src  = os.path.join(cache_dir, f"{stem}.pkl")
     pt_src   = os.path.join(cache_dir, f"{stem}.pt")

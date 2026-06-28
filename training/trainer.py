@@ -32,6 +32,7 @@ try:
 except ImportError:
     optuna = None   # pipeline.py guards against this; trainer is still importable
 
+from core         import task
 from core.dataset import MemmapDataset, get_or_create_cache
 from core.models  import build_model
 from core.utils   import set_global_seed
@@ -87,12 +88,13 @@ def train_and_evaluate(
     all_idx            = np.arange(len(y))
     train_idx, val_idx = train_test_split(all_idx, test_size=0.20, random_state=42)
 
+    label_dtype = task.label_dtype(config)
     train_loader = DataLoader(
-        MemmapDataset(X, y, train_idx),
+        MemmapDataset(X, y, train_idx, label_dtype=label_dtype),
         batch_size=32, shuffle=True, num_workers=0,
     )
     val_loader = DataLoader(
-        MemmapDataset(X, y, val_idx),
+        MemmapDataset(X, y, val_idx, label_dtype=label_dtype),
         batch_size=32, shuffle=False,
     )
 
@@ -100,8 +102,9 @@ def train_and_evaluate(
     params = _suggest_params(trial, config)
 
     # ── Model, loss, optimiser, scheduler ────────────────────────────────────
+    # Loss follows the task: cross-entropy (classification) or MSE (regression).
     model, _  = build_model(config, params, X.shape, DEVICE)
-    criterion = nn.CrossEntropyLoss()
+    criterion = task.make_criterion(config)
     optimizer = optim.Adam(
         model.parameters(), lr=params['lr'], weight_decay=params['weight_decay']
     )
@@ -126,8 +129,9 @@ def train_and_evaluate(
             optimizer.step()
         scheduler.step()
 
-        # Validate
-        val_mse = _evaluate_mse(model, val_loader)
+        # Validate — aggregate MSE (class-index for classification, % scour for
+        # regression); the single scalar Optuna minimises for both tasks.
+        val_mse = task.objective_value(task.evaluate(model, val_loader, config, DEVICE))
 
         # Optuna pruning
         trial.report(val_mse, epoch)
@@ -176,27 +180,28 @@ def run_single_training(
         n_epochs (int):       Training epochs (no early stopping — full run).
 
     Returns:
-        (accuracy, mae, mse): Validation metrics as plain floats.
-            accuracy — fraction of exactly correct predictions.
-            mae      — mean absolute class distance (linear penalty).
-            mse      — mean squared class distance (exponential penalty).
+        dict of validation metrics (see core.task.evaluate). Always carries
+        'primary' (accuracy | localisation_acc), 'mae', and 'mse'; regression
+        adds 'per_head_mse'/'per_head_mae'. Units are class-index (classification)
+        or % scour (regression).
     """
     set_global_seed(seed)
 
     all_idx            = np.arange(len(y))
     train_idx, val_idx = train_test_split(all_idx, test_size=0.20, random_state=seed)
 
+    label_dtype = task.label_dtype(config)
     train_loader = DataLoader(
-        MemmapDataset(X, y, train_idx),
+        MemmapDataset(X, y, train_idx, label_dtype=label_dtype),
         batch_size=32, shuffle=True, num_workers=0,
     )
     val_loader = DataLoader(
-        MemmapDataset(X, y, val_idx),
+        MemmapDataset(X, y, val_idx, label_dtype=label_dtype),
         batch_size=32, shuffle=False,
     )
 
     model, _  = build_model(config, params, X.shape, DEVICE)
-    criterion = nn.CrossEntropyLoss()
+    criterion = task.make_criterion(config)
     optimizer = optim.Adam(
         model.parameters(),
         lr=params['lr'],
@@ -213,7 +218,7 @@ def run_single_training(
             optimizer.step()
         scheduler.step()
 
-    return _evaluate_all(model, val_loader)
+    return task.evaluate(model, val_loader, config, DEVICE)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -326,38 +331,3 @@ def _suggest_params(trial, config: dict) -> dict:
         )
 
     return params
-
-
-def _evaluate_mse(model: nn.Module, loader: DataLoader) -> float:
-    """Mean squared class distance on loader. Used inside Optuna trials."""
-    model.eval()
-    total_sq = total = 0
-    with torch.no_grad():
-        for batch_X, batch_y in loader:
-            batch_X, batch_y = batch_X.to(DEVICE), batch_y.to(DEVICE)
-            _, predicted = torch.max(model(batch_X), 1)
-            total_sq += torch.pow(predicted - batch_y, 2).sum().item()
-            total    += batch_y.size(0)
-    return total_sq / total
-
-
-def _evaluate_all(
-    model:  nn.Module,
-    loader: DataLoader,
-) -> tuple[float, float, float]:
-    """
-    Accuracy, MAE, and MSE in a single validation pass.
-    Used by run_single_training to avoid evaluating the loader three times.
-    """
-    model.eval()
-    correct = total_abs = total_sq = total = 0
-    with torch.no_grad():
-        for batch_X, batch_y in loader:
-            batch_y_dev = batch_y.to(DEVICE)
-            _, predicted = torch.max(model(batch_X.to(DEVICE)), 1)
-            total     += batch_y.size(0)
-            correct   += (predicted == batch_y_dev).sum().item()
-            total_abs += torch.abs(predicted - batch_y_dev).sum().item()
-            total_sq  += torch.pow(predicted - batch_y_dev, 2).sum().item()
-
-    return correct / total, total_abs / total, total_sq / total

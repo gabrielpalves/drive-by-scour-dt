@@ -109,13 +109,14 @@ def evaluate_stochastic_robustness(
         print(f"  Running seeds {completed + 1}–{n_seeds}...")
         pbar = tqdm(range(completed, n_seeds), desc="Monte Carlo seeds", unit="model")
         for run in pbar:
-            seed            = 42 + run
-            acc, mae, mse   = run_single_training(
+            seed = 42 + run
+            m    = run_single_training(
                 config, best_params, X, y, seed=seed, n_epochs=n_epochs
             )
-            accs.append(acc); maes.append(mae); mses.append(mse)
+            # 'primary' = accuracy (classification) or localisation_acc (regression)
+            accs.append(m['primary']); maes.append(m['mae']); mses.append(m['mse'])
             _save_stochastic_checkpoint(json_path, accs, maes, mses)
-            pbar.set_postfix({"seed": seed, "MSE": f"{mse:.4f}"})
+            pbar.set_postfix({"seed": seed, "MSE": f"{m['mse']:.4f}"})
 
     # ── Boxplot ───────────────────────────────────────────────────────────────
     _plot_stochastic_boxplot(accs, maes, mses, config['name'], output_dir)
@@ -213,10 +214,10 @@ def evaluate_parametric_robustness(
             new_val                  = _perturb(base_val, mult)
             perturbed[param_name]    = new_val
 
-            _, mae, mse = run_single_training(
+            m = run_single_training(
                 config, perturbed, X, y, seed=42, n_epochs=n_epochs
             )
-            results[param_name][key] = {'mae': mae, 'mse': mse}
+            results[param_name][key] = {'mae': m['mae'], 'mse': m['mse']}
             _save_sensitivity_checkpoint(json_path, results)
             pbar.set_postfix({"param": param_name, "mult": key, "MSE": f"{mse:.4f}"})
 
@@ -311,7 +312,8 @@ def _plot_stochastic_boxplot(
 
     _panel(axes[0], mses,  'lightcoral',   'darkred',   'Mean Squared Error (MSE)', 'MSE')
     _panel(axes[1], maes,  'lightskyblue', 'darkblue',  'Mean Absolute Error (MAE)', 'MAE')
-    _panel(axes[2], accs,  'lightgreen',   'darkgreen', 'Strict Accuracy', 'Accuracy')
+    # 'primary' = strict accuracy (classification) or localisation accuracy (regression)
+    _panel(axes[2], accs,  'lightgreen',   'darkgreen', 'Primary (accuracy / localisation)', 'Primary')
 
     plt.tight_layout()
     path = os.path.join(output_dir, f"Stochastic_Boxplot_{study_name}.png")

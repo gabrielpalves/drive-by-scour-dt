@@ -46,6 +46,10 @@ def set_global_seed(seed: int = 42) -> None:
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
 
+    # cuBLAS reproducibility (CUDA >= 10.2). Must be set BEFORE the first
+    # CUDA op of the process, hence here at the top of set_global_seed.
+    os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+
     np.random.seed(seed)
 
     torch.manual_seed(seed)
@@ -54,6 +58,18 @@ def set_global_seed(seed: int = 42) -> None:
 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark     = False
+
+    # Stronger global guarantee than cudnn.deterministic: any non-deterministic
+    # op (e.g. some scatter / index ops) raises a warning instead of silently
+    # producing different results across runs. warn_only=True keeps the script
+    # running on hardware/ops without a deterministic implementation; flip to
+    # False if you want the script to hard-fail on non-determinism.
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except (AttributeError, TypeError):
+        # Older PyTorch (<1.8): use_deterministic_algorithms or warn_only
+        # not available. cudnn.deterministic above is the best we can do.
+        pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
