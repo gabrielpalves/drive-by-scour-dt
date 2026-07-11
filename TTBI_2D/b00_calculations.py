@@ -98,9 +98,10 @@ def b00_calculations(Calc, Train, Track, Beam, Damage):
     Track.Rail = b24_beam_damping(Track.Rail)
 
     # ---- Complete Model ----
-    # System matrices
+    # System matrices (Damage carries the per-passage TRACK-LAYER descriptors —
+    # Damage.track: ballast patches / hanging sleepers / pad aging+failures)
     print('Building model system matrices ...', end='', flush=True)
-    Model = b54_model_matrices(Beam, Track, Calc)
+    Model = b54_model_matrices(Beam, Track, Calc, Damage)
     # Model boundary conditions
     Model = b55_model_bc(Model, Beam, Track)
     # Modal analysis of Model
@@ -125,8 +126,8 @@ def b00_calculations(Calc, Train, Track, Beam, Damage):
                                            getattr(Calc.Profile, 'intensity', 1.0)))
     # Generation
     Calc = b19_generate_profile(Calc)
-    # Assigning profile to each wheel
-    Calc = b25_wheel_profiles(Calc, Train.Veh)
+    # Assigning profile to each wheel (Damage may carry wheel OOR/flat draws)
+    Calc = b25_wheel_profiles(Calc, Train.Veh, Damage)
 
     # ---- Coupled Equations Solver (COUP) ----
     # Element number of vertical forces in time

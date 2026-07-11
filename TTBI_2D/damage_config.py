@@ -89,8 +89,24 @@ def make_damage(
     crack_lc: float = 0.0,
     profile_intensity: float = 1.0,
     noise_std: float = 0.0,
+    track=None,
+    oor_flats=None,
+    oor_poly=None,
+    oor_radius: float = 0.46,
 ):
-    """Build a fully-specified Damage container (all features default to healthy)."""
+    """Build a fully-specified Damage container (all features default to healthy).
+
+    Stage-3 track/vehicle EOVs (see docs/stage3_alldamage_spec.md):
+      track      — attribute container or dict with any of: ballast_patches
+                   (rows [x_start, x_end, eta_k, eta_c]), hanging_groups
+                   (rows [x_start, n_consec]), pad_stiff_mult, pad_damp_mult,
+                   pad_failures (x positions). Consumed by b54_model_matrices.
+      oor_flats  — wheel flat rows [veh(1-based), wheel(1-based), flat_len_m,
+                   depth_m, phase_rad] (depth pre-computed: fresh L^2/8R,
+                   run-in L^2/16R). Consumed by b25_wheel_profiles.
+      oor_poly   — polygonization rows [veh, wheel, order_n, amp_m, phase_rad].
+      oor_radius — wheel radius R [m].
+    """
     d = EmptyObj()
 
     # --- scour (per support) ---
@@ -118,6 +134,12 @@ def make_damage(
 
     # --- sensor noise ---
     d.desvio = float(noise_std)
+
+    # --- track-layer damage + wheel flats/polygonization (Stage 3 EOVs) ---
+    d.track = track
+    d.oor_flats = oor_flats
+    d.oor_poly = oor_poly
+    d.oor_radius = float(oor_radius)
 
     return d
 

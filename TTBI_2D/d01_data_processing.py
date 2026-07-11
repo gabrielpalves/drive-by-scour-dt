@@ -24,14 +24,18 @@ def d01_data_processing(i, j, Sol, Train, Calc, Damage, data):
     acel_wheel = Sol.Veh[0].acc_under[0:4, :]
     pitch_bogie = Sol.Veh[0].V[3:6, :]
 
-    # 3. Apply artificial noise (proportional to signal magnitude)
+    # 3. Apply artificial noise (proportional to signal magnitude).
+    #    PARITY: MATLAB D01_DataProcessing adds noise ONLY to the wheel channels
+    #    (AcelRodaPrimVag) — the training data has CLEAN body/bogie and pitch
+    #    channels. The live DT observation path must match that distribution, so
+    #    noise here is wheel-only too (it previously hit all three groups — a
+    #    train/serve skew on the champion's clean channels). Sensor faults on
+    #    the other channels are modelled separately (digital_twin/sensor_health).
     num_t = Calc.Solver.num_t
     noise_level = Damage.desvio
-    
+
     if noise_level > 0:
-        acel_bogie += noise_level * acel_bogie * np.random.randn(3, num_t)
         acel_wheel += noise_level * acel_wheel * np.random.randn(4, num_t)
-        pitch_bogie += noise_level * pitch_bogie * np.random.randn(3, num_t)
 
     # 4. Store velocity and calculate positional bounds
     data.Velocidade[i, j] = Train.vel

@@ -6,14 +6,33 @@ import matplotlib.pyplot as plt
 class EmptyObj:
     pass
 
-def b25_wheel_profiles(Calc, Veh):
+def b25_wheel_profiles(Calc, Veh, Damage=None):
     """
-    Calculates the profile under each wheel
+    Calculates the profile under each wheel.
+
+    Optional Damage argument may carry per-passage WHEEL damage descriptors
+    (Stage 3 EOVs; NOT labels) — exact mirror of scour_MATLAB/B25_WheelProfiles.m,
+    literature-anchored (docs/stage3_alldamage_spec.md):
+        Damage.oor_flats  : rows [veh(1-based), wheel(1-based), flat_length_m,
+                                  depth_m, phase_rad] -> periodic haversine dip,
+                            period 2*pi*R. Depth PRE-COMPUTED by the caller
+                            (fresh d=L^2/8R, run-in d=L^2/16R).
+        Damage.oor_poly   : rows [veh, wheel, order_n, amp_m, phase_rad]
+                            -> continuous polygonization amp*cos(n*x/R + phase).
+        Damage.oor_radius : wheel radius R [m] (default 0.46)
+    Both are added BEFORE the derivatives so hd/hdd carry them automatically.
     """
 
     # Ensure Calc.Veh exists as a list of objects
     if not hasattr(Calc, 'Veh'):
         Calc.Veh = [EmptyObj() for _ in range(len(Veh))]
+
+    def _rows(name):
+        v = getattr(Damage, name, None) if Damage is not None else None
+        return np.atleast_2d(np.asarray(v, dtype=float)) if (v is not None and np.size(v)) else None
+    flats = _rows('oor_flats')
+    poly  = _rows('oor_poly')
+    oor_R = float(getattr(Damage, 'oor_radius', 0.46) or 0.46) if Damage is not None else 0.46
 
     num_t = Calc.Solver.num_t
     dt = Calc.Solver.dt
@@ -48,7 +67,31 @@ def b25_wheel_profiles(Calc, Veh):
         Calc.Veh[v].h_path[Calc.Veh[v].x_path < Calc.Profile.x[0]] = Calc.Profile.h[0]
         Calc.Veh[v].h_path[Calc.Veh[v].x_path > Calc.Profile.x[-1]] = Calc.Profile.h[-1]
 
-        # 1st derivative in time 
+        # ---- Wheel flats + polygonization (per-passage EOVs; NOT labels) ----
+        # Added BEFORE the derivatives so hd/hdd carry them automatically.
+        # Descriptor veh/wheel indices are 1-BASED (MATLAB convention).
+        if flats is not None:
+            for row in flats[flats[:, 0].astype(int) == v + 1]:
+                wheel = int(row[1]) - 1
+                if wheel < 0 or wheel >= num_wheels:
+                    continue
+                lf = row[2]                       # flat length [m]
+                depth = row[3]                    # pre-computed depth [m]
+                phase = row[4]                    # phase [rad]
+                circ = 2.0 * np.pi * oor_R        # wheel circumference [m]
+                s = np.mod(Calc.Veh[v].x_path[wheel, :] + phase / (2.0 * np.pi) * circ, circ)
+                dip = -0.5 * depth * (1.0 - np.cos(2.0 * np.pi * s / lf)) * (s < lf)
+                Calc.Veh[v].h_path[wheel, :] += dip
+        if poly is not None:
+            for row in poly[poly[:, 0].astype(int) == v + 1]:
+                wheel = int(row[1]) - 1
+                if wheel < 0 or wheel >= num_wheels:
+                    continue
+                n_ord, amp, phase = row[2], row[3], row[4]
+                Calc.Veh[v].h_path[wheel, :] += amp * np.cos(
+                    n_ord * Calc.Veh[v].x_path[wheel, :] / oor_R + phase)
+
+        # 1st derivative in time
         # np.diff reduces the array dimension by 1, so we divide by dt and then prepend the first column
         hd_diff = np.diff(Calc.Veh[v].h_path, n=1, axis=1) / dt
         Calc.Veh[v].hd_path = np.column_stack((hd_diff[:, 0], hd_diff))
