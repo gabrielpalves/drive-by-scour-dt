@@ -4,8 +4,8 @@ core/models.py
 All PyTorch model classes used in the ablation study and the digital twin.
 
 Imported by:
-    ablation.ipynb      — training, robustness evaluation, export
-    drive_by_DT.py      — loading champion weights for online inference
+    ablation.ipynb      - training, robustness evaluation, export
+    drive_by_DT.py      - loading champion weights for online inference
 
 Do NOT import training or plotting modules here; this file has no
 side-effects and no dependency outside torch.
@@ -49,7 +49,7 @@ class Space2Vec(nn.Module):
     def forward(self, x_space: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x_space: (Batch, 1, Sequence_Length)  — normalised [0, 1] position vector.
+            x_space: (Batch, 1, Sequence_Length)  - normalised [0, 1] position vector.
         Returns:
             (Batch, out_features, Sequence_Length)
         """
@@ -81,7 +81,7 @@ class MultiRatePooling1D(nn.Module):
         Args:
             x: (Batch, Features, Sequence_Length)
         Returns:
-            (Batch, sum_of_pooled_features)  — flat 2-D tensor.
+            (Batch, sum_of_pooled_features)  - flat 2-D tensor.
         """
         pooled_outputs = []
         for rate in self.pool_rates:
@@ -100,9 +100,9 @@ class SpaceAwareModularNetwork(nn.Module):
     LSTM, and N-HiTS blocks for physical ablation studies.
 
     Architecture flags (all bool, all default False):
-        use_space2vec  — prepend spatial embedding before CNN.
-        use_lstm       — insert a bidirectional LSTM after CNN.
-        use_nhits      — replace global-average-pool with multi-rate pool.
+        use_space2vec  - prepend spatial embedding before CNN.
+        use_lstm       - insert a bidirectional LSTM after CNN.
+        use_nhits      - replace global-average-pool with multi-rate pool.
 
     Args:
         n_segments (int):   Sequence length after preprocessing.
@@ -179,7 +179,7 @@ class SpaceAwareModularNetwork(nn.Module):
                 current_features * (current_seq_len // rate) for rate in pool_rates
             )
         else:
-            flattened_size = current_features  # global-average-pool → scalar per channel
+            flattened_size = current_features  # global-average-pool -> scalar per channel
 
         # ── 5. Dense classification head ──────────────────────────────────────
         self.dense_layers = nn.ModuleList()
@@ -216,7 +216,7 @@ class SpaceAwareModularNetwork(nn.Module):
         for layer in self.cnn_layers:
             x = layer(x)
 
-        # 3. LSTM  — expects (Batch, SeqLen, Features)
+        # 3. LSTM  - expects (Batch, SeqLen, Features)
         if self.use_lstm:
             x = x.permute(0, 2, 1)
             x, _ = self.lstm(x)
@@ -224,9 +224,9 @@ class SpaceAwareModularNetwork(nn.Module):
 
         # 4. Pooling
         if self.use_nhits:
-            x = self.multi_rate_pool(x)   # → (Batch, flattened)
+            x = self.multi_rate_pool(x)   # -> (Batch, flattened)
         else:
-            x = torch.mean(x, dim=2)      # global average pool → (Batch, Features)
+            x = torch.mean(x, dim=2)      # global average pool -> (Batch, Features)
 
         # 5. Dense head
         for layer in self.dense_layers:
@@ -273,7 +273,7 @@ class Simple2DCNN(nn.Module):
         # ── 2-D convolutional layers ──────────────────────────────────────────
         for i in range(n_conv_layers):
             out_ch  = params[f'n_filters_l{i}']
-            k_size  = params[f'kernel_size_l{i}']   # single int → (k, k) square kernel
+            k_size  = params[f'kernel_size_l{i}']   # single int -> (k, k) square kernel
             self.layers.append(nn.Conv2d(current_channels, out_ch, kernel_size=k_size, padding='same'))
             self.layers.append(nn.ReLU())
             if params.get(f'pooling_l{i}', False):
@@ -315,7 +315,7 @@ class Simple2DCNN(nn.Module):
 # 5. Factory function
 # ──────────────────────────────────────────────────────────────────────────────
 
-# N-HiTS pool-rate string → tuple, for Optuna's categorical storage format.
+# N-HiTS pool-rate string -> tuple, for Optuna's categorical storage format.
 _POOL_RATE_MAP: dict[str, tuple] = {
     "1_2_4":   (1, 2, 4),
     "1_4_8":   (1, 4, 8),
@@ -334,7 +334,7 @@ def build_model(
     Universal factory that routes to the correct architecture based on `config`.
 
     Args:
-        config (dict): Ablation step config — keys: 'method', 'model_type',
+        config (dict): Ablation step config - keys: 'method', 'model_type',
                        'use_space2vec', 'use_lstm', 'use_nhits', 'discretization'.
         params (dict): Optuna best_params (or any compatible dict).
         input_shape (tuple): Shape of the processed data array, e.g.
@@ -343,7 +343,7 @@ def build_model(
         device (torch.device): Target device.
 
     Returns:
-        (model, n_outputs) — n_outputs is the final-layer size: the number of
+        (model, n_outputs) - n_outputs is the final-layer size: the number of
         damage CLASSES for a classification config, or the number of target
         supports (continuous heads) for a regression config (config['task']).
         The architecture is identical either way; only the head size changes.

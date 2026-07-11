@@ -5,9 +5,9 @@ Raw data loading, processed-data caching, and the PyTorch Dataset wrapper
 for memory-mapped arrays.
 
 Imported by:
-    training/trainer.py    — DataLoader construction inside train_and_evaluate
-    training/robustness.py — same, inside run_single_training
-    training/pipeline.py   — plot_cached_confusion_matrix, export_digital_twin_package
+    training/trainer.py    - DataLoader construction inside train_and_evaluate
+    training/robustness.py - same, inside run_single_training
+    training/pipeline.py   - plot_cached_confusion_matrix, export_digital_twin_package
 
 The digital twin does NOT import this module; it drives the physics engine
 directly via digital_twin/physics.py rather than reading pre-recorded .mat files.
@@ -34,6 +34,8 @@ def load_ttbi_dataset(
     requested_dofs:  list[int],
     n_passages:      int = 200,
     target_supports: list[int] | None = None,
+    bearing_targets: list | None = None,
+    bearing_max:     float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Load raw TTBI vibration passages from a folder of numbered .mat files
@@ -41,10 +43,10 @@ def load_ttbi_dataset(
 
     Two labelling modes
     -------------------
-    * Single-output (default, target_supports=None) — LEGACY. Each file
-      (0001.mat … 0061.mat) is one damage level and the label is the FILE INDEX
-      (0–60 %). y has shape (N,), int. Used by the single-scour ablation.
-    * Multi-output (target_supports given) — STAGE 0+. Each file holds an
+    * Single-output (default, target_supports=None) - LEGACY. Each file
+      (0001.mat ... 0061.mat) is one damage level and the label is the FILE INDEX
+      (0-60 %). y has shape (N,), int. Used by the single-scour ablation.
+    * Multi-output (target_supports given) - STAGE 0+. Each file holds an
       independent per-support scour state; the label is the scour VECTOR at the
       requested support indices, read from data.scour_vector (regression target,
       % scour). y has shape (N, len(target_supports)), float. All NNNN.mat in the
@@ -59,14 +61,14 @@ def load_ttbi_dataset(
     The requested_dofs list selects which physical channels to extract.
     Valid indices and their physical meaning:
 
-        0  CarBody_Vert      ← AcelPrimVag[0]
-        1  FrontBogie_Vert   ← AcelPrimVag[1]
-        2  RearBogie_Vert    ← AcelPrimVag[2]
-        3  Wheel1_Vert       ← AcelRodaPrimVag[0]
-        4  Wheel2_Vert       ← AcelRodaPrimVag[1]
-        5  CarBody_Pitch      ← PitchPrimVag[0]
-        6  FrontBogie_Pitch   ← PitchPrimVag[1]
-        7  RearBogie_Pitch    ← PitchPrimVag[2]
+        0  CarBody_Vert      <- AcelPrimVag[0]
+        1  FrontBogie_Vert   <- AcelPrimVag[1]
+        2  RearBogie_Vert    <- AcelPrimVag[2]
+        3  Wheel1_Vert       <- AcelRodaPrimVag[0]
+        4  Wheel2_Vert       <- AcelRodaPrimVag[1]
+        5  CarBody_Pitch      <- PitchPrimVag[0]
+        6  FrontBogie_Pitch   <- PitchPrimVag[1]
+        7  RearBogie_Pitch    <- PitchPrimVag[2]
 
     Args:
         filepath       (str):       Sub-folder name inside 'data/'.
@@ -76,7 +78,7 @@ def load_ttbi_dataset(
 
     Returns:
         X (np.ndarray): float32, shape (N, len(requested_dofs), sequence_length)
-        y (np.ndarray): int64,   shape (N,) — damage label in [0, 60].
+        y (np.ndarray): int64,   shape (N,) - damage label in [0, 60].
 
     Raises:
         FileNotFoundError: If the dataset folder does not exist.
@@ -85,7 +87,7 @@ def load_ttbi_dataset(
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"Dataset folder not found: {dataset_path}")
 
-    # DOF index → (field_name, row_index) inside the MATLAB struct
+    # DOF index -> (field_name, row_index) inside the MATLAB struct
     _DOF_SOURCE = {
         0: ('AcelPrimVag',     0),
         1: ('AcelPrimVag',     1),
@@ -100,7 +102,9 @@ def load_ttbi_dataset(
     # ── Multi-output mode: per-pier scour vector labels ───────────────────────
     if target_supports is not None:
         return _load_multi_output(dataset_path, requested_dofs, n_passages,
-                                  target_supports, _DOF_SOURCE)
+                                  target_supports, _DOF_SOURCE,
+                                  bearing_targets=bearing_targets,
+                                  bearing_max=bearing_max)
 
     X_list: list[np.ndarray] = []
     y_list: list[int]        = []
@@ -143,16 +147,42 @@ def _load_multi_output(
     n_passages:      int,
     target_supports: list[int],
     dof_source:      dict,
+    bearing_targets: list | None = None,
+    bearing_max:     float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Multi-output loader: scan all NNNN.mat, read the per-support scour VECTOR.
+    """Multi-output loader: scan all NNNN.mat, read the scour (+ bearing) VECTORS.
 
-    Each file's label is data.scour_vector at the (1-based) `target_supports`
-    indices, in % scour (the MATLAB value is a 0–1 fraction). Returns
-    X (N, C, L) float32 and y (N, n_targets) float32 — a regression target.
+    Label layout: [scour% at target_supports]  (Stage 0), or, when
+    `bearing_targets` is given (Stage 1), followed by the bearing heads:
+        [scour_1..scour_S, bearing_1..bearing_B]
+    * Scour   = data.scour_vector at the (1-based) `target_supports`, x100 (%).
+    * Bearing = data.bearing_vector at the requested targets ('left'->0,
+      'right'->1), normalised by `bearing_max` (the seized stiffness, Nm/rad)
+      x100 -> a "seized %" on the SAME 0-100 scale as scour, so the MSE loss
+      balances the heads instead of being swamped by the 1e9-scale stiffness.
+      `bearing_max` defaults to the dataset manifest (case_info.mat /
+      damage_states.mat); if absent, the observed max is used (with a warning).
+
+    Returns X (N, C, L) float32 and y (N, n_scour[+n_bearing]) float32.
     """
     tgt0 = [int(s) - 1 for s in target_supports]      # 1-based MATLAB -> 0-based
-    X_list: list[np.ndarray] = []
-    y_list: list[np.ndarray] = []
+
+    bidx = None
+    if bearing_targets:
+        _name = {'left': 0, 'l': 0, '0': 0, 'right': 1, 'r': 1, '1': 1}
+        bidx = []
+        for b in bearing_targets:
+            k = _name.get(str(b).lower())
+            if k is None:
+                raise ValueError("bearing_targets entries must be 'left'/'right' "
+                                 f"(or 0/1), got {b!r}")
+            bidx.append(k)
+        if bearing_max is None:
+            bearing_max = _read_bearing_max(dataset_path)
+
+    X_list:  list[np.ndarray] = []
+    y_scour: list[np.ndarray] = []
+    y_bear:  list[np.ndarray] = []                      # raw Nm/rad, normalised later
 
     idx = 0
     while True:
@@ -165,17 +195,25 @@ def _load_multi_output(
             names = data_struct.dtype.names or ()
             if 'scour_vector' not in names:
                 raise KeyError(
-                    f"{fname}: multi-output load needs data.scour_vector — "
+                    f"{fname}: multi-output load needs data.scour_vector - "
                     f"regenerate the dataset with A00 damage_mode='multi_scour'.")
-            vec = np.ravel(data_struct['scour_vector']).astype(float)   # per-support fractions
-            label = vec[tgt0] * 100.0                                    # % at the targets
+            slabel = np.ravel(data_struct['scour_vector']).astype(float)[tgt0] * 100.0
+            if bidx is not None:
+                if 'bearing_vector' not in names:
+                    raise KeyError(
+                        f"{fname}: bearing heads requested but no "
+                        f"data.bearing_vector - regenerate with A00 "
+                        f"STAGE='stage1_bearing' (bearing_mode='target').")
+                bvec = np.ravel(data_struct['bearing_vector']).astype(float)[bidx]
 
             available = data_struct['AcelPrimVag'].shape[1]
             for p in range(min(n_passages, available)):
                 channels = [data_struct[dof_source[dof][0]][0, p][dof_source[dof][1], :]
                             for dof in requested_dofs]
                 X_list.append(np.vstack(channels))                       # (C, L)
-                y_list.append(label.astype(np.float32))
+                y_scour.append(slabel.astype(np.float32))
+                if bidx is not None:
+                    y_bear.append(bvec.astype(np.float32))
         except KeyError:
             raise
         except Exception as e:
@@ -185,10 +223,48 @@ def _load_multi_output(
     if not X_list:
         raise RuntimeError(f"No multi-output passages loaded from {dataset_path}")
     X = np.array(X_list, dtype=np.float32)
-    y = np.array(y_list, dtype=np.float32)                              # (N, n_targets)
+    y = np.array(y_scour, dtype=np.float32)                              # (N, n_scour)
+
+    if bidx is not None:
+        B = np.array(y_bear, dtype=np.float32)                          # (N, n_bearing) raw
+        if bearing_max is None or bearing_max <= 0:
+            bearing_max = float(B.max()) or 1.0
+            print(f"  [multi-output] bearing_max not in manifest - normalising "
+                  f"by observed max {bearing_max:.3g} Nm/rad.")
+        y = np.hstack([y, (B / bearing_max) * 100.0]).astype(np.float32)
+
+    extra = f" + {len(bidx)} bearing" if bidx else ""
     print(f"  [multi-output] {X.shape[0]} passages, {idx} states, "
-          f"{y.shape[1]} targets (supports {target_supports}).")
+          f"{y.shape[1]} heads ({len(tgt0)} scour{extra}).")
     return X, y
+
+
+def _read_bearing_max(dataset_path: str) -> float | None:
+    """Bearing normalisation constant [Nm/rad] from the dataset manifest.
+
+    Prefers case_info.mat (bearing_max_Nm_rad written by A00), then the max of
+    damage_states.mat::BearingStates. Returns None when neither is present, so
+    the caller falls back to the observed max.
+    """
+    ci = os.path.join(dataset_path, 'case_info.mat')
+    if os.path.exists(ci):
+        try:
+            info = sio.loadmat(ci)['case_info'][0, 0]
+            if 'bearing_max_Nm_rad' in (info.dtype.names or ()):
+                v = float(np.ravel(info['bearing_max_Nm_rad'])[0])
+                if v > 0:
+                    return v
+        except Exception:
+            pass
+    ds = os.path.join(dataset_path, 'damage_states.mat')
+    if os.path.exists(ds):
+        try:
+            bs = sio.loadmat(ds).get('BearingStates')
+            if bs is not None and np.size(bs) and float(np.max(bs)) > 0:
+                return float(np.max(bs))
+        except Exception:
+            pass
+    return None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -244,7 +320,7 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     """
     Build the base filename fragment that uniquely identifies a cache file.
 
-    Format:  <dataset>_<method>_dofs_<d0>_<d1>_…_disc<k>
+    Format:  <dataset>_<method>_dofs_<d0>_<d1>_..._disc<k>
 
     Kept private; the three public filenames (features, labels, scaler) are
     constructed in get_or_create_cache by appending the appropriate suffix.
@@ -258,6 +334,9 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     if config.get('task') == 'regression':
         tgt = "_".join(map(str, config.get('target_supports', [])))
         stem += f"_reg_t{tgt}"
+        bt = config.get('bearing_targets')
+        if bt:   # Stage 1 bearing heads -> distinct cache from the scour-only one
+            stem += "_b" + "_".join(str(b) for b in bt)
     return stem
 
 
@@ -272,9 +351,9 @@ def get_or_create_cache(
 
     Cache layout (inside cache_dir)
     --------------------------------
-        cache_<stem>.npy        — processed feature array
-        cache_<stem>_labels.npy — discretised label array
-        scaler_<stem>.pkl       — fitted sklearn scaler  (or .pt for PyTorch)
+        cache_<stem>.npy        - processed feature array
+        cache_<stem>_labels.npy - discretised label array
+        scaler_<stem>.pkl       - fitted sklearn scaler  (or .pt for PyTorch)
 
     Leak-free contract
     ------------------
@@ -285,7 +364,7 @@ def get_or_create_cache(
     function without re-fitting risk.
 
     Args:
-        config       (dict): Ablation step config — must contain 'method',
+        config       (dict): Ablation step config - must contain 'method',
                              'dofs', and optionally 'discretization'.
         dataset_name (str):  Name of the sub-folder inside 'data/'.
         cache_dir    (str):  Directory where cache files are stored.
@@ -314,7 +393,7 @@ def get_or_create_cache(
         scaler      = _load_scaler(scaler_path, scaler_path_pt)
         return X_processed, y, scaler
 
-    # ── Slow path: cache miss — process and save ──────────────────────────────
+    # ── Slow path: cache miss - process and save ──────────────────────────────
     dof_str = "_".join(map(str, config['dofs']))
     regression = config.get('task') == 'regression'
     print(f"  [CACHE MISS] Processing '{config['method']}' data (DOFs: {dof_str}"
@@ -327,6 +406,9 @@ def get_or_create_cache(
         # Regression reads the per-pier scour VECTOR at the target supports;
         # classification (target_supports=None) keeps the file-index class label.
         target_supports=config.get('target_supports') if regression else None,
+        # Stage 1: also read bearing_vector as extra heads (None -> scour only).
+        bearing_targets=config.get('bearing_targets') if regression else None,
+        bearing_max=config.get('bearing_max') if regression else None,
     )
 
     # Canonical train partition for leak-free scaler fitting (seed fixed at 42)
@@ -343,11 +425,11 @@ def get_or_create_cache(
     )
 
     if regression:
-        # Continuous per-pier scour targets (%), shape (N, n_targets) — no
+        # Continuous per-pier scour targets (%), shape (N, n_targets) - no
         # discretisation. The model regresses these directly (MSE loss).
         y_out = y_raw.astype(np.float32)
     else:
-        # Discretise labels: damage 0–60 → class 0–(60/disc)
+        # Discretise labels: damage 0-60 -> class 0-(60/disc)
         disc  = config.get('discretization', 1)
         y_out = np.round(y_raw / disc).astype(int)
 
@@ -358,7 +440,7 @@ def get_or_create_cache(
     # Persist scaler
     _save_scaler(preprocessor.scaler, scaler_path)
 
-    print(f"  [CACHE SAVED] → {cache_dir}")
+    print(f"  [CACHE SAVED] -> {cache_dir}")
 
     # Reload in memory-mapped mode to match the fast-path return type
     X_processed = np.load(feat_path,  mmap_mode='r')
@@ -377,7 +459,7 @@ def _save_scaler(scaler: object, pkl_path: str) -> None:
     if isinstance(scaler, torch.nn.Module) or torch.is_tensor(scaler):
         pt_path = pkl_path.replace('.pkl', '.pt')
         torch.save(scaler, pt_path)
-        print(f"  [Save] PyTorch scaler → {pt_path}")
+        print(f"  [Save] PyTorch scaler -> {pt_path}")
     elif scaler is None:
         # Write a sentinel so the fast-path existence check still passes
         with open(pkl_path, 'w') as f:
@@ -385,7 +467,7 @@ def _save_scaler(scaler: object, pkl_path: str) -> None:
         print("  [Warning] No scaler produced by this preprocessor.")
     else:
         joblib.dump(scaler, pkl_path)
-        print(f"  [Save] sklearn scaler → {pkl_path}")
+        print(f"  [Save] sklearn scaler -> {pkl_path}")
 
 
 def _load_scaler(pkl_path: str, pt_path: str) -> object:

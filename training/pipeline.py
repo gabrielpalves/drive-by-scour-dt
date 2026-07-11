@@ -3,12 +3,12 @@ training/pipeline.py
 ====================
 Two functions that sit at the top of the training call stack:
 
-    execute_ablation_pipeline  — the master loop that drives every step for
+    execute_ablation_pipeline  - the master loop that drives every step for
                                  every model in the ablation grid: Optuna
                                  optimisation, confusion matrix, DT package
                                  export, stochastic stress-test, and slice plots.
 
-    export_digital_twin_package — bundles the champion weights, scaler, and
+    export_digital_twin_package - bundles the champion weights, scaler, and
                                   architecture metadata into the three files
                                   that drive_by_DT.py loads at startup.
 
@@ -17,7 +17,7 @@ notebook calls directly.  Everything else is an implementation detail
 imported by these two functions.
 
 Imported by:
-    ablation.ipynb — execute_ablation_pipeline (multiple phases),
+    ablation.ipynb - execute_ablation_pipeline (multiple phases),
                      export_digital_twin_package (called internally but also
                      available for manual re-export after the fact).
 """
@@ -92,7 +92,7 @@ def execute_ablation_pipeline(
     enough random exploration before the TPE model is fitted.
 
     Args:
-        experiment_path (list[dict]): Ablation grid — each dict is one model
+        experiment_path (list[dict]): Ablation grid - each dict is one model
                                       config with at minimum keys: 'name',
                                       'method', 'dofs', 'discretization',
                                       'use_space2vec', 'use_lstm', 'use_nhits',
@@ -152,7 +152,7 @@ def execute_ablation_pipeline(
         # ── 2. Confusion matrix (classification only) ─────────────────────────
         # A confusion matrix is a class-label artefact; multi-output regression
         # has no class axis, so it is skipped (per-pier MSE / parity plots are
-        # the regression diagnostics — produced from the scorecard instead).
+        # the regression diagnostics - produced from the scorecard instead).
         if not task.is_regression(step):
             plot_cached_confusion_matrix(
                 study=study, config=step,
@@ -207,9 +207,9 @@ def export_digital_twin_package(
     """
     Bundle the three files that drive_by_DT.py needs at startup:
 
-        DT_metadata.json        — architecture config and Optuna best_params.
-        DT_champion_weights.pth — the model weights from the winning trial.
-        DT_scaler.pkl           — the fitted scaler (or .pt for PyTorch scalers).
+        DT_metadata.json        - architecture config and Optuna best_params.
+        DT_champion_weights.pth - the model weights from the winning trial.
+        DT_scaler.pkl           - the fitted scaler (or .pt for PyTorch scalers).
 
     Also deletes all per-trial weight files (weights_<name>_trial_*.pth) after
     the champion copy is safely in place, reclaiming SSD space.
@@ -252,6 +252,7 @@ def export_digital_twin_package(
         # (default) or multi-output regression over the listed target supports.
         'task':            config.get('task', 'classification'),
         'target_supports': config.get('target_supports'),
+        'bearing_targets': config.get('bearing_targets'),
     }
     with open(os.path.join(output_dir, 'DT_metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=4)
@@ -265,7 +266,7 @@ def export_digital_twin_package(
 
     if os.path.exists(trial_weight_path):
         shutil.copy(trial_weight_path, champion_path)
-        print(f"      Champion weights → {champion_path}")
+        print(f"      Champion weights -> {champion_path}")
         _delete_trial_weights(output_dir, config['name'])
     else:
         print(
@@ -281,6 +282,22 @@ def export_digital_twin_package(
 # Private helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _ensure_sqlite_parent_dir(storage: str) -> None:
+    """Create the parent directory of a sqlite:///<path> storage URL if missing.
+
+    Optuna/SQLAlchemy will not create intermediate directories, so a fresh
+    extract (no database/ folder) raises OperationalError: unable to open
+    database file. Only acts on sqlite URLs; other backends are left alone.
+    """
+    prefix = "sqlite:///"
+    if not storage.startswith(prefix):
+        return
+    db_path = storage[len(prefix):]
+    parent  = os.path.dirname(db_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
 def _create_or_resume_study(
     study_name:    str,
     storage:       str,
@@ -293,11 +310,17 @@ def _create_or_resume_study(
 
     When `use_pruner=True`, attaches a SuccessiveHalvingPruner. The trainer
     already calls `trial.report(val_mse, epoch)` and `trial.should_prune()`,
-    so unpromising trials get killed off after a few epochs — typically
+    so unpromising trials get killed off after a few epochs - typically
     saves 30-50 % of compute on noisy losses without hurting the picked
     optimum. Default False keeps the pre-existing behaviour (Optuna's
     built-in MedianPruner).
+
+    A SQLite storage ("sqlite:///database/....db") fails with "unable to open
+    database file" if the parent folder does not exist - which is the case on a
+    fresh checkout/extract where database/ was never created. Create it first.
     """
+    _ensure_sqlite_parent_dir(storage)
+
     n_startup = max(10, n_trials // 4)
     sampler   = optuna.samplers.TPESampler(
         seed=sampler_seed,
@@ -336,7 +359,7 @@ def _copy_scaler(
 
     The cache filename follows the same naming convention as
     core/dataset._cache_stem so the two modules stay in sync (regression caches
-    carry an extra _reg_t<targets> tag — reusing _cache_stem keeps them aligned).
+    carry an extra _reg_t<targets> tag - reusing _cache_stem keeps them aligned).
     """
     stem     = f"scaler_{_cache_stem(dataset_name, config)}"
 
@@ -347,10 +370,10 @@ def _copy_scaler(
 
     if os.path.exists(pkl_src):
         shutil.copy(pkl_src, pkl_dst)
-        print(f"      Scaler (sklearn) → {pkl_dst}")
+        print(f"      Scaler (sklearn) -> {pkl_dst}")
     elif os.path.exists(pt_src):
         shutil.copy(pt_src, pt_dst)
-        print(f"      Scaler (PyTorch) → {pt_dst}")
+        print(f"      Scaler (PyTorch) -> {pt_dst}")
     else:
         print(
             f"      [WARNING] Scaler not found in {cache_dir}.\n"

@@ -5,11 +5,11 @@ The risk-perception finding as one slide for Prof. Todd's group.
 
 With a CHEAP, SHARP inspection available, making the decision maker more risk-
 averse (CVaR_alpha, alpha shrinking from 1=neutral to 0.05=worst-5% tail) does
-NOT buy fewer failures — it buys more MONITORING:
+NOT buy fewer failures - it buys more MONITORING:
 
   * inspections per trajectory climb steeply and monotonically;
   * repairs stay flat, and so does the mean final damage;
-  * the catastrophic € tail (CVaR_10 across trajectories) does NOT shrink — it
+  * the catastrophic € tail (CVaR_10 across trajectories) does NOT shrink - it
     actually rises with the extra inspection spend.
 
 Mechanism (the talking point): a cheap sharp inspection re-collapses the belief
@@ -81,11 +81,11 @@ def main() -> None:
     a2.set_ylabel("mean repairs per trajectory", color=C_REPAIR)
     a2.tick_params(axis="y", labelcolor=C_REPAIR)
     a2.set_ylim(0, max(1.0, float(df["n_repair"].max()) * 4))
-    axL.set_title("Risk aversion buys MONITORING\n(inspections ↑, repairs flat)",
+    axL.set_title("Risk aversion buys MONITORING\n(inspections ^, repairs flat)",
                   fontsize=11)
     axL.set_xticks(list(x))
     axL.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
-    axL.set_xlabel("risk attitude   (neutral  →  more risk-averse)")
+    axL.set_xlabel("risk attitude   (neutral  ->  more risk-averse)")
     axL.grid(alpha=0.25)
 
     # ── Panel B: the € tail does not shrink ───────────────────────────────────
@@ -94,11 +94,11 @@ def main() -> None:
     axR.plot(x, df["lifecycle_eur_cvar10"] / 1e6, "^-", color=C_TAIL, lw=2.2, ms=8,
              label=r"CVaR$_{10}$ catastrophic tail €")
     axR.set_ylabel("life-cycle cost  (€ millions)")
-    axR.set_title("…not a smaller failure tail\n(the flood-shock tail is "
+    axR.set_title("...not a smaller failure tail\n(the flood-shock tail is "
                   "policy-irreducible)", fontsize=11)
     axR.set_xticks(list(x))
     axR.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
-    axR.set_xlabel("risk attitude   (neutral  →  more risk-averse)")
+    axR.set_xlabel("risk attitude   (neutral  ->  more risk-averse)")
     axR.legend(fontsize=10, loc="upper left", framealpha=0.9)
     axR.grid(alpha=0.25)
     axR.set_ylim(bottom=0)

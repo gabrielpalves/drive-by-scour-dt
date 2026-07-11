@@ -4,11 +4,11 @@ core/task.py
 The single place that owns the difference between the two learning tasks the
 ablation supports:
 
-    'classification'  (default, single-scour) — predict a discretised damage
+    'classification'  (default, single-scour) - predict a discretised damage
         CLASS (0..60/disc); loss = cross-entropy; metrics on the class index.
         This is the original, validated single-foundation ablation.
 
-    'regression'      (multi-damage, Stage 0+) — predict a CONTINUOUS per-pier
+    'regression'      (multi-damage, Stage 0+) - predict a CONTINUOUS per-pier
         scour VECTOR (one output per target support); loss = MSE; metrics =
         per-head MSE, aggregate MSE/MAE, and a localisation accuracy.
 
@@ -42,18 +42,37 @@ def is_regression(config: dict) -> bool:
     return task_of(config) == "regression"
 
 
+def bearing_targets_of(config: dict) -> list:
+    """Bearing regression heads for Stage 1 (e.g. ['left', 'right']); [] if none.
+
+    When set, the model gains one extra continuous head per bearing target, laid
+    out AFTER the scour heads: label = [scour_1..scour_S, bearing_1..bearing_B].
+    """
+    return list(config.get("bearing_targets") or [])
+
+
+def n_scour_outputs(config: dict) -> int:
+    """Number of scour (target-support) heads."""
+    return len(config.get("target_supports") or [])
+
+
+def n_bearing_outputs(config: dict) -> int:
+    """Number of bearing heads (0 for Stage 0)."""
+    return len(bearing_targets_of(config))
+
+
 def n_outputs(config: dict) -> int:
     """Size of the model's final layer.
 
     classification -> number of damage classes (int(60/disc)+1).
-    regression     -> number of target supports (one continuous head each).
+    regression     -> scour heads (target supports) + optional bearing heads.
     """
     if is_regression(config):
         targets = config.get("target_supports")
         if not targets:
             raise ValueError("regression task needs config['target_supports'] "
                              "(e.g. [2, 3] for the two internal piers).")
-        return len(targets)
+        return len(targets) + n_bearing_outputs(config)
     disc = config.get("discretization", 1)
     return int(60 / disc) + 1
 
@@ -69,7 +88,7 @@ def label_dtype(config) -> torch.dtype:
 
 
 def objective_value(metrics: dict) -> float:
-    """Scalar Optuna minimises — the (aggregate) validation MSE for both tasks."""
+    """Scalar Optuna minimises - the (aggregate) validation MSE for both tasks."""
     return metrics["mse"]
 
 
@@ -81,7 +100,10 @@ def evaluate(model: nn.Module, loader, config: dict, device) -> dict:
     can stay task-agnostic), plus task-specific extras:
         classification : {primary=accuracy, accuracy, mae, mse}        (class-index units)
         regression     : {primary=localisation_acc, localisation_acc, mae, mse,
-                          per_head_mse, per_head_mae}                   (% scour units)
+                          per_head_mse, per_head_mae}                   (% units)
+                          + {scour_mse, bearing_mse} when bearing heads exist.
+    Localisation is scored over the SCOUR heads only; bearing heads (laid out
+    after the scour heads) never enter the which-pier argmax.
     """
     model.eval()
     if not is_regression(config):
@@ -99,6 +121,7 @@ def evaluate(model: nn.Module, loader, config: dict, device) -> dict:
                 "mae": abs_sum / max(1, n), "mse": sq_sum / max(1, n)}
 
     # ── regression ────────────────────────────────────────────────────────────
+    n_scour = n_scour_outputs(config)      # scour heads come FIRST in the label
     n = 0
     n_t = None
     abs_sum = sq_sum = 0.0
@@ -120,19 +143,30 @@ def evaluate(model: nn.Module, loader, config: dict, device) -> dict:
         head_abs = d.abs().sum(dim=0)
         ph_sq = head_sq if ph_sq is None else ph_sq + head_sq
         ph_abs = head_abs if ph_abs is None else ph_abs + head_abs
-        if n_t > 1:
-            true_max, true_arg = by.max(dim=1)
+        # localisation over the SCOUR heads only (bearing heads excluded)
+        ns = n_scour if n_scour > 0 else n_t
+        if ns > 1:
+            by_s, pred_s = by[:, :ns], pred[:, :ns]
+            true_max, true_arg = by_s.max(dim=1)
             mask = true_max > _LOC_DAMAGE_THRESHOLD_PCT
-            loc_correct += ((pred.argmax(dim=1) == true_arg) & mask).sum().item()
+            loc_correct += ((pred_s.argmax(dim=1) == true_arg) & mask).sum().item()
             loc_n += int(mask.sum().item())
 
     denom = max(1, n * (n_t or 1))
     loc_acc = (loc_correct / loc_n) if loc_n > 0 else float("nan")
-    return {
+    per_head_mse = (ph_sq / max(1, n)).tolist()
+    out = {
         "primary": loc_acc,
         "localisation_acc": loc_acc,
         "mae": abs_sum / denom,
         "mse": sq_sum / denom,
-        "per_head_mse": (ph_sq / max(1, n)).tolist(),
+        "per_head_mse": per_head_mse,
         "per_head_mae": (ph_abs / max(1, n)).tolist(),
     }
+    # Scour vs bearing group MSE (Stage 1): the headline of the disentanglement
+    # story - is scour still clean once bearing shares the network?
+    ns = n_scour if 0 < n_scour < len(per_head_mse) else len(per_head_mse)
+    if ns < len(per_head_mse):
+        out["scour_mse"]   = sum(per_head_mse[:ns]) / ns
+        out["bearing_mse"] = sum(per_head_mse[ns:]) / (len(per_head_mse) - ns)
+    return out

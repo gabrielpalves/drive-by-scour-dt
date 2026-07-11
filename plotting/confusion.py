@@ -5,12 +5,12 @@ Confusion matrix functions for the ablation pipeline.
 
 Public API
 ----------
-    plot_cached_confusion_matrix   — evaluates the champion model on the
+    plot_cached_confusion_matrix   - evaluates the champion model on the
                                      canonical validation set and plots its
                                      true confusion matrix.  Called once per
                                      model inside execute_ablation_pipeline.
 
-    plot_aggregated_confusion_matrix — pure render function: takes pre-computed
+    plot_aggregated_confusion_matrix - pure render function: takes pre-computed
                                        prediction arrays and produces a heatmap.
                                        Called by plot_cached_confusion_matrix and
                                        usable standalone for ad-hoc inspection.
@@ -24,7 +24,7 @@ here.  plot_cached_confusion_matrix is the correct replacement: it loads the
 champion weights written by train_and_evaluate and evaluates a live model.
 
 Imported by:
-    training/pipeline.py — plot_cached_confusion_matrix
+    training/pipeline.py - plot_cached_confusion_matrix
 """
 
 import os
@@ -44,7 +44,7 @@ from training.trainer import DEVICE
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. Full pipeline: load champion → infer → render
+# 1. Full pipeline: load champion -> infer -> render
 # ──────────────────────────────────────────────────────────────────────────────
 
 def plot_cached_confusion_matrix(
@@ -132,13 +132,13 @@ def plot_aggregated_confusion_matrix(
 
     Visual design
     -------------
-    • Figure size scales with n_classes so both 13-class and 61-class matrices
+    - Figure size scales with n_classes so both 13-class and 61-class matrices
       remain legible without manual adjustment.
-    • Non-zero cells are annotated with their count; zero cells are blank to
+    - Non-zero cells are annotated with their count; zero cells are blank to
       reduce visual noise.
-    • Diagonal cells are outlined in red so correct predictions stand out
+    - Diagonal cells are outlined in red so correct predictions stand out
       regardless of colour intensity.
-    • The raw confusion matrix is also saved as a .npy file alongside the PNG
+    - The raw confusion matrix is also saved as a .npy file alongside the PNG
       for downstream statistical analysis.
 
     Args:

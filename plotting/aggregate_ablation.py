@@ -224,8 +224,8 @@ def fig1_architecture(summary: pd.DataFrame) -> str:
     bi = ARCH_ORDER.index(best)
     bars[bi].set_edgecolor("black")
     bars[bi].set_linewidth(2)
-    axm.set_ylabel("median MSE  (scour-class units)  —  lower is better")
-    axm.set_title("Architecture comparison — Full 8-DOF input")
+    axm.set_ylabel("median MSE  (scour-class units)  -  lower is better")
+    axm.set_title("Architecture comparison - Full 8-DOF input")
     for xi, v, q, cr in zip(x, sub.mse_median, sub.mse_q75, sub.collapse_rate):
         tag = f"{v:.3f}" + (f"\ncollapse {cr:.1%}" if cr > 0 else "")
         axm.text(xi, q, tag, ha="center", va="bottom", fontsize=8)
@@ -233,7 +233,7 @@ def fig1_architecture(summary: pd.DataFrame) -> str:
     yerr_a = np.vstack([(sub.acc_median - sub.acc_q25).to_numpy(),
                         (sub.acc_q75 - sub.acc_median).to_numpy()])
     axa.bar(x, sub.acc_median, yerr=yerr_a, capsize=4, color=colors)
-    axa.set_ylabel("median accuracy  —  higher is better")
+    axa.set_ylabel("median accuracy  -  higher is better")
     axa.set_title("(secondary) Classification accuracy")
     for xi, v, q in zip(x, sub.acc_median, sub.acc_q75):
         axa.text(xi, q, f"{v:.1%}", ha="center", va="bottom", fontsize=8)
@@ -243,7 +243,7 @@ def fig1_architecture(summary: pd.DataFrame) -> str:
         ax.set_xticklabels([ARCH_LABEL[a] for a in ARCH_ORDER],
                            rotation=20, ha="right")
         ax.grid(axis="y", alpha=0.3)
-    fig.suptitle("Median ± IQR pooled over 3 seeds × 30 stochastic evals",
+    fig.suptitle("Median ± IQR pooled over 3 seeds x 30 stochastic evals",
                  y=1.02, fontsize=9, color="#555")
     fig.tight_layout()
     fig.savefig(FIG_DIR / "fig1_architecture_full8dof.png", dpi=200,
@@ -263,8 +263,8 @@ def fig2_single_dof(summary: pd.DataFrame, best_arch: str) -> None:
     ax.set_yticks(y)
     ax.set_yticklabels(sub.dof_label)
     ax.invert_yaxis()  # best on top
-    ax.set_xlabel("median MSE  (scour-class units)  —  lower is better")
-    ax.set_title(f"Single-sensor informativeness — {ARCH_LABEL[best_arch]}")
+    ax.set_xlabel("median MSE  (scour-class units)  -  lower is better")
+    ax.set_title(f"Single-sensor informativeness - {ARCH_LABEL[best_arch]}")
     for yi, v, q, cr in zip(y, sub.mse_median, sub.mse_q75, sub.collapse_rate):
         tag = f" {v:.2f}" + (f"  (collapse {cr:.0%})" if cr > 0.01 else "")
         ax.text(q, yi, tag, va="center", fontsize=8)
@@ -294,8 +294,8 @@ def fig3_leave_one_out(summary: pd.DataFrame, best_arch: str) -> None:
     ax.set_yticklabels(sub.dropped_dof)
     ax.invert_yaxis()
     ax.set_xlabel(f"Δ median MSE vs full-8 baseline (={base_mse:.3f})  "
-                  f"—  positive = sensor is important")
-    ax.set_title(f"Leave-one-out sensor importance — {ARCH_LABEL[best_arch]}")
+                  f"-  positive = sensor is important")
+    ax.set_title(f"Leave-one-out sensor importance - {ARCH_LABEL[best_arch]}")
     for yi, d in zip(y, sub.delta):
         ax.text(d, yi, f" {d:+.3f}", va="center",
                 ha="left" if d >= 0 else "right", fontsize=8)
@@ -329,8 +329,8 @@ def fig4_best_pairs(summary: pd.DataFrame, best_arch: str, top_n: int = 14) -> N
     if full8 is not None:
         ax.axvline(full8, color="black", ls=":", lw=1.2,
                    label=f"full 8-DOF ({full8:.3f})")
-    ax.set_xlabel("median MSE  (scour-class units)  —  lower is better")
-    ax.set_title(f"Best 2-sensor combinations — {ARCH_LABEL[best_arch]}")
+    ax.set_xlabel("median MSE  (scour-class units)  -  lower is better")
+    ax.set_title(f"Best 2-sensor combinations - {ARCH_LABEL[best_arch]}")
     ax.legend(fontsize=8, loc="lower right")
     ax.grid(axis="x", alpha=0.3)
     fig.tight_layout()
@@ -343,7 +343,7 @@ def fig4_best_pairs(summary: pd.DataFrame, best_arch: str, top_n: int = 14) -> N
 # --------------------------------------------------------------------------- #
 def print_ranking(summary: pd.DataFrame) -> None:
     print("\n" + "=" * 78)
-    print("ARCHITECTURE RANKING  —  Full 8-DOF (CompB), pooled over seeds (robust)")
+    print("ARCHITECTURE RANKING  -  Full 8-DOF (CompB), pooled over seeds (robust)")
     print("=" * 78)
     sub = (summary[summary.phase == "CompB"]
            .sort_values("mse_median"))
@@ -368,7 +368,7 @@ def main() -> None:
     print("Loading runs from PC7 + PC11 ...")
     df = load_runs()
     if df.empty:
-        print("  [error] no runs parsed — nothing to do.")
+        print("  [error] no runs parsed - nothing to do.")
         return
 
     df.to_csv(OUT_DIR / "master_long.csv", index=False)

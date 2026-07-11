@@ -4,12 +4,12 @@ core/preprocessing.py
 Signal preprocessing for the TTBI ablation and digital twin pipelines.
 
 The single public class, TTBIPreprocessor, is the canonical transform used
-in both scripts.  The DT's old fft_preprocess() function is retired — 
+in both scripts.  The DT's old fft_preprocess() function is retired - 
 DigitalAsset.estimate_state() should call preprocessor.transform() instead.
 
 Imported by:
-    core/dataset.py         — cache-miss path (fit + transform on raw data)
-    digital_twin/assets.py  — online inference (transform only, scaler pre-loaded)
+    core/dataset.py         - cache-miss path (fit + transform on raw data)
+    digital_twin/assets.py  - online inference (transform only, scaler pre-loaded)
 """
 
 import time
@@ -28,15 +28,15 @@ class TTBIPreprocessor:
 
     Supports four methods, selectable at construction time:
 
-        'raw'     — no signal transform; only scale.
-        'paa'     — Piecewise Aggregate Approximation via linear interpolation.
-        'fft'     — one-sided magnitude spectrum, resampled to n_segments bins.
-        'cwt'     — Continuous Wavelet Transform (Morlet); produces 2-D scalograms.
+        'raw'     - no signal transform; only scale.
+        'paa'     - Piecewise Aggregate Approximation via linear interpolation.
+        'fft'     - one-sided magnitude spectrum, resampled to n_segments bins.
+        'cwt'     - Continuous Wavelet Transform (Morlet); produces 2-D scalograms.
                     PAA is applied first to prevent OOM on long sequences.
 
     Scaling is always physics-preserving and applied per channel:
-        1-D methods  → StandardScaler  (preserves zero-crossings of vibration signals)
-        2-D / CWT    → MinMaxScaler    (preserves image-like intensity contrast)
+        1-D methods  -> StandardScaler  (preserves zero-crossings of vibration signals)
+        2-D / CWT    -> MinMaxScaler    (preserves image-like intensity contrast)
 
     Scaler fitting is leak-free: call transform(..., fit_scaler=True,
     fit_indices=train_idx) to fit only on training samples, then transform
@@ -57,10 +57,10 @@ class TTBIPreprocessor:
         self.is_fit     = False
 
         if self.method in ('cwt', 'paa_cwt'):
-            # 2-D scalograms are strictly positive → MinMaxScaler
+            # 2-D scalograms are strictly positive -> MinMaxScaler
             self.scaler = MinMaxScaler(feature_range=(0, 1))
         else:
-            # 1-D vibration signals oscillate around zero → StandardScaler
+            # 1-D vibration signals oscillate around zero -> StandardScaler
             self.scaler = StandardScaler()
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ class TTBIPreprocessor:
         samples, channels, length = X_down.shape
         scales              = np.arange(1, self.cwt_scales + 1)
 
-        print(f"  -> Computing CWT (shape: {samples}×{channels}×{self.cwt_scales}×{length})...")
+        print(f"  -> Computing CWT (shape: {samples}x{channels}x{self.cwt_scales}x{length})...")
         t0 = time.perf_counter()
 
         def _process_sample(i: int) -> np.ndarray:
@@ -146,7 +146,7 @@ class TTBIPreprocessor:
         Pass fit_scaler=True and fit_indices=train_idx on the first call
         (typically the cache-miss path in dataset.py).  The scaler is fitted
         exclusively on the training partition and then applied to the full
-        array — no test-set statistics bleed into the scaler.
+        array - no test-set statistics bleed into the scaler.
 
         On subsequent calls (e.g. online inference in the digital twin) pass
         fit_scaler=False; the previously fitted scaler is used as-is.
@@ -163,8 +163,8 @@ class TTBIPreprocessor:
 
         Returns:
             Scaled array of the same dtype (float32), shape:
-                1-D methods → (Samples, Channels, n_segments)
-                CWT         → (Samples, Channels, cwt_scales, n_segments)
+                1-D methods -> (Samples, Channels, n_segments)
+                CWT         -> (Samples, Channels, cwt_scales, n_segments)
 
         Raises:
             ValueError:  Unknown method string.
@@ -196,9 +196,9 @@ class TTBIPreprocessor:
 
         # Move channels to last axis before flattening
         if X_processed.ndim == 3:           # (S, C, L)
-            X_t = np.transpose(X_processed, (0, 2, 1))        # → (S, L, C)
+            X_t = np.transpose(X_processed, (0, 2, 1))        # -> (S, L, C)
         elif X_processed.ndim == 4:         # (S, C, Sc, L)
-            X_t = np.transpose(X_processed, (0, 2, 3, 1))     # → (S, Sc, L, C)
+            X_t = np.transpose(X_processed, (0, 2, 3, 1))     # -> (S, Sc, L, C)
         else:
             raise ValueError(f"Unexpected array ndim={X_processed.ndim} after transform.")
 
@@ -225,9 +225,9 @@ class TTBIPreprocessor:
 
         # Invert the transpose
         if X_processed.ndim == 3:
-            X_scaled = np.transpose(X_scaled_t, (0, 2, 1))    # → (S, C, L)
+            X_scaled = np.transpose(X_scaled_t, (0, 2, 1))    # -> (S, C, L)
         else:
-            X_scaled = np.transpose(X_scaled_t, (0, 3, 1, 2)) # → (S, C, Sc, L)
+            X_scaled = np.transpose(X_scaled_t, (0, 3, 1, 2)) # -> (S, C, Sc, L)
 
         return X_scaled.astype(np.float32)
 

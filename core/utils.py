@@ -3,18 +3,18 @@ core/utils.py
 =============
 Three unrelated but universally needed utilities:
 
-    1. set_global_seed      — reproducibility across Python / NumPy / PyTorch.
-    2. define_save_locations — canonical naming for Optuna DBs and output dirs.
-    3. DOF definitions      — single source of truth for channel names and indices.
+    1. set_global_seed      - reproducibility across Python / NumPy / PyTorch.
+    2. define_save_locations - canonical naming for Optuna DBs and output dirs.
+    3. DOF definitions      - single source of truth for channel names and indices.
 
 Imported by:
-    ablation.ipynb          — seed, save locations, DOF maps
-    training/trainer.py     — set_global_seed at the top of every trial
-    training/pipeline.py    — set_global_seed, define_save_locations
-    digital_twin/assets.py  — DOF maps (channel selection at inference time)
+    ablation.ipynb          - seed, save locations, DOF maps
+    training/trainer.py     - set_global_seed at the top of every trial
+    training/pipeline.py    - set_global_seed, define_save_locations
+    digital_twin/assets.py  - DOF maps (channel selection at inference time)
 
 No ML framework is imported here beyond torch (for seed control).
-No other core module is imported here — this file has no internal deps.
+No other core module is imported here - this file has no internal deps.
 """
 
 import os
@@ -33,7 +33,7 @@ def set_global_seed(seed: int = 42) -> None:
     Lock all random-number generators to `seed` for full reproducibility.
 
     Covers Python stdlib, NumPy, PyTorch CPU, and every CUDA device.
-    Also forces deterministic cuDNN kernels and disables its auto-tuner —
+    Also forces deterministic cuDNN kernels and disables its auto-tuner -
     this trades a small throughput cost for bitwise-identical runs.
 
     Call once at the top of the ablation notebook and once at the start of
@@ -88,17 +88,17 @@ def define_save_locations(
     The suffix encodes every axis of variation so that phases with different
     datasets, DOF subsets, or discretisation steps never share files:
 
-        n  — dataset contains 'noise'
-        t  — dataset contains 'temperature'
-        v  — dataset contains 'vehicle'
-        s  — dataset contains 'speed'
-        _DOF_<d0>_<d1>_…  — active DOF indices
-        _disc<k>           — discretisation step
+        n  - dataset contains 'noise'
+        t  - dataset contains 'temperature'
+        v  - dataset contains 'vehicle'
+        s  - dataset contains 'speed'
+        _DOF_<d0>_<d1>_...  - active DOF indices
+        _disc<k>           - discretisation step
 
     Example:
         define_save_locations('architectures', 'data_noise_vehicle_temperature',
                               [0, 1, 6], discretization=5)
-        →  database_name = "sqlite:///database/ttbi_architectures_ablation_ntv_DOF_0_1_6_disc5.db"
+        ->  database_name = "sqlite:///database/ttbi_architectures_ablation_ntv_DOF_0_1_6_disc5.db"
            output_dir    = "results/results_architectures_ntv_DOF_0_1_6_disc5"
            cache_dir     = "cache/data_cache_ntv_DOF_0_1_6_disc5"
 
@@ -107,7 +107,7 @@ def define_save_locations(
                                     'DOFs_sensitivity', 'ForwardSweep_3Sensors'.
         dataset        (str):       Dataset folder name (used to build the suffix).
         DOFs           (list[int]): Active DOF indices for this phase.
-        discretization (int):       Damage discretisation step (default 1 → 61 classes).
+        discretization (int):       Damage discretisation step (default 1 -> 61 classes).
 
     Returns:
         database_name (str): SQLite URL for optuna.create_study(storage=...).
@@ -135,7 +135,7 @@ def define_save_locations(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. DOF definitions — single source of truth
+# 3. DOF definitions - single source of truth
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Ordered list: index == DOF integer used throughout the codebase.
@@ -150,7 +150,7 @@ DOF_NAMES: list[str] = [
     "RearBogie_Pitch",   # 7
 ]
 
-# Convenience look-ups derived from DOF_NAMES — do not edit these directly.
+# Convenience look-ups derived from DOF_NAMES - do not edit these directly.
 DOF_NAME_TO_IDX: dict[str, int] = {name: i for i, name in enumerate(DOF_NAMES)}
 IDX_TO_DOF_NAME: dict[int, str] = {i: name for i, name in enumerate(DOF_NAMES)}
 
@@ -160,8 +160,8 @@ def dof_label(dof: int) -> str:
     Human-readable label for a DOF index, used in plot titles and filenames.
 
     Converts underscores to spaces and formats direction as a parenthetical:
-        6  →  "Front Bogie (Pitch)"
-        0  →  "Car Body (Vert)"
+        6  ->  "Front Bogie (Pitch)"
+        0  ->  "Car Body (Vert)"
 
     Args:
         dof (int): DOF index in [0, 7].

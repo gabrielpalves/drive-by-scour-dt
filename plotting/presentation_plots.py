@@ -47,7 +47,7 @@ from aggregate_ablation import (  # noqa: E402
 )
 
 # =========================================================================== #
-#  CONFIG  — tweak these and re-run
+#  CONFIG  - tweak these and re-run
 # =========================================================================== #
 SEEDS = [42, 1337, 2026]
 SEED_COLOR = {42: "#4C72B0", 1337: "#DD8452", 2026: "#55A868"}
@@ -72,7 +72,7 @@ def get_master() -> pd.DataFrame:
     csv = OUT_DIR / "master_long.csv"
     if csv.exists():
         return pd.read_csv(csv, dtype={"dof_set": str})
-    print("  master_long.csv not found — rebuilding from result trees ...")
+    print("  master_long.csv not found - rebuilding from result trees ...")
     df = load_runs()
     OUT_DIR.mkdir(exist_ok=True)
     df.to_csv(csv, index=False)
@@ -168,7 +168,7 @@ def boxplot_arch_by_seed(df: pd.DataFrame, opt: pd.DataFrame,
             (ucb_handle,) = ax.plot([x - bw / 2, x + bw / 2], [ucb, ucb],
                                     color="crimson", lw=1.8, zorder=5)
             if n_collapse:
-                ax.annotate(f"{n_collapse}✗", (x, ucb), textcoords="offset points",
+                ax.annotate(f"{n_collapse}X", (x, ucb), textcoords="offset points",
                             xytext=(0, 6), ha="center", fontsize=7,
                             color="crimson", fontweight="bold")
             # Optuna best validation MSE
@@ -182,7 +182,7 @@ def boxplot_arch_by_seed(df: pd.DataFrame, opt: pd.DataFrame,
     ax.set_xticks(range(len(ARCH_ORDER)))
     ax.set_xticklabels([ARCH_LABEL[a] for a in ARCH_ORDER], rotation=15,
                        ha="right")
-    ax.set_ylabel("MSE  (scour-class units)  —  lower is better")
+    ax.set_ylabel("MSE  (scour-class units)  -  lower is better")
     if LOG_SCALE_BOX:
         ax.set_yscale("log")
     ax.set_title(title)
@@ -196,7 +196,7 @@ def boxplot_arch_by_seed(df: pd.DataFrame, opt: pd.DataFrame,
         handles.append(opt_handle); opt_handle.set_label("Optuna best (val MSE)")
     ax.legend(handles=handles, fontsize=8, ncol=2, loc="upper left")
     fig.text(0.99, 0.01,
-             "box = stochastic evals (collapses excluded) · ✗ = # collapsed evals",
+             "box = stochastic evals (collapses excluded) - X = # collapsed evals",
              ha="right", fontsize=8, color="#666")
     fig.tight_layout()
     fig.savefig(PRES_DIR / fname, dpi=DPI, bbox_inches="tight")
@@ -214,7 +214,7 @@ def _plot_cm(ax, cm: np.ndarray, title: str) -> None:
     within1 = cm[np.abs(di - dj) <= 1].sum() / total
     cmn = cm / np.clip(cm.sum(axis=1, keepdims=True), 1, None)  # row-normalise
     im = ax.imshow(cmn, cmap="magma", vmin=0, vmax=1, aspect="auto")
-    ax.set_title(f"{title}\nacc={acc:.1%}  ·  within ±1 class={within1:.1%}",
+    ax.set_title(f"{title}\nacc={acc:.1%}  -  within ±1 class={within1:.1%}",
                  fontsize=10)
     ax.set_xlabel("predicted scour class")
     ax.set_ylabel("true scour class")
@@ -227,7 +227,7 @@ def confusion_champion(arch: str) -> None:
         print(f"  [warn] no confusion matrix for {arch}")
         return
     fig, ax = plt.subplots(figsize=(6.2, 5.4))
-    im = _plot_cm(ax, cm, f"Champion confusion — {ARCH_LABEL[arch]} (Full 8-DOF)")
+    im = _plot_cm(ax, cm, f"Champion confusion - {ARCH_LABEL[arch]} (Full 8-DOF)")
     fig.colorbar(im, ax=ax, fraction=0.046, label="row-normalised frequency")
     fig.tight_layout()
     fig.savefig(PRES_DIR / "confusion_champion.png", dpi=DPI, bbox_inches="tight")
@@ -276,8 +276,8 @@ def all_archs_single_dof(summary: pd.DataFrame) -> None:
     _grouped_barh(ax, piv, ARCH_ORDER)
     if LOG_X_BARS:
         ax.set_xscale("log")
-    ax.set_xlabel("median MSE  (scour-class units, log scale)  —  lower is better")
-    ax.set_title("Single-sensor informativeness — all architectures")
+    ax.set_xlabel("median MSE  (scour-class units, log scale)  -  lower is better")
+    ax.set_title("Single-sensor informativeness - all architectures")
     ax.legend(fontsize=8, loc="upper right")
     ax.grid(axis="x", alpha=0.3, which="both")
     fig.tight_layout()
@@ -298,8 +298,8 @@ def all_archs_leave_one_out(summary: pd.DataFrame) -> None:
     _grouped_barh(ax, piv, ARCH_ORDER)
     ax.axvline(0, color="black", lw=1)
     ax.set_xlabel("Δ median MSE vs each architecture's full-8 baseline  "
-                  "—  positive = sensor is important")
-    ax.set_title("Leave-one-out sensor importance — all architectures")
+                  "-  positive = sensor is important")
+    ax.set_title("Leave-one-out sensor importance - all architectures")
     ax.legend(fontsize=8, loc="lower right")
     ax.grid(axis="x", alpha=0.3)
     fig.tight_layout()
@@ -330,7 +330,7 @@ def all_archs_pairs_heatmap(summary: pd.DataFrame) -> None:
                 ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=6,
                         color="black" if v < PAIR_HEATMAP_VMAX * 0.6 else "white")
     fig.colorbar(im, ax=ax, fraction=0.04, label="median MSE (capped)")
-    ax.set_title("2-sensor pairs — median MSE by architecture")
+    ax.set_title("2-sensor pairs - median MSE by architecture")
     fig.tight_layout()
     fig.savefig(PRES_DIR / "all_archs_pairs_heatmap.png", dpi=DPI,
                 bbox_inches="tight")
@@ -355,10 +355,10 @@ def main() -> None:
 
     print("Rendering boxplots ...")
     boxplot_arch_by_seed(df, opt, FULL8,
-                         "Architecture × seed — Full 8-DOF input",
+                         "Architecture x seed - Full 8-DOF input",
                          "box_architecture_full8dof.png")
     boxplot_arch_by_seed(df, opt, best_pair.dof_set,
-                         f"Architecture × seed — best 2-sensor input "
+                         f"Architecture x seed - best 2-sensor input "
                          f"({best_pair.dof_label})",
                          "box_architecture_bestpair.png")
 

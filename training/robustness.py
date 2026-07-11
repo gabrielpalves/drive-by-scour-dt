@@ -4,11 +4,11 @@ training/robustness.py
 Two post-optimisation stress tests that measure how trustworthy a champion
 model actually is beyond its Optuna lucky-score:
 
-    evaluate_stochastic_robustness  — 30-seed Monte Carlo: does the architecture
+    evaluate_stochastic_robustness  - 30-seed Monte Carlo: does the architecture
                                       consistently reproduce its best result, or
                                       was the Optuna run a fluke?
 
-    evaluate_parametric_robustness  — ±5/10 % perturbation of key hyperparameters
+    evaluate_parametric_robustness  - ±5/10 % perturbation of key hyperparameters
                                       around the Optuna optimum: how sensitive is
                                       the model to small deviations from the chosen
                                       configuration?
@@ -18,7 +18,7 @@ KeyboardInterrupt or crash loses at most one data point, and resume
 automatically from wherever they left off on the next call.
 
 Imported by:
-    training/pipeline.py — called from execute_ablation_pipeline after
+    training/pipeline.py - called from execute_ablation_pipeline after
                            plot_cached_confusion_matrix and export_digital_twin_package.
 """
 
@@ -80,7 +80,7 @@ def evaluate_stochastic_robustness(
 
     Returns:
         dict with keys Optuna_Lucky_Score, Stochastic_Mean_MSE,
-        Stochastic_Std_MSE, UCB_95_MSE — or None if skipped.
+        Stochastic_Std_MSE, UCB_95_MSE - or None if skipped.
     """
     print(f"\n--> Stochastic robustness: {config['name']}")
 
@@ -106,7 +106,7 @@ def evaluate_stochastic_robustness(
 
     # ── Run remaining seeds ───────────────────────────────────────────────────
     if completed < n_seeds:
-        print(f"  Running seeds {completed + 1}–{n_seeds}...")
+        print(f"  Running seeds {completed + 1}-{n_seeds}...")
         pbar = tqdm(range(completed, n_seeds), desc="Monte Carlo seeds", unit="model")
         for run in pbar:
             seed = 42 + run
@@ -234,7 +234,7 @@ def evaluate_parametric_robustness(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Private helpers — checkpointing
+# Private helpers - checkpointing
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _load_stochastic_checkpoint(
@@ -274,7 +274,7 @@ def _save_sensitivity_checkpoint(path: str, results: dict) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Private helpers — perturbation arithmetic
+# Private helpers - perturbation arithmetic
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _perturb(base_val: float | int, multiplier: float) -> float | int:
@@ -289,7 +289,7 @@ def _perturb(base_val: float | int, multiplier: float) -> float | int:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Private helpers — plotting
+# Private helpers - plotting
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _plot_stochastic_boxplot(
@@ -306,7 +306,7 @@ def _plot_stochastic_boxplot(
     """
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     fig.suptitle(
-        f"Stochastic Robustness (30 seeds) — {study_name}",
+        f"Stochastic Robustness (30 seeds) - {study_name}",
         fontsize=14, fontweight='bold', y=1.02,
     )
 

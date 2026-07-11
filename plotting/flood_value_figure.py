@@ -1,18 +1,18 @@
 """
 plotting/flood_value_figure.py
 ==============================
-The QUANTITATIVE value of the flood-decision branch, for the Todd-group talk —
+The QUANTITATIVE value of the flood-decision branch, for the Todd-group talk -
 the number that pairs with the decision-map logic (`flood_decision_map.py`).
 
 Story (and its honest limits): in our framework routine drive-by monitoring is
 reliable and monthly, so it already catches a flood's scour jump at the next
 passage. The dedicated flood branch therefore adds only a *one-month head start*
-plus targeted closures — a MODEST effect on the mean cost. Where it matters is
+plus targeted closures - a MODEST effect on the mean cost. Where it matters is
 the **catastrophic tail**: it trims the CVaR_10 life-cycle cost by a few-to-~10 %,
 and the effect GROWS as the scour fragility becomes conservative (i.e. when flood-
 shock scour actually threatens failure). This is exactly the part of the tail the
 risk-perception result showed risk-aversion *cannot* reach (the flood-shock tail
-is policy-irreducible by a routine objective) — so the flood-ANTICIPATING protocol
+is policy-irreducible by a routine objective) - so the flood-ANTICIPATING protocol
 is the policy that addresses it. Fragility is a swept assumption throughout.
 
 Output: results/flood_value/flood_protocol_value.png + a CSV of the raw numbers.
@@ -85,7 +85,7 @@ def main() -> None:
     print(df[["planner", "fragility", "mean_red_pct", "tail_red_pct",
               "cvar10_off", "cvar10_on"]].to_string(index=False))
 
-    # ── grouped bar: % CVaR_10 tail reduction, planner × fragility ────────────
+    # ── grouped bar: % CVaR_10 tail reduction, planner x fragility ────────────
     fig, ax = plt.subplots(figsize=(8.2, 4.8))
     x = np.arange(len(PLANNERS))
     w = 0.36
@@ -98,7 +98,7 @@ def main() -> None:
                       label=f"{fname} fragility (θ={FRAGILITIES[k][1]:g})")
         for xi, p, b in zip(x, PLANNERS, bars):
             r = df[(df.planner == p) & (df.fragility == fname)].iloc[0]
-            ax.annotate(f"{r.cvar10_off/1e6:.1f}→{r.cvar10_on/1e6:.1f} M€",
+            ax.annotate(f"{r.cvar10_off/1e6:.1f}->{r.cvar10_on/1e6:.1f} M€",
                         (b.get_x() + b.get_width() / 2, b.get_height()),
                         textcoords="offset points", xytext=(0, 3),
                         ha="center", fontsize=7.5, color="0.25")
@@ -106,7 +106,7 @@ def main() -> None:
     ax.set_xticklabels([p.upper() for p in PLANNERS])
     ax.set_ylabel("reduction in CVaR$_{10}$ catastrophic tail  (%)")
     ax.set_xlabel("routine planner")
-    ax.set_title("Value of the flood-decision branch — it trims the catastrophic flood tail\n"
+    ax.set_title("Value of the flood-decision branch - it trims the catastrophic flood tail\n"
                  "(the part risk-aversion alone cannot reach; larger under a conservative fragility)",
                  fontsize=10.5)
     ax.axhline(0, color="0.6", lw=0.8)

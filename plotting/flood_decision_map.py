@@ -1,26 +1,26 @@
 """
 plotting/flood_decision_map.py
 ==============================
-Conceptual figures for the flood-decision branch (Paper 2, Step 2) — the slides
+Conceptual figures for the flood-decision branch (Paper 2, Step 2) - the slides
 for Prof. Todd's group.
 
 Two artifacts:
 
-  1. flood_trigger_cdf.png — the probabilistic major-flood trigger
-     P(classify major | severity) = Φ((ln s − ln s_major)/β_gauge). A river gauge
+  1. flood_trigger_cdf.png - the probabilistic major-flood trigger
+     P(classify major | severity) = Φ((ln s - ln s_major)/β_gauge). A river gauge
      measures stage precisely but infers DISCHARGE through a rating curve whose
      error blows up (50-200 %) during the extreme floods that matter, so the
-     hard design-flood threshold (β→0 step) becomes a SMOOTH classifier. The
+     hard design-flood threshold (β->0 step) becomes a SMOOTH classifier. The
      curve is the object we refine with the Todd group.
 
-  2. flood_decision_map.png — the action the FloodResponsePlanner takes as a
+  2. flood_decision_map.png - the action the FloodResponsePlanner takes as a
      function of the observed gauge severity (x) and the pre-flood damage belief
      (y), under three conditions: risk-neutral, risk-averse (CVaR), and degraded
-     sensors (low probe reliability). The four regions —
-     do_nothing / restrict_operations(probe) / inspect / interrupt — fall out of
+     sensors (low probe reliability). The four regions -
+     do_nothing / restrict_operations(probe) / inspect / interrupt - fall out of
      a risk-adjusted one-step Value-of-Information calculation; risk aversion and
-     sensor degradation visibly shift the escalation boundaries (risk → close
-     sooner; degraded probe → skip the probe, inspect).
+     sensor degradation visibly shift the escalation boundaries (risk -> close
+     sooner; degraded probe -> skip the probe, inspect).
 
 Decision granularity is the readable 13-class (5 %) grid; the production champion
 is 61-class but the decision STRUCTURE is identical and far clearer at 5 %.
@@ -117,12 +117,12 @@ def decision_grid(planner: FloodResponsePlanner, probe_reliability=1.0) -> np.nd
 
 
 # --------------------------------------------------------------------------- #
-#  Figure 1 — the probabilistic trigger CDF
+#  Figure 1 - the probabilistic trigger CDF
 # --------------------------------------------------------------------------- #
 def plot_trigger_cdf(path: Path) -> None:
     s = np.linspace(0.0, 5.0, 400)
     fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    for beta, ls, lab in [(1e-6, "--", "hard threshold (β→0)"),
+    for beta, ls, lab in [(1e-6, "--", "hard threshold (β->0)"),
                           (0.35, "-", "sharp gauge (β=0.35)"),
                           (0.60, "-", "default gauge (β=0.60)"),
                           (0.90, "-", "very uncertain (β=0.90)")]:
@@ -135,7 +135,7 @@ def plot_trigger_cdf(path: Path) -> None:
     ax.set_ylabel("P(classify as major flood)")
     ax.set_title("Probabilistic major-flood trigger\n"
                  r"$P(\mathrm{major}\,|\,s)=\Phi\!\left(\frac{\ln s-\ln s_{major}}{\beta_{gauge}}\right)$"
-                 "  — rating-curve uncertainty smooths the threshold", fontsize=10)
+                 "  - rating-curve uncertainty smooths the threshold", fontsize=10)
     ax.set_ylim(-0.02, 1.02)
     ax.grid(alpha=0.3)
     ax.legend(fontsize=9, loc="lower right", framealpha=0.9)
@@ -146,7 +146,7 @@ def plot_trigger_cdf(path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-#  Figure 2 — the decision maps
+#  Figure 2 - the decision maps
 # --------------------------------------------------------------------------- #
 def _draw_map(ax, grid, title):
     cmap = ListedColormap(ACTION_COLORS)
@@ -175,7 +175,7 @@ def plot_decision_maps(path: Path) -> None:
                for a, c in zip(ACTIONS, ACTION_COLORS)]
     fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=10,
                frameon=False, bbox_to_anchor=(0.5, -0.03))
-    fig.suptitle("Flood-response decision map — action vs observed severity × pre-flood belief\n"
+    fig.suptitle("Flood-response decision map - action vs observed severity x pre-flood belief\n"
                  "(risk aversion closes sooner; a degraded probe is skipped for inspection)",
                  fontsize=11)
     fig.tight_layout(rect=[0, 0.04, 1, 0.96])

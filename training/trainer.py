@@ -6,15 +6,15 @@ training run.
 
 Public API
 ----------
-    train_and_evaluate   — one Optuna trial: suggest → build → train → prune.
-    run_single_training  — one fixed-seed run with known params (robustness use).
-    Objective            — callable wrapper so Optuna can call the trial function.
-    print_best_callback  — Optuna study callback; prints only on new-best trials.
-    DEVICE               — module-level torch.device (cuda if available, else cpu).
+    train_and_evaluate   - one Optuna trial: suggest -> build -> train -> prune.
+    run_single_training  - one fixed-seed run with known params (robustness use).
+    Objective            - callable wrapper so Optuna can call the trial function.
+    print_best_callback  - Optuna study callback; prints only on new-best trials.
+    DEVICE               - module-level torch.device (cuda if available, else cpu).
 
 Imported by:
-    training/robustness.py  — run_single_training
-    training/pipeline.py    — Objective, print_best_callback, DEVICE
+    training/robustness.py  - run_single_training
+    training/pipeline.py    - Objective, print_best_callback, DEVICE
 """
 
 import os
@@ -46,7 +46,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. Core training & evaluation — one Optuna trial
+# 1. Core training & evaluation - one Optuna trial
 # ──────────────────────────────────────────────────────────────────────────────
 
 def train_and_evaluate(
@@ -62,8 +62,8 @@ def train_and_evaluate(
     the best validation MSE seen during training.
 
     Integrates two early-stopping mechanisms:
-        • Optuna pruning  — kills trials worse than the median at the current epoch.
-        • Patience        — kills trials that have plateaued for `patience` epochs.
+        - Optuna pruning  - kills trials worse than the median at the current epoch.
+        - Patience        - kills trials that have plateaued for `patience` epochs.
 
     The best weights seen during each trial are saved to output_dir so that
     export_digital_twin_package can retrieve the champion later without
@@ -71,7 +71,7 @@ def train_and_evaluate(
 
     Args:
         trial:        optuna.Trial object (passed automatically by study.optimize).
-        config (dict): Ablation step config — method, flags, dofs, discretization.
+        config (dict): Ablation step config - method, flags, dofs, discretization.
         dataset_name (str): Dataset sub-folder name (passed to get_or_create_cache).
         n_epochs (int): Maximum training epochs per trial.
         cache_dir (str): Cache directory for preprocessed arrays.
@@ -129,7 +129,7 @@ def train_and_evaluate(
             optimizer.step()
         scheduler.step()
 
-        # Validate — aggregate MSE (class-index for classification, % scour for
+        # Validate - aggregate MSE (class-index for classification, % scour for
         # regression); the single scalar Optuna minimises for both tasks.
         val_mse = task.objective_value(task.evaluate(model, val_loader, config, DEVICE))
 
@@ -177,7 +177,7 @@ def run_single_training(
         X       (np.ndarray): Memory-mapped feature array.
         y       (np.ndarray): Memory-mapped label array.
         seed    (int):        Random seed for this run.
-        n_epochs (int):       Training epochs (no early stopping — full run).
+        n_epochs (int):       Training epochs (no early stopping - full run).
 
     Returns:
         dict of validation metrics (see core.task.evaluate). Always carries
@@ -272,7 +272,7 @@ def print_best_callback(study, trial) -> None:
     """
     if study.best_trial.number != trial.number:
         return
-    tqdm.write(f"\n🏆 NEW BEST — Trial {trial.number}  MSE: {trial.value:.4f}")
+    tqdm.write(f"\n[BEST] NEW BEST - Trial {trial.number}  MSE: {trial.value:.4f}")
     params_str = ", ".join(f"{k}: {v}" for k, v in trial.params.items())
     tqdm.write(f"   Params: {params_str}\n")
 

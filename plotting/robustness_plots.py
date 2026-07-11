@@ -6,17 +6,17 @@ or multiple seeds rather than on a single model in isolation.
 
 Public API
 ----------
-    generate_optuna_robustness_plots — per-parameter slice plots for one study,
+    generate_optuna_robustness_plots - per-parameter slice plots for one study,
                                        showing how each hyperparameter relates
                                        to validation error across all trials.
 
-    plot_stochastic_summary          — cross-model boxplot comparison of the
+    plot_stochastic_summary          - cross-model boxplot comparison of the
                                        30-seed Monte Carlo distributions
                                        (MSE, MAE, Accuracy) for every model
                                        in the ablation grid that passed the
                                        robustness gatekeeper.
 
-    plot_parametric_summary          — per-hyperparameter line plots showing
+    plot_parametric_summary          - per-hyperparameter line plots showing
                                        how the champion's validation MSE,
                                        MAE, and Accuracy change under ±5/10 %
                                        perturbations.
@@ -28,7 +28,7 @@ This module always aggregates: across trials (slice plots), across models
 (stochastic summary), or across perturbation multipliers (parametric summary).
 
 Imported by:
-    training/pipeline.py — all three functions, at different points in
+    training/pipeline.py - all three functions, at different points in
                            execute_ablation_pipeline.
 """
 
@@ -116,7 +116,7 @@ def generate_optuna_robustness_plots(
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
 
-    print(f"    {len(param_cols)} slice plots saved → {slice_dir}")
+    print(f"    {len(param_cols)} slice plots saved -> {slice_dir}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -135,9 +135,9 @@ def plot_stochastic_summary(
     robustness distributions of every model in path_list for which a
     robustness_stochastic.json file exists.
 
-    Figure 1 — MSE (log scale) with 95 % UCB diamonds.
-    Figure 2 — MAE (linear scale).
-    Figure 3 — Accuracy (linear scale, y-axis 0–1).
+    Figure 1 - MSE (log scale) with 95 % UCB diamonds.
+    Figure 2 - MAE (linear scale).
+    Figure 3 - Accuracy (linear scale, y-axis 0-1).
 
     The Optuna lucky-score for each model is overlaid as a gold star so the
     gap between the one-shot Optuna result and the true stochastic mean is
@@ -148,7 +148,7 @@ def plot_stochastic_summary(
     raising an error, so partial ablation runs still produce useful plots.
 
     Args:
-        path_list (list[dict]):    The ablation grid — each dict must have a
+        path_list (list[dict]):    The ablation grid - each dict must have a
                                    'name' key matching an Optuna study name.
         db_storage (str):          Optuna storage URL for the relevant phase.
         experiment_root_dir (str): Root directory containing one sub-folder per
@@ -226,7 +226,7 @@ def plot_stochastic_summary(
         ylim=(0, 1.05),
     )
 
-    print(f"    MSE / MAE / Accuracy summary saved → {summary_output_dir}")
+    print(f"    MSE / MAE / Accuracy summary saved -> {summary_output_dir}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -277,7 +277,7 @@ def plot_parametric_summary(
 
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
         fig.suptitle(
-            f"Parametric sensitivity — {champion_name}: {param_name}",
+            f"Parametric sensitivity - {champion_name}: {param_name}",
             fontsize=16, fontweight='bold', y=1.05,
         )
 
@@ -290,7 +290,7 @@ def plot_parametric_summary(
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
 
-    print(f"    Parametric plots saved → {summary_output_dir}")
+    print(f"    Parametric plots saved -> {summary_output_dir}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
