@@ -237,3 +237,14 @@ presentation/
 # MATLAB autosave + generated output
 *.asv
 scour_MATLAB/Results/
+
+# Heavy run outputs copied from the Lab PC (6 GB each) — summaries are
+# force-added selectively; never commit the raw data/caches/databases
+results/Stage0/
+results/Final Results/
+
+# Generated Lab-PC code bundles (regenerable; distributed via Drive)
+multidamage_*.zip
+
+# Root-level temporary smoke/validation scripts
+/_*.py
