@@ -27,9 +27,18 @@ function [Sol, Calc, Train, Beam, Track] = B00_Calculations(Calc, Train, Track, 
 % Elements and coordinates
 [Beam] = B01_ElementsAndCoordinates(Beam,Calc);
 
-Beam.Prop.E_n(Beam.Prop.n_mod)=Beam.Prop.E*Beam.Prop.E_mod;
+% Legacy single-element E modifier (kept for backward compatibility;
+% inactive unless the caller sets n_mod/E_mod explicitly).
+if isfield(Beam.Prop,'n_mod') && isfield(Beam.Prop,'E_mod')
+    Beam.Prop.E_n(Beam.Prop.n_mod) = Beam.Prop.E*Beam.Prop.E_mod;
+end
 
-% Boundary conditions 
+% Crack damage on the BRIDGE beam only: local EI reduction (Sinha et al.).
+% Exact mirror of TTBI_2D/damage_config.py::apply_cracks. No-op when the
+% Damage struct carries no cracks.
+[Beam] = local_apply_cracks(Beam,Damage);
+
+% Boundary conditions
 [Beam,Damage] = B02_BoundaryConditions(Beam,Damage);
 % Beam system matrices (Mass and Stiffness)
 [Beam] = B03_BeamMatrices(Beam);
@@ -55,9 +64,10 @@ Track.Rail.Modal.w = [zeros(Track.Rail.Modal.num_rigid_modes,1),Beam.Modal.w(1:2
 [Track.Rail] = B24_BeamDamping(Track.Rail);
 
 % ---- Complete Model ----
-% System matrices
+% System matrices (Damage carries the per-passage TRACK-LAYER descriptors —
+% Damage.track: ballast patches / hanging sleepers / pad aging+failures)
 disp('Building model system matrices ...')
-[Model] = B54_ModelMatrices(Beam,Track,Calc);
+[Model] = B54_ModelMatrices(Beam,Track,Calc,Damage);
 % Model boundary conditions
 [Model] = B55_ModelBC(Model,Beam,Track);
 % Modal analysis of Model
@@ -77,10 +87,16 @@ fprintf('\b'); disp(' DONE');
 [Train.Veh] = B47_VehStaticLoads(Train.Veh,Calc);
 
 % ---- Irregularity profile ----
+% Rail-irregularity amplitude toggle (a damage/EOV feature) -> profile module.
+% Mirrors TTBI_2D/b00_calculations.py. Takes precedence over any static value
+% set in A04 (per-passage draws from A00 land here via the Damage struct).
+if isfield(Damage,'profile_intensity')
+    Calc.Profile.intensity = Damage.profile_intensity;
+end
 % Generation
 [Calc] = B19_GenerateProfile(Calc);
-% Assigning profile to each wheel
-[Calc] = B25_WheelProfiles(Calc,Train.Veh);
+% Assigning profile to each wheel (Damage may carry wheel OOR/flat draws)
+[Calc] = B25_WheelProfiles(Calc,Train.Veh,Damage);
 
 % -- Model visualization --
 % B67_PlotModelVisualization(Calc,Train.Veh,Track,Model);
@@ -115,6 +131,48 @@ disp(['Calculation time: ',num2str(round(toc,2)),'s']);
 [Sol] = B58_ResultsBeamSections(Sol,Beam,Calc);
 
 disp('All calculations finished sucessfully');
-C03_TTB_2D_Plots;
+% C03_TTB_2D_Plots;
 
 % ---- End of script ----
+
+% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+function [Beam] = local_apply_cracks(Beam,Damage)
+% Crack = local EI reduction (Sinha et al.): every BRIDGE element whose
+% midpoint lies within [loc-lc, loc+lc] has its second moment of area I_n
+% scaled by (1 - intensity). With lc <= 0 only the single element containing
+% `loc` is affected. Fernandes et al. (2025): intensities 0.14/0.22 on a
+% ~30 cm element. Exact mirror of TTBI_2D/damage_config.py::apply_cracks.
+
+if ~isfield(Damage,'crack_locs') || isempty(Damage.crack_locs)
+    return
+end
+locs = Damage.crack_locs(:)';
+intens = [];
+if isfield(Damage,'crack_intensity'), intens = Damage.crack_intensity(:)'; end
+if numel(intens) == 1
+    intens = repmat(intens, 1, numel(locs));
+end
+lc = 0;
+if isfield(Damage,'crack_lc'), lc = Damage.crack_lc; end
+
+acum = Beam.Mesh.Nodes.acum(:)';
+mid = (acum(1:end-1) + acum(2:end)) / 2;        % element midpoints [m]
+n_ele = numel(mid);
+
+for k = 1:numel(locs)
+    if k <= numel(intens), intensity = intens(k); else, intensity = 0; end
+    if intensity == 0
+        continue
+    end
+    if lc > 0
+        sel = find(abs(mid - locs(k)) <= lc);
+    else
+        [~,sel] = min(abs(mid - locs(k)));
+    end
+    sel = sel(sel >= 1 & sel <= n_ele);
+    if isempty(sel)
+        fprintf('B00/apply_cracks: crack at %g m hit no element - ignored.\n', locs(k));
+        continue
+    end
+    Beam.Prop.I_n(sel) = Beam.Prop.I_n(sel) * (1 - intensity);
+end

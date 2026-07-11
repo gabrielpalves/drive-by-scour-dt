@@ -1,8 +1,8 @@
-function [Calc, Beam, Track] = A04_Options(Beam, Track)
+function [Calc, Beam, Track] = A04_Options(Beam, Track, Profile_cfg)
 % Definition of addition relevant aspects of the model and calculation options
 
 % Not a function.
-% Defines the content of the variable Calc, 
+% Defines the content of the variable Calc,
 %   and modifies the content of variables Beam and Track.
 
 % *************************************************************************
@@ -13,12 +13,43 @@ function [Calc, Beam, Track] = A04_Options(Beam, Track)
 % *************************************************************************
 
 % ------------------------- Track irregularity ----------------------------
+% The profile MODE is chosen per-run in A00 and passed in as Profile_cfg
+% (optional 3rd argument; omitted -> legacy 'fixed'). Modes:
+%   'fixed'        legacy measured profile (Type 2) — the ablation baseline
+%   'fixed_scaled' measured profile x amplitude factor (Profile_cfg.intensity)
+%   'psd_fra'      profile REGENERATED from the FRA PSD with new random phases
+%                  on every call; severity = Profile_cfg.fra_class (1 = worst
+%                  track, 6 = best). Ref: Berawi (2013) doctoral thesis,
+%                  "Improving railway track maintenance using PSD".
+if nargin < 3 || isempty(Profile_cfg) || ~isfield(Profile_cfg, 'mode')
+    Profile_cfg = struct('mode', 'fixed');
+end
 
-% ---- Smooth ---- (Default)
-%Calc.Profile.Type = 0;
+switch Profile_cfg.mode
 
-% ---- Same profile (data set) ----
-Calc.Profile.Type = 2; 
+    case 'fixed'            % ---- Same profile (data set) ----
+        Calc.Profile.Type = 2;
+
+    case 'fixed_scaled'     % ---- Same profile x amplitude multiplier ----
+        Calc.Profile.Type = 2;
+        Calc.Profile.intensity = Profile_cfg.intensity;  % applied in B19
+
+    case 'psd_fra'          % ---- FRA PSD, per-class severity ----
+        % A_v per FRA track class 1..6 [cm^2 rad/m] (Berawi, "FRA v2" below)
+        A_v_classes = [1.2107, 1.0181, 0.6816, 0.5376, 0.2095, 0.0339];
+        Calc.Profile.Type = 1;      % Defined from PSD [m^3]
+        Calc.Profile.PSD_Y_fun = @(spaf,inputs) (inputs(1)*inputs(2)*inputs(3)^2)./((spaf.^2).*(spaf.^2+inputs(3)^2))*inputs(4);
+        Calc.Profile.inputs(1) = 0.25;                                  % k = Some constant
+        Calc.Profile.inputs(2) = A_v_classes(Profile_cfg.fra_class);    % A_v [cm^2 rad/m]
+        Calc.Profile.inputs(3) = 0.8245;                                % Omega_c [rad/m]
+        Calc.Profile.inputs(4) = 1e-4/(2*pi);   % Unit conversion [cm^2 = 10^(-4) m^2] and [rad = 1/(2*pi) cycles]
+        Calc.Profile.min_WaveLength = 1.524;    % [m]
+        Calc.Profile.max_WaveLength = 304.8;    % [m]
+        Calc.Profile.text = sprintf('FRA class %d', Profile_cfg.fra_class);
+
+    otherwise
+        error('A04_Options: unknown Profile_cfg.mode "%s"', Profile_cfg.mode);
+end
 
 % ---- FRA ---- 
 % Reference: Ladislav Fryba. Dynamics of Railway Bridges. Academia Praha, 1996
@@ -139,21 +170,25 @@ Calc.Options.calc_beam_modes = 0;   % In modal analysis, no modes are calculated
 %Calc.Plot.Veh.P05_ContactForce_x = 2;    % Vehicle vertical contact force in space (1 = Values; 2 = With 0 limit)
 
 % ---- Model ----
+% NOTE (batch safety): C03_TTB_2D_Plots runs after EVERY passage and never
+% closes its figures. With these flags ON, a dataset run (states x passages)
+% accumulates thousands of figures until MATLAB runs out of memory/crashes.
+% Keep them OFF for data generation; uncomment only for single-run debugging.
 
-Calc.Plot.Model.P00_ModelVisualization = 1;% Sketch of model before performing simulation
-Calc.Plot.Model.P01_ModelDef = 50;        % Model vertical deformation at X% of the total simulated time
+%Calc.Plot.Model.P00_ModelVisualization = 1;% Sketch of model before performing simulation
+%Calc.Plot.Model.P01_ModelDef = 50;        % Model vertical deformation at X% of the total simulated time
 %Calc.Plot.Model.P02_ModelRot = 10;        % Model rotation values at X% of the total simulated time
 
 % ---- Beam ----
-Calc.Plot.Beam.P01_DispContour = 1;          % Beam displacement contour plot
+%Calc.Plot.Beam.P01_DispContour = 1;          % Beam displacement contour plot
 %Calc.Plot.Beam.P02_StaticDispContour = 1;    % Beam static displacment contour plot
-Calc.Plot.Beam.P03_BMContour = 1;            % Beam Bending moment contour plot
-Calc.Plot.Beam.P04_StaticBMContour = 1;      % Beam Static Bending moment contour plot
+%Calc.Plot.Beam.P03_BMContour = 1;            % Beam Bending moment contour plot
+%Calc.Plot.Beam.P04_StaticBMContour = 1;      % Beam Static Bending moment contour plot
 %Calc.Plot.Beam.P05_ShearContour = 1;         % Beam Shear contour plot
 %Calc.Plot.Beam.P06_StaticShearContour = 1;   % Beam Static Shear contour plot
 %Calc.Plot.Beam.P07_VertAccContour = 1;       % Beam Vertical Acceleration contour plot
 %Calc.Plot.Beam.P08_Sections_BeamVertDisp = 1;% Beam vertical displacement at selected sections
-Calc.Plot.Beam.P09_Sections_BeamBM = 1;      % Beam Bending Moment at selected sections
+%Calc.Plot.Beam.P09_Sections_BeamBM = 1;      % Beam Bending Moment at selected sections
 %Calc.Plot.Beam.P10_Sections_BeamShear = 1;   % Beam Shear at selected sections
 %Calc.Plot.Beam.P11_Sections_BeamAcc = 1;     % Beam Acceleration at selected sections
 

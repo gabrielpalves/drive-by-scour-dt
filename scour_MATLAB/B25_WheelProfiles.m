@@ -1,6 +1,27 @@
-function [Calc] = B25_WheelProfiles(Calc,Veh)
+function [Calc] = B25_WheelProfiles(Calc,Veh,Damage)
 
 % Calculates the profile under each wheel
+%
+% Optional 3rd argument Damage may carry per-passage WHEEL damage descriptors
+% (Stage 3 EOVs; NOT labels) — literature-anchored, see
+% docs/stage3_alldamage_spec.md:
+%   Damage.oor_flats  : rows [veh, wheel, flat_length_m, depth_m, phase_rad]
+%                       -> periodic haversine dip, period 2*pi*R. Depth is
+%                       PRE-COMPUTED by the caller (fresh d=L^2/8R, run-in
+%                       d=L^2/16R) so B25 stays law-agnostic.
+%   Damage.oor_poly   : rows [veh, wheel, order_n, amp_m, phase_rad]
+%                       -> continuous polygonization sinusoid
+%                       amp*cos(n*x/R + phase).
+%   Damage.oor_radius : wheel radius R [m] (default 0.46)
+% Both are added BEFORE the derivatives so hd/hdd carry them automatically.
+% Mirrors TTBI_2D/b25_wheel_profiles.py.
+if nargin < 3, Damage = struct(); end
+has_flats = isfield(Damage,'oor_flats') && ~isempty(Damage.oor_flats);
+has_poly  = isfield(Damage,'oor_poly')  && ~isempty(Damage.oor_poly);
+oor_R = 0.46;
+if isfield(Damage,'oor_radius') && ~isempty(Damage.oor_radius)
+    oor_R = Damage.oor_radius;
+end
 
 % *************************************************************************
 % *** Script part of TTB-2D tool for Matlab environment.                ***
@@ -47,7 +68,38 @@ for veh_num = 1:Veh(1).Tnum
     Calc.Veh(veh_num).h_path(Calc.Veh(veh_num).x_path>Calc.Profile.x(end)) = ...
         Calc.Profile.h(end);
 
-    % 1st derivative in time 
+    % ---- Wheel flats + polygonization (per-passage EOVs; NOT labels) ----
+    % Added BEFORE the derivatives so hd/hdd carry them automatically.
+    if has_flats
+        rows = find(Damage.oor_flats(:,1) == veh_num)';
+        for r = rows
+            wheel = Damage.oor_flats(r,2);
+            if wheel < 1 || wheel > Veh(veh_num).Wheels.num, continue; end
+            lf    = Damage.oor_flats(r,3);      % flat length [m]
+            depth = Damage.oor_flats(r,4);      % pre-computed depth [m]
+            phase = Damage.oor_flats(r,5);      % phase [rad]
+            circ  = 2*pi*oor_R;                 % wheel circumference [m]
+            s = mod(Calc.Veh(veh_num).x_path(wheel,:) + phase/(2*pi)*circ, circ);
+            dip = -0.5*depth*(1 - cos(2*pi*s/lf)) .* (s < lf);
+            Calc.Veh(veh_num).h_path(wheel,:) = ...
+                Calc.Veh(veh_num).h_path(wheel,:) + dip;
+        end
+    end
+    if has_poly
+        rows = find(Damage.oor_poly(:,1) == veh_num)';
+        for r = rows
+            wheel = Damage.oor_poly(r,2);
+            if wheel < 1 || wheel > Veh(veh_num).Wheels.num, continue; end
+            n_ord = Damage.oor_poly(r,3);       % harmonic order
+            amp   = Damage.oor_poly(r,4);       % radius deviation [m]
+            phase = Damage.oor_poly(r,5);       % phase [rad]
+            Calc.Veh(veh_num).h_path(wheel,:) = ...
+                Calc.Veh(veh_num).h_path(wheel,:) + ...
+                amp*cos(n_ord*Calc.Veh(veh_num).x_path(wheel,:)/oor_R + phase);
+        end
+    end
+
+    % 1st derivative in time
     Calc.Veh(veh_num).hd_path = ...
         diff(Calc.Veh(veh_num).h_path,1,2)/Calc.Solver.dt;
     Calc.Veh(veh_num).hd_path = ...

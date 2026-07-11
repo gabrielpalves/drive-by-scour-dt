@@ -20,6 +20,15 @@ function [Calc] = B19_GenerateProfile(Calc)
 %   ... see script ...
 % -------------------------------------------------------------------------
 
+% Amplitude intensity multiplier (rail-irregularity damage/EOV toggle;
+% default 1 = unchanged). Captured BEFORE the Type-2 branch below replaces
+% Calc.Profile with the loaded struct. Mirrors TTBI_2D/b19_generate_profile.py.
+if isfield(Calc.Profile,'intensity')
+    profile_intensity = Calc.Profile.intensity;
+else
+    profile_intensity = 1;
+end
+
 % Profile sampling rate
 Calc.Profile.dx = min([min(abs(diff(Calc.Position.x))),Calc.Profile.min_dx]);
 
@@ -76,6 +85,14 @@ elseif Calc.Profile.Type == 2
     Calc.Profile = B;
    
 end % if Calc.Profile.Type
+
+% ---- Rail-irregularity intensity toggle ----
+% Applied AFTER generation/loading so it works for every profile type.
+% Mirrors TTBI_2D/b19_generate_profile.py (h = h * intensity).
+Calc.Profile.intensity = profile_intensity;
+if profile_intensity ~= 1
+    Calc.Profile.h = Calc.Profile.h * profile_intensity;
+end
 
 %---- Plotting profile ----
 if Calc.Plot.Profile_original == 1

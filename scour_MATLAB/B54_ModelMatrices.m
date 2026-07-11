@@ -1,6 +1,13 @@
-function [Model] = B54_ModelMatrices(Beam,Track,Calc)
+function [Model] = B54_ModelMatrices(Beam,Track,Calc,Damage)
 
 % Assembles the coupled model (Track+Beam) system matrices
+%
+% Optional 4th argument Damage may carry per-passage TRACK-LAYER damage
+% descriptors in Damage.track (ballast patches, hanging-sleeper groups,
+% rail-pad aging/failures) — see local_track_vectors below and
+% docs/stage3_alldamage_spec.md. Without it (or with Damage.track absent)
+% the assembled matrices are numerically identical to the legacy path.
+if nargin < 4, Damage = struct(); end
 
 % *************************************************************************
 % *** Script part of TTB-2D tool for Matlab environment.                ***
@@ -102,6 +109,14 @@ if Track.PadUnderSleeperOnBeam.included == 1
     Track.BallastOnBeam.Prop.k = Track.PadUnderSleeperOnBeam.Prop.k;
 end % if Track.PadUnderSleeperOnBeam.included == 1
 
+% ---- Per-sleeper track-layer property vectors (damage-aware EOVs) ----
+% Track-layer damage (Stage 3) enters HERE and only here: descriptors in
+% Damage.track are mapped onto per-sleeper stiffness/damping vectors using
+% the sleeper x-positions. Healthy (no descriptors) -> uniform vectors that
+% assemble numerically identical matrices to the legacy scalar path.
+% Mirrors TTBI_2D/b54_model_matrices.py::_track_vectors.
+[TrkV] = local_track_vectors(Track,Model,Calc,Damage);
+
 % ---------------------- Building Global matrices -------------------------
 
 % Initialize matrices
@@ -121,15 +136,15 @@ Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.rail,Track.Rail.Mesh.Kg);
 
 % Pads to rail DOF
 Model.Mesh.Cg = funAdd1(Model.Mesh.Cg,Model.Mesh.DOF.rail_vert_at_sleepers,...
-    funDiag(Track.Sleeper.Tnum,Track.Pad.Prop.c));
+    funDiag(Track.Sleeper.Tnum,TrkV.pad_c));
 Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.rail_vert_at_sleepers,...
-    funDiag(Track.Sleeper.Tnum,Track.Pad.Prop.k));
+    funDiag(Track.Sleeper.Tnum,TrkV.pad_k));
 
 % Pads to sleepers DOF
 Model.Mesh.Cg = funAdd1(Model.Mesh.Cg,Model.Mesh.DOF.sleepers,...
-    funDiag(Track.Sleeper.Tnum,Track.Pad.Prop.c));
+    funDiag(Track.Sleeper.Tnum,TrkV.pad_c));
 Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.sleepers,...
-    funDiag(Track.Sleeper.Tnum,Track.Pad.Prop.k));
+    funDiag(Track.Sleeper.Tnum,TrkV.pad_k));
 
 % Sleepers
 Model.Mesh.Mg = funAdd1(Model.Mesh.Mg,Model.Mesh.DOF.sleepers,...
@@ -137,39 +152,39 @@ Model.Mesh.Mg = funAdd1(Model.Mesh.Mg,Model.Mesh.DOF.sleepers,...
 
 % Ballast on approach to sleepers DOF
 Model.Mesh.Cg = funAdd1(Model.Mesh.Cg,Model.Mesh.DOF.sleepers_app,...
-    funDiag(Track.Sleeper.num_app,Track.Ballast.Prop.c));
+    funDiag(Track.Sleeper.num_app,TrkV.balA_c));
 Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.sleepers_app,...
-    funDiag(Track.Sleeper.num_app,Track.Ballast.Prop.k));
+    funDiag(Track.Sleeper.num_app,TrkV.balA_k));
 
 % Ballast on bridge to sleepers DOF
 Model.Mesh.Cg = funAdd1(Model.Mesh.Cg,Model.Mesh.DOF.sleepers_onbeam,...
-    funDiag(Track.Sleeper.num_onbeam,Track.BallastOnBeam.Prop.c));
+    funDiag(Track.Sleeper.num_onbeam,TrkV.balB_c));
 Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.sleepers_onbeam,...
-    funDiag(Track.Sleeper.num_onbeam,Track.BallastOnBeam.Prop.k));
+    funDiag(Track.Sleeper.num_onbeam,TrkV.balB_k));
 
 % Ballast after bridge to sleepers DOF
 Model.Mesh.Cg = funAdd1(Model.Mesh.Cg,Model.Mesh.DOF.sleepers_aft,...
-    funDiag(Track.Sleeper.num_aft,Track.Ballast.Prop.c));
+    funDiag(Track.Sleeper.num_aft,TrkV.balF_c));
 Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.sleepers_aft,...
-    funDiag(Track.Sleeper.num_aft,Track.Ballast.Prop.k));
+    funDiag(Track.Sleeper.num_aft,TrkV.balF_k));
 
 % Ballast on approach to Ballast DOF
 Model.Mesh.Cg = funAdd1(Model.Mesh.Cg,Model.Mesh.DOF.ballast_app,...
-    funDiag(Track.Sleeper.num_app,Track.Ballast.Prop.c));
+    funDiag(Track.Sleeper.num_app,TrkV.balA_c));
 Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.ballast_app,...
-    funDiag(Track.Sleeper.num_app,Track.Ballast.Prop.k));
+    funDiag(Track.Sleeper.num_app,TrkV.balA_k));
 
 % Ballast on bridge to Bridge DOF
 Model.Mesh.Cg = funAdd1(Model.Mesh.Cg,Model.Mesh.DOF.beam_vert_under_sleeper,...
-    funDiag(Track.Sleeper.num_onbeam,Track.BallastOnBeam.Prop.c));
+    funDiag(Track.Sleeper.num_onbeam,TrkV.balB_c));
 Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.beam_vert_under_sleeper,...
-    funDiag(Track.Sleeper.num_onbeam,Track.BallastOnBeam.Prop.k));
+    funDiag(Track.Sleeper.num_onbeam,TrkV.balB_k));
 
 % Ballast after bridge to Ballast DOF
 Model.Mesh.Cg = funAdd1(Model.Mesh.Cg,Model.Mesh.DOF.ballast_aft,...
-    funDiag(Track.Sleeper.num_aft,Track.Ballast.Prop.c));
+    funDiag(Track.Sleeper.num_aft,TrkV.balF_c));
 Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.ballast_aft,...
-    funDiag(Track.Sleeper.num_aft,Track.Ballast.Prop.k));
+    funDiag(Track.Sleeper.num_aft,TrkV.balF_k));
 
 % Ballast on approach
 Model.Mesh.Mg = funAdd1(Model.Mesh.Mg,Model.Mesh.DOF.ballast_app,...
@@ -206,27 +221,27 @@ Model.Mesh.Kg = funAdd1(Model.Mesh.Kg,Model.Mesh.DOF.ballast_aft,...
 
 % Rail and Sleepers
 Model.Mesh.Cg = funAdd2(Model.Mesh.Cg,Model.Mesh.DOF.rail_vert_at_sleepers,...
-    Model.Mesh.DOF.sleepers,-funDiag(Track.Sleeper.Tnum,Track.Pad.Prop.c));
+    Model.Mesh.DOF.sleepers,-funDiag(Track.Sleeper.Tnum,TrkV.pad_c));
 Model.Mesh.Kg = funAdd2(Model.Mesh.Kg,Model.Mesh.DOF.rail_vert_at_sleepers,...
-    Model.Mesh.DOF.sleepers,-funDiag(Track.Sleeper.Tnum,Track.Pad.Prop.k));
+    Model.Mesh.DOF.sleepers,-funDiag(Track.Sleeper.Tnum,TrkV.pad_k));
 
 % Sleepers and Ballast on approach
 Model.Mesh.Cg = funAdd2(Model.Mesh.Cg,Model.Mesh.DOF.sleepers_app,...
-    Model.Mesh.DOF.ballast_app,-funDiag(Track.Sleeper.num_app,Track.Ballast.Prop.c));
+    Model.Mesh.DOF.ballast_app,-funDiag(Track.Sleeper.num_app,TrkV.balA_c));
 Model.Mesh.Kg = funAdd2(Model.Mesh.Kg,Model.Mesh.DOF.sleepers_app,...
-    Model.Mesh.DOF.ballast_app,-funDiag(Track.Sleeper.num_app,Track.Ballast.Prop.k));
+    Model.Mesh.DOF.ballast_app,-funDiag(Track.Sleeper.num_app,TrkV.balA_k));
 
 % Sleepers and Beam
 Model.Mesh.Cg = funAdd2(Model.Mesh.Cg,Model.Mesh.DOF.sleepers_onbeam,...
-    Model.Mesh.DOF.beam_vert_under_sleeper,-funDiag(Track.Sleeper.num_onbeam,Track.BallastOnBeam.Prop.c));
+    Model.Mesh.DOF.beam_vert_under_sleeper,-funDiag(Track.Sleeper.num_onbeam,TrkV.balB_c));
 Model.Mesh.Kg = funAdd2(Model.Mesh.Kg,Model.Mesh.DOF.sleepers_onbeam,...
-    Model.Mesh.DOF.beam_vert_under_sleeper,-funDiag(Track.Sleeper.num_onbeam,Track.BallastOnBeam.Prop.k));
+    Model.Mesh.DOF.beam_vert_under_sleeper,-funDiag(Track.Sleeper.num_onbeam,TrkV.balB_k));
 
 % Sleepers and Ballast after bridge
 Model.Mesh.Cg = funAdd2(Model.Mesh.Cg,Model.Mesh.DOF.sleepers_aft,...
-    Model.Mesh.DOF.ballast_aft,-funDiag(Track.Sleeper.num_aft,Track.Ballast.Prop.c));
+    Model.Mesh.DOF.ballast_aft,-funDiag(Track.Sleeper.num_aft,TrkV.balF_c));
 Model.Mesh.Kg = funAdd2(Model.Mesh.Kg,Model.Mesh.DOF.sleepers_aft,...
-    Model.Mesh.DOF.ballast_aft,-funDiag(Track.Sleeper.num_aft,Track.Ballast.Prop.k));
+    Model.Mesh.DOF.ballast_aft,-funDiag(Track.Sleeper.num_aft,TrkV.balF_k));
 
 % Sparse matrix output
 Model.Mesh.Mg = sparse(Model.Mesh.Mg);
@@ -266,8 +281,84 @@ function [InM] = funAdd2(InM,ind1,ind2,AddM)
 function [OutM] = funDiag(size,value)
 
     % Subfunction that generates a diagonal matrix of dimensions "size"x"size"
-    % and with values "value"
-    
-    OutM = diag(ones(1,size))*value;
-    
+    % with values "value". Accepts a SCALAR (legacy: uniform diagonal) or a
+    % VECTOR of length "size" (per-sleeper damage-aware properties).
+
+    if isscalar(value)
+        OutM = diag(ones(1,size))*value;
+    else
+        OutM = diag(value(:).');
+    end
+
+function [V] = local_track_vectors(Track,Model,Calc,Damage)
+
+    % Per-sleeper track-layer property vectors from Damage.track descriptors.
+    % All descriptors use TRACK x-coordinates [m] (0..Calc.Profile.L; the
+    % bridge occupies [L_Approach, L_Approach+L_bridge]). Fields (optional):
+    %   .ballast_patches : rows [x_start, x_end, eta_k, eta_c] — fouling /
+    %                      degradation patch (stiffness+damping multipliers)
+    %   .hanging_groups  : rows [x_start, n_consec] — unsupported-sleeper
+    %                      group (linearised: ballast support -> ~0)
+    %   .pad_stiff_mult  : scalar chi_pad (global pad aging multiplier)
+    %   .pad_damp_mult   : scalar beta_pad
+    %   .pad_failures    : vector of x-positions of failed pads (k -> ~0)
+    % Healthy (no Damage.track) -> uniform vectors; the assembled matrices
+    % are numerically identical to the legacy scalar path.
+    % Mirror of TTBI_2D/b54_model_matrices.py::_track_vectors.
+
+    n = Track.Sleeper.Tnum;
+    x = Model.Mesh.XLoc.sleepers;            % [1 x n] sleeper positions [m]
+    mult_bal_k = ones(1,n); mult_bal_c = ones(1,n);
+    mult_pad_k = ones(1,n); mult_pad_c = ones(1,n);
+    KILL = 1e-6;    % "removed" support: not exactly 0 to keep Kg well-posed
+
+    if isfield(Damage,'track') && ~isempty(Damage.track)
+        T = Damage.track;
+        if isfield(T,'ballast_patches') && ~isempty(T.ballast_patches)
+            for r = 1:size(T.ballast_patches,1)
+                p = T.ballast_patches(r,:);
+                sel = (x >= p(1)) & (x <= p(2));
+                mult_bal_k(sel) = mult_bal_k(sel)*p(3);
+                mult_bal_c(sel) = mult_bal_c(sel)*p(4);
+            end
+        end
+        if isfield(T,'hanging_groups') && ~isempty(T.hanging_groups)
+            for r = 1:size(T.hanging_groups,1)
+                i0 = find(x >= T.hanging_groups(r,1) - Calc.Cte.tol,1,'first');
+                if isempty(i0), continue; end
+                idx = i0:min(i0 + T.hanging_groups(r,2) - 1, n);
+                mult_bal_k(idx) = KILL;
+                mult_bal_c(idx) = KILL;
+            end
+        end
+        if isfield(T,'pad_stiff_mult') && ~isempty(T.pad_stiff_mult)
+            mult_pad_k = mult_pad_k*T.pad_stiff_mult;
+        end
+        if isfield(T,'pad_damp_mult') && ~isempty(T.pad_damp_mult)
+            mult_pad_c = mult_pad_c*T.pad_damp_mult;
+        end
+        if isfield(T,'pad_failures') && ~isempty(T.pad_failures)
+            for r = 1:numel(T.pad_failures)
+                [~,i0] = min(abs(x - T.pad_failures(r)));
+                mult_pad_k(i0) = KILL;
+                mult_pad_c(i0) = KILL;
+            end
+        end
+    end
+
+    % Segment slices (approach / on-beam / after) — same indexing as the DOFs
+    i_app = 1:Track.Sleeper.num_app;
+    i_on  = Track.Sleeper.num_app + (1:Track.Sleeper.num_onbeam);
+    i_aft = Track.Sleeper.num_app + Track.Sleeper.num_onbeam + ...
+        (1:Track.Sleeper.num_aft);
+
+    V.pad_k  = Track.Pad.Prop.k          * mult_pad_k;         % full track
+    V.pad_c  = Track.Pad.Prop.c          * mult_pad_c;
+    V.balA_k = Track.Ballast.Prop.k      * mult_bal_k(i_app);  % approach
+    V.balA_c = Track.Ballast.Prop.c      * mult_bal_c(i_app);
+    V.balB_k = Track.BallastOnBeam.Prop.k* mult_bal_k(i_on);   % on bridge
+    V.balB_c = Track.BallastOnBeam.Prop.c* mult_bal_c(i_on);
+    V.balF_k = Track.Ballast.Prop.k      * mult_bal_k(i_aft);  % after
+    V.balF_c = Track.Ballast.Prop.c      * mult_bal_c(i_aft);
+
 % ---- End of function ----
