@@ -349,12 +349,16 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
 
     Generation is noise-free from stage1_crack onward (A00 use_signal_noise =
     false -> D01 adds nothing), so any noise a study needs is injected HERE,
-    where the model stays configurable per experiment and per channel — sensor
-    grade depends on the mounting position (EN 61373 vibration severity:
-    carbody < bogie < axle; see papers/'Confiabilidade Sensores MEMS
-    Ferroviários'). Deterministic (fixed RNG seed 42), so a cache rebuild
-    reproduces identical features; the cache stem carries a noise tag so noisy
-    and clean caches never collide.
+    where the model stays configurable per experiment and per channel.
+    Per-channel LEVELS must come from sensor DATASHEETS (noise density
+    [ug/rtHz] x sqrt(bandwidth) -> additive floor; e.g. the rail-qualified
+    IMUs in the reference shortlist). NOTE: EN 61373 position severities
+    (carbody < bogie < axle) describe the VIBRATION ENVIRONMENT for equipment
+    qualification - relevant to sensor RANGE selection and reliability/aging
+    (papers/'Confiabilidade Sensores MEMS Ferroviários'), NOT the acquisition
+    noise floor; do not scale noise by them. Deterministic (fixed RNG seed
+    42), so a cache rebuild reproduces identical features; the cache stem
+    carries a noise tag so noisy and clean caches never collide.
 
     Modes:
       {'mode': 'legacy_wheel', 'desvio': 0.05}

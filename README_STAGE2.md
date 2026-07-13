@@ -14,9 +14,10 @@
 > NOISE POLICY: generation is now **NOISE-FREE** (`use_signal_noise=false`;
 > folder var-tag `varVST`, no `N`). Measurement noise, when a study needs it,
 > is injected at LOAD time (`core/dataset.py`, `sensor_noise` config) — the
-> noise model stays configurable per channel (sensor grade differs by mounting
-> position, EN 61373: carbody < bogie < axle). The legacy D01 wheel-only model
-> is reproducible via `{"mode": "legacy_wheel", "desvio": 0.05}`.
+> noise model stays configurable per channel, with levels taken from sensor
+> DATASHEETS (noise floor; EN 61373 position severities describe the vibration
+> environment for qualification, not acquisition noise). The legacy D01
+> wheel-only model is reproducible via `{"mode": "legacy_wheel", "desvio": 0.05}`.
 
 Data generator (MATLAB) + ablation (Python), kept together for Google Drive.
 Extract **into the existing repo root on the Lab PC** (the folder with `data/`).

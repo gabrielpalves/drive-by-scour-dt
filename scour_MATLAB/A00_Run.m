@@ -85,11 +85,11 @@ end
 % NOISE POLICY 2026-07-12 (user decision): generation is NOISE-FREE from
 % stage1_crack onward. Measurement noise is injected at LOAD time instead
 % (core/dataset.py 'sensor_noise' config), where per-channel levels stay
-% configurable per experiment - sensor grade depends on mounting position
-% (EN 61373 vibration severity: carbody < bogie < axle; see
-% papers/'Confiabilidade Sensores MEMS Ferroviários'). Set true ONLY to
-% reproduce the legacy Stage-0/1 pipeline (wheel-only multiplicative noise
-% applied in D01; adds 'N' to the folder var_tag).
+% configurable per experiment - levels from sensor DATASHEETS (noise floor);
+% EN 61373 position severities describe the vibration ENVIRONMENT for
+% equipment qualification (range/reliability), NOT the acquisition noise.
+% Set true ONLY to reproduce the legacy Stage-0/1 pipeline (wheel-only
+% multiplicative noise applied in D01; adds 'N' to the folder var_tag).
 use_signal_noise = false;       % legacy toggle - keep FALSE (noise at load time)
 use_vehicle_variability = true; % Toggle vehicle property variability
 use_speed_variability = true;   % Toggle train speed variability

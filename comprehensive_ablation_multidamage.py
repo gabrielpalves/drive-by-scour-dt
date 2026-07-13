@@ -158,7 +158,15 @@ PAIR_DOFS = None
 # docs/framework_rationale.md 2026-07-12). DOF map: 0 CarBody_Vert,
 # 1 FrontBogie_Vert, 2 RearBogie_Vert, 3 Wheel1_Vert, 4 Wheel2_Vert,
 # 5 CarBody_Pitch, 6 FrontBogie_Pitch, 7 RearBogie_Pitch.
-EXTRA_PAIRS: list[list[int]] = []
+# L100 PILOT RESULT (2026-07-13): under heavy roughness EOV the mixed pair
+# FrontBogie_Vert+Wheel1_Vert BEAT the auto pair Wheel1+Wheel2 by 17% scour
+# MSE (105 vs 126) and +5pp localisation (0.797 vs 0.744), although
+# FrontBogie_Vert ALONE was collapse-level there (327) - the TSD-residual
+# fusion mechanism (wheel = profile reference, bogie = filtered response).
+# CarBody_Vert+Wheel1 was WORSE than wheel+wheel (156): the sprung partner
+# must sit LOW in the suspension chain. Keep the mixed pair in every stage
+# for chain-wide comparability.
+EXTRA_PAIRS: list[list[int]] = [[1, 3]]   # FrontBogie_Vert + Wheel1_Vert
 
 # Fresh-run tag (2026-07-12 user policy: re-runs start FROM SCRATCH, never
 # extend). When set (e.g. "v7"), every study/output name gets the suffix, so
@@ -174,6 +182,15 @@ RUN_TAG = ""
 # "desvio": 0.05} reproduces the legacy MATLAB D01 wheel-only model on
 # noise-free data. The cache stem is noise-tagged (clean/noisy never collide).
 SENSOR_NOISE = None
+
+
+def _cfg_suffix() -> str:
+    """Suffix appended to every study/config name. Keeps differently-configured
+    runs (load-time noise, fresh-run tag) in SEPARATE Optuna studies - without
+    it, re-running a stage with a different SENSOR_NOISE would silently RESUME
+    and extend studies whose earlier trials trained on differently-noised data."""
+    s = f"_nz-{SENSOR_NOISE['mode']}" if SENSOR_NOISE else ""
+    return s + (f"_{RUN_TAG}" if RUN_TAG else "")
 
 # Where the leaderboard + parity/leakage plots are written (stage-tagged).
 SUMMARY_DIR = os.path.join("results", f"{STAGE}_summary")
@@ -229,8 +246,7 @@ def make_config(arch: dict, dofs: list[int], seed: int) -> dict:
     """One experiment_path entry - a multi-output REGRESSION config."""
     dof_str = "_".join(str(d) for d in dofs)
     return {
-        "name":            (f"{arch['name_short']}_DOFs_{dof_str}_seed{seed}"
-                            + (f"_{RUN_TAG}" if RUN_TAG else "")),
+        "name":            f"{arch['name_short']}_DOFs_{dof_str}_seed{seed}{_cfg_suffix()}",
         "seed":            seed,
         "sensor_noise":    SENSOR_NOISE,
         "name_short":      arch["name_short"],
@@ -298,8 +314,7 @@ def auto_select_pair() -> list[int]:
         db, _, _ = define_save_locations(phase_label, DATASET, [dof], DISCRETIZATION)
         vals: list[float] = []
         for seed in SEEDS:
-            study_name = (f"{RANK_ARCH}_DOFs_{dof}_seed{seed}"
-                          + (f"_{RUN_TAG}" if RUN_TAG else ""))
+            study_name = f"{RANK_ARCH}_DOFs_{dof}_seed{seed}{_cfg_suffix()}"
             try:
                 study = optuna.load_study(study_name=study_name, storage=db)
                 vals.append(study.best_value)
