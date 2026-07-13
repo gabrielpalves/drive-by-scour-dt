@@ -32,7 +32,7 @@ clear; clc; close all
 %                         LAYER damage (ballast patches, hanging sleepers,
 %                         rail pads) + wheel OOR/flats. All nuisances, logged.
 %                         Spec: docs/stage3_alldamage_spec.md.
-STAGE = 'stage2_4span';
+STAGE = 'stage1_crack';
 
 % Track-layer / wheel-OOR EOV toggles (only stage3 turns them on)
 use_track_eov = false;
@@ -45,10 +45,19 @@ switch STAGE
     case 'stage1_bearing'
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='target'; use_crack_eov=false; profile_mode='fixed';
+    case 'stage1_crack'
+        % BRIDGE-damage EOV stage (Fernandes-comparable: scour + bearing +
+        % crack; rail-side EOVs enter at stage1_full). Crack is drawn per
+        % STATE (persistent condition; 2026-07-12 EOV design review).
+        damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
+        bearing_mode='target'; use_crack_eov=true;  profile_mode='fixed';
     case 'stage1_eov'
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='off';    use_crack_eov=true;  profile_mode='psd_fra';
     case 'stage1_full'
+        % stage1_crack + rail-profile EOV (per-STATE FRA-4 realization +
+        % per-passage jitter): the Stage-2 collapse ATTRIBUTION run on the
+        % known-good L60 geometry; also gates Stage 3.
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='target'; use_crack_eov=true;  profile_mode='psd_fra';
     case 'stage2_4span'
@@ -103,10 +112,15 @@ bearing_max       = 1e9;    % 'target' mode upper bound [Nm/rad] (1e9 = seized, 
 
 % ===== Confounder damages — EOV nuisance augmentation =====
 % use_crack_eov is set by the STAGE preset; these are its numeric knobs.
-% Cracks are NOT labels: when ON, each PASSAGE draws a random crack (domain
-% randomization); the network never estimates it. Semantics mirror
-% TTBI_2D/damage_config.py (local EI reduction, Sinha et al.).
-crack_p          = 1.0;           % probability a passage carries a crack
+% Cracks are NOT labels: the network never estimates them. EOV DESIGN REVIEW
+% 2026-07-12 (deep research, papers/'Drive-By Scour ML Literature Design'):
+% a crack is a PERSISTENT condition -> drawn once per damage STATE and held
+% for all its passages (crack_draw='per_state'), with prevalence ~0.25 (a
+% p=1.0 per-passage redraw deprives the model of any healthy-deck baseline
+% and is physically indefensible). Semantics mirror TTBI_2D/damage_config.py
+% (local EI reduction, Sinha et al.).
+crack_draw       = 'per_state';   % 'per_state' (persistent damage) | 'per_passage' (DEPRECATED)
+crack_p          = 0.25;          % P(state carries a crack); report: 20-30% [VERIFY vs sources]
 crack_frac_range = [0.10 0.90];   % crack location as a fraction of L
 crack_int_range  = [0.05 0.30];   % EI-loss fraction (Fernandes 2025: 0.14/0.22)
 crack_lc         = 0.0;           % half-length [m] each side; <=0 -> single element
@@ -115,15 +129,30 @@ crack_lc         = 0.0;           % half-length [m] each side; <=0 -> single ele
 % profile_mode is set by the STAGE preset; these are its numeric knobs.
 % 'fixed'        legacy measured profile — byte-identical baseline (Type 2).
 % 'fixed_scaled' measured profile x amplitude factor drawn per passage.
-% 'psd_fra'      profile REGENERATED per passage from the FRA PSD (new random
-%                phases -> no profile memorisation); severity = FRA class.
-profile_int_range   = [0.5 2.0];  % 'fixed_scaled' amplitude range
-profile_fra_classes = [4 5 6];    % 'psd_fra' class set sampled per passage
+% 'psd_fra'      profile REGENERATED from the FRA PSD; severity = FRA class.
+% EOV DESIGN REVIEW 2026-07-12: track geometry evolves over MGT, not between
+% trains (EN 13848-2 pass-to-pass repeatability <=0.5 mm @95%; Sato/Shenton) ->
+% ONE class + ONE phase realization drawn per damage STATE and held for its
+% passages (profile_draw='per_state'; B19 seeds the phase draw per state), plus
+% a small additive per-passage jitter (metrological repeatability / wander).
+% Class set FIXED at FRA class 4 = roughest geometry permissible at 70-90 km/h
+% (classes 5/6 are premium track, too smooth for a scour-prone regional line).
+% The old per-passage class+phase redraw over {4,5,6} is DEPRECATED (it is what
+% collapsed the sprung channels in the L100 Stage-2 pilot).
+profile_draw         = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
+profile_jitter_sd_mm = 0.5;          % per-passage additive white noise [mm] (EN 13848-2)
+profile_int_range    = [0.5 2.0];    % 'fixed_scaled' amplitude range
+profile_fra_classes  = 4;            % 'psd_fra' class set (scalar = fixed class)
 
 % ===== Track-layer damage EOVs (Stage 3; use_track_eov) =====
 % Verified sampling spec: docs/track_eov_sampling_spec.md (deep-research,
-% quote-checked). Per-passage randomized NUISANCES — logged, NOT labels.
+% quote-checked). Randomized NUISANCES — logged, NOT labels. EOV DESIGN REVIEW
+% 2026-07-12: ballast patches / hanging sleepers / pad aging are PERSISTENT
+% infrastructure conditions (same argument as crack/profile) -> drawn once per
+% damage STATE (track_draw='per_state'). Wheel OOR stays per-PASSAGE: each
+% passage plausibly is a different train of the fleet (vehicle variability).
 % Track x-coords: the bridge occupies [track_L_app, track_L_app+L_bridge].
+track_draw        = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
 track_L_app       = 30;          % = A04 minL_Approach (fixed, 50 sleepers)
 ballast_n_patches = [1 2];       % patches per passage, discrete uniform
 ballast_patch_len = [5 20];      % patch length U(5,20) m (cited)
@@ -247,10 +276,24 @@ switch bearing_mode
     case 'fixed',  if Bearing_Intensity > 0, bear_tag = 'ON'; else, bear_tag = 'OFF'; end
     case 'target', bear_tag = 'TGT';
 end
+% EOV tags: the ...ST suffix marks a PER-STATE draw (2026-07-12 design); the
+% legacy tags (crackON / prof-psd_fra / trackEOV) meant per-passage redraw, so
+% old folders remain distinguishable from new ones by name alone.
 eov_tag = '';
-if use_crack_eov,                  eov_tag = [eov_tag, '_crackON']; end
-if ~strcmp(profile_mode, 'fixed'), eov_tag = [eov_tag, '_prof-', profile_mode]; end
-if use_track_eov,                  eov_tag = [eov_tag, '_trackEOV']; end
+if use_crack_eov
+    if strcmp(crack_draw, 'per_state'), eov_tag = [eov_tag, '_crackST'];
+    else,                               eov_tag = [eov_tag, '_crackON']; end
+end
+if ~strcmp(profile_mode, 'fixed')
+    eov_tag = [eov_tag, '_prof-', profile_mode];
+    if strcmp(profile_mode, 'psd_fra') && strcmp(profile_draw, 'per_state')
+        eov_tag = [eov_tag, 'ST'];
+    end
+end
+if use_track_eov
+    if strcmp(track_draw, 'per_state'), eov_tag = [eov_tag, '_trackEOVST'];
+    else,                               eov_tag = [eov_tag, '_trackEOV']; end
+end
 if use_oor_eov,                    eov_tag = [eov_tag, '_oorON']; end
 supp_tag = strjoin(string(scour_supports), '-');
 case_name = sprintf('L%g_%dspan_%s_scourS%s_bear%s%s_dano0-%gpct_states%d_Npass%d_var%s', ...
@@ -270,13 +313,15 @@ case_info = struct( ...
     'bearing_mode', bearing_mode, ...
     'bearing_intensity_Nm_rad', Bearing_Intensity, ...
     'bearing_max_Nm_rad', bearing_max, ...
-    'use_crack_eov', use_crack_eov, 'crack_p', crack_p, ...
+    'use_crack_eov', use_crack_eov, 'crack_draw', crack_draw, ...
+    'crack_p', crack_p, ...
     'crack_frac_range', mat2str(crack_frac_range), ...
     'crack_int_range', mat2str(crack_int_range), 'crack_lc', crack_lc, ...
-    'profile_mode', profile_mode, ...
+    'profile_mode', profile_mode, 'profile_draw', profile_draw, ...
+    'profile_jitter_sd_mm', profile_jitter_sd_mm, ...
     'profile_int_range', mat2str(profile_int_range), ...
     'profile_fra_classes', mat2str(profile_fra_classes), ...
-    'use_track_eov', use_track_eov, ...
+    'use_track_eov', use_track_eov, 'track_draw', track_draw, ...
     'ballast_patch_len', mat2str(ballast_patch_len), ...
     'hang_group_size', mat2str(hang_group_size), ...
     'pad_p_fail', pad_p_fail, ...
@@ -355,12 +400,20 @@ parfor DC = 1:n_states
     Damage.bearing_right = bear_vec(2);
     % ---------------------------------------------------------------------
 
-    % Per-passage nuisance-EOV logs (saved with the file for traceability;
-    % they are NOT labels)
+    % Nuisance-EOV logs (saved with the file for traceability; NOT labels).
+    % Kept per-passage-shaped even for per-STATE draws (rows then repeat), so
+    % downstream loaders read old and new datasets identically.
     CrackLog   = zeros(Npass, 3);             % [loc_m, EI-loss frac, lc_m]
     ProfileLog = ones(Npass, 1);              % intensity or FRA class (mode-dep.)
     TrackLog   = cell(Npass, 1);              % Damage.track struct per passage
     OORLog     = cell(Npass, 1);              % Damage.oor rows per passage
+
+    % Per-STATE EOV state (2026-07-12 design review: persistent conditions -
+    % crack, profile realization, track layer - are drawn ONCE per damage
+    % state at j_pass==1 and HELD; wheel OOR stays per-passage = a different
+    % train of the fleet each passage). Pre-initialised for parfor analysis.
+    state_fra_class = profile_fra_classes(1);
+    Tk = struct();
 
     % Pre-allocate LHS for this specific damage case (speed/temperature)
     lhs_matrix = lhsdesign(2, Npass);
@@ -407,34 +460,65 @@ parfor DC = 1:n_states
         % Modulus of elasticity temperature adjustment
         Beam_local.Prop.E = Beam_local.Prop.E - Beam_local.Prop.E * 0.003 * (Temperatura(j_pass)-15);
 
-        % --- Per-passage nuisance-EOV draws (domain randomization) --------
-        % Crack: random location + intensity each passage (applied in B00 as
-        % a local EI reduction; NOT a label).
-        if use_crack_eov && rand() <= crack_p
-            c_loc = (crack_frac_range(1) + diff(crack_frac_range)*rand()) * L_bridge;
-            c_int = crack_int_range(1) + diff(crack_int_range)*rand();
-            Damage.crack_locs      = c_loc;
-            Damage.crack_intensity = c_int;
-            Damage.crack_lc        = crack_lc;
-            CrackLog(j_pass, :) = [c_loc, c_int, crack_lc];
-        else
+        % --- Nuisance-EOV draws (domain randomization) --------------------
+        % PERSISTENT conditions (crack, profile realization, track layer) are
+        % drawn once per STATE at j_pass==1 and HELD for all its passages
+        % ('per_state'; 2026-07-12 design review). The 'per_passage' branches
+        % (redraw every passage) are DEPRECATED - kept only to reproduce
+        % legacy datasets such as the L100 Stage-2 pilot.
+        % Crack: local EI reduction applied in B00; NOT a label.
+        if use_crack_eov && (strcmp(crack_draw, 'per_passage') || j_pass == 1)
+            if rand() <= crack_p
+                c_loc = (crack_frac_range(1) + diff(crack_frac_range)*rand()) * L_bridge;
+                c_int = crack_int_range(1) + diff(crack_int_range)*rand();
+                Damage.crack_locs      = c_loc;
+                Damage.crack_intensity = c_int;
+                Damage.crack_lc        = crack_lc;
+            else
+                Damage.crack_locs      = [];
+                Damage.crack_intensity = [];
+                Damage.crack_lc        = 0;
+            end
+        elseif ~use_crack_eov
             Damage.crack_locs      = [];
             Damage.crack_intensity = [];
             Damage.crack_lc        = 0;
+        end   % per_state & j_pass>1: Damage.crack_* persists from j_pass==1
+        if ~isempty(Damage.crack_locs)
+            CrackLog(j_pass, :) = [Damage.crack_locs, Damage.crack_intensity, ...
+                                   Damage.crack_lc];
         end
-        % Rail profile: amplitude factor or FRA class drawn per passage.
+        % Rail profile: amplitude factor or FRA class + phase realization.
         Profile_cfg = struct('mode', profile_mode);
         if strcmp(profile_mode, 'fixed_scaled')
             Damage.profile_intensity = profile_int_range(1) + diff(profile_int_range)*rand();
             ProfileLog(j_pass) = Damage.profile_intensity;
         elseif strcmp(profile_mode, 'psd_fra')
-            Profile_cfg.fra_class = profile_fra_classes(randi(numel(profile_fra_classes)));
+            if strcmp(profile_draw, 'per_state')
+                % ONE class + ONE phase realization per state: class drawn
+                % from the state stream at j_pass==1; phases locked via a
+                % per-state seed consumed inside B19 (which saves/restores
+                % the passage stream); 0.5 mm additive jitter re-drawn per
+                % passage in B19 (EN 13848-2 repeatability).
+                if j_pass == 1
+                    state_fra_class = profile_fra_classes(randi(numel(profile_fra_classes)));
+                end
+                Profile_cfg.fra_class   = state_fra_class;
+                Profile_cfg.phase_seed  = 1e9 + damage_seed*100000 + DC;
+                Profile_cfg.jitter_sd_m = profile_jitter_sd_mm / 1000;
+            else   % DEPRECATED per-passage class + phase redraw
+                Profile_cfg.fra_class = profile_fra_classes(randi(numel(profile_fra_classes)));
+            end
             ProfileLog(j_pass) = Profile_cfg.fra_class;
         end
-        % Track-layer damage: per-passage descriptors (consumed by B54; see
+        % Track-layer damage descriptors (consumed by B54; see
         % docs/track_eov_sampling_spec.md). x-coords: bridge at
         % [track_L_app, track_L_app+L_bridge]; abutments = the transitions.
+        % Persistent infrastructure condition -> drawn at j_pass==1 and HELD
+        % when track_draw='per_state' (the Tk struct persists across the
+        % passage loop); 'per_passage' redraw is DEPRECATED.
         if use_track_eov
+          if strcmp(track_draw, 'per_passage') || j_pass == 1
             Tk = struct();
             % -- ballast fouling/degradation patches --
             np_ = randi(ballast_n_patches);
@@ -476,6 +560,7 @@ parfor DC = 1:n_states
             Tk.ballast_patches = P_;   Tk.hanging_groups = H_;
             Tk.pad_stiff_mult  = chi_; Tk.pad_damp_mult  = beta_;
             Tk.pad_failures    = fx_;
+          end   % per_state & j_pass>1: Tk persists from j_pass==1
             Damage.track = Tk;
             TrackLog{j_pass} = Tk;
         else

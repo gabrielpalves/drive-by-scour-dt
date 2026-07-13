@@ -30,7 +30,16 @@ else
 end
 
 % Profile sampling rate
-Calc.Profile.dx = min([min(abs(diff(Calc.Position.x))),Calc.Profile.min_dx]);
+if isfield(Calc.Profile,'phase_seed') && ~isempty(Calc.Profile.phase_seed)
+    % Per-STATE profile lock (2026-07-12 EOV design): the sampling grid must
+    % be SPEED-INDEPENDENT so the seeded phase draw below reproduces the
+    % identical physical realization on every passage of the state (the
+    % default dx tracks Position.x = v*dt, which varies with train speed).
+    % min_dx is fixed per case (B07), so nx and N are too.
+    Calc.Profile.dx = Calc.Profile.min_dx;
+else
+    Calc.Profile.dx = min([min(abs(diff(Calc.Position.x))),Calc.Profile.min_dx]);
+end
 
 Calc.Profile.x = (Calc.Position.x(1):Calc.Profile.dx:Calc.Profile.L);
 Calc.Profile.nx = length(Calc.Profile.x);
@@ -64,8 +73,20 @@ elseif Calc.Profile.Type == 1
     PSD_Y(PSD_X>max_spaf) = 0;
 
     % ---- Generating Output ----
-    % Profile elevation
-    [Calc.Profile.h] = PSD2profile(PSD_Y,N,Calc.Profile.x);
+    % Profile elevation. If a phase_seed is set (per-STATE profile lock,
+    % 2026-07-12 EOV design review), the random phases come from a stream
+    % seeded once per damage state -> every passage of that state rides the
+    % SAME track realization (EN 13848-2: pass-to-pass geometry repeatability
+    % <=0.5 mm @95%). The caller's RNG stream is saved/restored so all other
+    % per-passage draws are unaffected.
+    if isfield(Calc.Profile,'phase_seed') && ~isempty(Calc.Profile.phase_seed)
+        rng_state_ = rng;
+        rng(Calc.Profile.phase_seed);
+        [Calc.Profile.h] = PSD2profile(PSD_Y,N,Calc.Profile.x);
+        rng(rng_state_);
+    else
+        [Calc.Profile.h] = PSD2profile(PSD_Y,N,Calc.Profile.x);
+    end
     % PSD
     Calc.Profile.PSD_X = PSD_X;
     Calc.Profile.PSD_Y = PSD_Y;
@@ -92,6 +113,16 @@ end % if Calc.Profile.Type
 Calc.Profile.intensity = profile_intensity;
 if profile_intensity ~= 1
     Calc.Profile.h = Calc.Profile.h * profile_intensity;
+end
+
+% ---- Per-passage profile jitter (2026-07-12 EOV design review) ----
+% Additive white noise on top of the (per-state locked) realization:
+% pass-to-pass metrological repeatability / minor wheel wander (EN 13848-2
+% D1 longitudinal-level repeatability <=0.5 mm @95%). Drawn from the CURRENT
+% per-passage RNG stream, so it DIFFERS passage to passage by construction.
+if isfield(Calc.Profile,'jitter_sd_m') && Calc.Profile.jitter_sd_m > 0
+    Calc.Profile.h = Calc.Profile.h + ...
+        Calc.Profile.jitter_sd_m * randn(size(Calc.Profile.h));
 end
 
 %---- Plotting profile ----
