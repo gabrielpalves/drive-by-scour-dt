@@ -337,7 +337,45 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
         bt = config.get('bearing_targets')
         if bt:   # Stage 1 bearing heads -> distinct cache from the scour-only one
             stem += "_b" + "_".join(str(b) for b in bt)
+    sn = config.get('sensor_noise')
+    if sn:   # load-time noise injection -> its own cache, never collides with clean
+        stem += f"_noise-{sn['mode']}" + (f"-{sn['desvio']}" if 'desvio' in sn else "")
     return stem
+
+
+def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray:
+    """
+    Load-time measurement-noise injection (noise policy 2026-07-12).
+
+    Generation is noise-free from stage1_crack onward (A00 use_signal_noise =
+    false -> D01 adds nothing), so any noise a study needs is injected HERE,
+    where the model stays configurable per experiment and per channel — sensor
+    grade depends on the mounting position (EN 61373 vibration severity:
+    carbody < bogie < axle; see papers/'Confiabilidade Sensores MEMS
+    Ferroviários'). Deterministic (fixed RNG seed 42), so a cache rebuild
+    reproduces identical features; the cache stem carries a noise tag so noisy
+    and clean caches never collide.
+
+    Modes:
+      {'mode': 'legacy_wheel', 'desvio': 0.05}
+          The legacy MATLAB D01 model: multiplicative gaussian
+          (std = desvio·|signal|) on the WHEEL channels only (global DOFs 3,4).
+          Reproduces the Stage-0/1 training distribution on noise-free data.
+    Per-channel additive noise-floor modes: add here when the noise-robustness
+    arm lands (anchor levels to the rail-qualified IMU datasheets in papers/).
+    """
+    rng = np.random.default_rng(42)
+    X = np.array(X, dtype=np.float32, copy=True)
+    if sn['mode'] == 'legacy_wheel':
+        desvio = float(sn.get('desvio', 0.05))
+        for i, d in enumerate(dofs):
+            if d in (3, 4):   # wheel channels only
+                X[:, i, :] += (desvio * X[:, i, :] *
+                               rng.standard_normal(X[:, i, :].shape)
+                               .astype(np.float32))
+    else:
+        raise ValueError(f"unknown sensor_noise mode {sn['mode']!r}")
+    return X
 
 
 def get_or_create_cache(
@@ -410,6 +448,12 @@ def get_or_create_cache(
         bearing_targets=config.get('bearing_targets') if regression else None,
         bearing_max=config.get('bearing_max') if regression else None,
     )
+
+    # Optional load-time sensor noise (config['sensor_noise']; None = the
+    # noise-free chain default). Applied to the RAW signals, before
+    # preprocessing/PAA, exactly where MATLAB D01 used to apply it.
+    if config.get('sensor_noise'):
+        X_raw = _inject_sensor_noise(X_raw, config['dofs'], config['sensor_noise'])
 
     # Canonical train partition for leak-free scaler fitting (seed fixed at 42)
     all_indices          = np.arange(len(y_raw))
