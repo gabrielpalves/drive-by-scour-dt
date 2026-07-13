@@ -1,4 +1,4 @@
-# Multi-damage bundle v7 — the remaining campaign (2026-07-12 EOV redesign)
+# Multi-damage bundle v8 — the remaining campaign (2026-07-12 EOV + noise redesign)
 
 > UPDATE 2026-07-12: Stage 1 is DONE + ANALYSED (bearing-head CONFIRMED).
 > The first Stage-2 run is DEPRECATED — it was generated with the pre-fix
@@ -10,6 +10,13 @@
 > STATE and held for its 50 passages**; profile class is FIXED at FRA 4 with
 > 0.5 mm per-passage jitter; crack prevalence is 0.25 (was 1.0/passage).
 > New folder tags: `crackST`, `prof-psd_fraST`, `trackEOVST`.
+>
+> NOISE POLICY: generation is now **NOISE-FREE** (`use_signal_noise=false`;
+> folder var-tag `varVST`, no `N`). Measurement noise, when a study needs it,
+> is injected at LOAD time (`core/dataset.py`, `sensor_noise` config) — the
+> noise model stays configurable per channel (sensor grade differs by mounting
+> position, EN 61373: carbody < bogie < axle). The legacy D01 wheel-only model
+> is reproducible via `{"mode": "legacy_wheel", "desvio": 0.05}`.
 
 Data generator (MATLAB) + ablation (Python), kept together for Google Drive.
 Extract **into the existing repo root on the Lab PC** (the folder with `data/`).
@@ -27,9 +34,12 @@ leaderboard gets one row per seed plus a seed-aggregated
 `leaderboard_median.csv` (median + IQR; the paper-facing table). The train/val
 split is fixed (random_state=42), so seed spread = init/HPO variance only.
 `EXTRA_PAIRS` lets a stage run designed pairs besides the auto top-2.
-**Warning:** re-running an already-finished stage with this grid EXTENDS its
-studies (+25 trials each) and trains 2 extra seeds — do that only deliberately
-(see "optional Stage-1 extension" below).
+**Re-run policy (user decision 2026-07-12): NEVER extend existing studies.**
+To re-ablate a dataset that already holds studies, set `RUN_TAG` (e.g. `"v8"`)
+— every study/output name gets the suffix, so fresh full-budget studies train
+from scratch while the old DB rows and weights stay untouched (provenance).
+Without a tag, the pipeline resumes/extends whatever it finds — only use that
+to CONTINUE an interrupted run of the same grid.
 
 ## Run order
 
@@ -56,7 +66,7 @@ U(0.1,0.9)·L), profile FIXED. This is the Fernandes-comparable stage (scour +
 bearing + crack) and isolates the crack effect from the profile effect.
 Expected folder:
 ```
-L60_3span_multi_scour_scourS2-3_bearTGT_crackST_dano0-60pct_states267_Npass50_varNVST
+L60_3span_multi_scour_scourS2-3_bearTGT_crackST_dano0-60pct_states267_Npass50_varVST
 ```
 (`states267` = 17 anchors + 250 LHS — CONFIRM against what A00 writes.)
 
@@ -66,7 +76,7 @@ FRA-class-4 realization per state** (phases locked via a per-state seed in
 B19) + 0.5 mm additive per-passage jitter. This is the Stage-2 collapse
 ATTRIBUTION run on the known-good L60 geometry. Expected folder:
 ```
-L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states267_Npass50_varNVST
+L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states267_Npass50_varVST
 ```
 
 ### 4. MATLAB — REGENERATE Stage 2 at L=99.6 (revised EOVs)
@@ -76,7 +86,7 @@ a floating-point tie at the middle support, which is precisely what the
 deprecated first run used), scour piers [2 3 4] + bearing + revised EOVs.
 Expected folder:
 ```
-L99.6_4span_multi_scour_scourS2-3-4_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states271_Npass50_varNVST
+L99.6_4span_multi_scour_scourS2-3-4_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states271_Npass50_varVST
 ```
 (`states271` = 21 anchors + 250 LHS.)
 
@@ -86,7 +96,7 @@ per-STATE**: ballast patches, hanging-sleeper groups, pad aging/failures) +
 wheel OOR/flats (still per-PASSAGE = a different train of the fleet each
 passage). Expected folder:
 ```
-L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_trackEOVST_oorON_dano0-60pct_states267_Npass50_varNVST
+L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_trackEOVST_oorON_dano0-60pct_states267_Npass50_varVST
 ```
 
 ### 6. Python — ablate each stage as its data lands
@@ -98,12 +108,13 @@ only, 100 trials × 3 seeds; results → `results/<STAGE>_summary/`). Read each
 re-run its champion config with `n_segments` 1024/2048 BEFORE blaming the EOVs
 (PAA-resolution contingency).
 
-### Optional — Stage-1 consistency extension
-Re-running `STAGE = "stage1_bearing"` with the new grid extends every Stage-1
-champion study to 100 trials and adds seeds 1337/2026 (S2V studies stay
-untouched — champion-only gate). Improves the paper's architecture-consistency
-table; run it whenever the PC has idle time. The published 75-trial numbers
-stay reproducible from the committed database.
+### Optional — Stage-1 consistency re-run (from scratch)
+To buy architecture-consistency evidence for the paper, re-run
+`STAGE = "stage1_bearing"` with `RUN_TAG = "v8"`: fresh 100-trial × 3-seed
+champion studies train from scratch on the existing Stage-1 data (the
+published 75-trial studies and their DB rows stay untouched). Run it whenever
+the PC has idle time; compare the new median leaderboard against the published
+Stage-1 numbers.
 
 ## Requirements
 `torch, optuna, scikit-learn, numpy, scipy, joblib, matplotlib, seaborn,
