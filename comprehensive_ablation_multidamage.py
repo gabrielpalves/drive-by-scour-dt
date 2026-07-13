@@ -99,7 +99,7 @@ elif STAGE == "stage1_crack":
     # A00 STAGE='stage1_crack' -> Stage-1 bridge/targets + per-STATE crack EOV
     # (p=0.25), profile FIXED. The BRIDGE-damage stage (Fernandes-comparable:
     # scour + bearing + crack); rail-side EOVs enter at stage1_full.
-    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_dano0-60pct_states267_Npass50_varNVST"  # CONFIRM
+    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_dano0-60pct_states267_Npass50_varVST"  # CONFIRM (noise-free gen: no N in var_tag)
     TARGET_SUPPORTS = [2, 3]
     BEARING_TARGETS = ["left", "right"]
 elif STAGE == "stage1_full":
@@ -107,7 +107,7 @@ elif STAGE == "stage1_full":
     # PSD realization drawn per STATE (fixed phases) + 0.5 mm per-passage
     # jitter. Isolates the EOV effect on the known-good L60 geometry (the
     # Stage-2 collapse attribution run) and gates Stage 3.
-    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states267_Npass50_varNVST"  # CONFIRM
+    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states267_Npass50_varVST"  # CONFIRM (noise-free gen: no N in var_tag)
     TARGET_SUPPORTS = [2, 3]
     BEARING_TARGETS = ["left", "right"]
 elif STAGE == "stage3_alldamage":
@@ -115,7 +115,7 @@ elif STAGE == "stage3_alldamage":
     # patches, hanging sleepers, pads; per STATE) + wheel OOR (per passage =
     # fleet variability). All nuisances (logged, not labels); heads = Stage 1.
     # states267 = 17 anchors + 250 LHS; CONFIRM against the folder A00 writes.
-    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_trackEOVST_oorON_dano0-60pct_states267_Npass50_varNVST"  # CONFIRM
+    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_trackEOVST_oorON_dano0-60pct_states267_Npass50_varVST"  # CONFIRM (noise-free gen: no N in var_tag)
     TARGET_SUPPORTS = [2, 3]
     BEARING_TARGETS = ["left", "right"]
 elif STAGE == "stage2_4span":
@@ -124,7 +124,7 @@ elif STAGE == "stage2_4span":
     # per-STATE crack + per-STATE FRA-4 profile EOVs.
     # states271 = 21 anchors (1 healthy + 3 scour piers x 4 levels + 2 bearings x 4
     # levels) + 250 LHS; CONFIRM the states<N> count against the folder A00 writes.
-    DATASET         = "L99.6_4span_multi_scour_scourS2-3-4_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states271_Npass50_varNVST"  # CONFIRM
+    DATASET         = "L99.6_4span_multi_scour_scourS2-3-4_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states271_Npass50_varVST"  # CONFIRM (noise-free gen: no N in var_tag)
     TARGET_SUPPORTS = [2, 3, 4]
     BEARING_TARGETS = ["left", "right"]
 else:
@@ -159,6 +159,21 @@ PAIR_DOFS = None
 # 1 FrontBogie_Vert, 2 RearBogie_Vert, 3 Wheel1_Vert, 4 Wheel2_Vert,
 # 5 CarBody_Pitch, 6 FrontBogie_Pitch, 7 RearBogie_Pitch.
 EXTRA_PAIRS: list[list[int]] = []
+
+# Fresh-run tag (2026-07-12 user policy: re-runs start FROM SCRATCH, never
+# extend). When set (e.g. "v7"), every study/output name gets the suffix, so
+# re-ablating a dataset that already holds studies trains NEW full-budget
+# studies while the old DB rows and weights stay untouched (provenance).
+# Leave "" for the first run on a new dataset (nothing to collide with).
+RUN_TAG = ""
+
+# Load-time sensor noise (None = the noise-free chain default). Generation is
+# NOISE-FREE from stage1_crack onward (A00 use_signal_noise=false; folder tag
+# varVST); when a study needs measurement noise, inject it here - see
+# core/dataset._inject_sensor_noise. E.g. {"mode": "legacy_wheel",
+# "desvio": 0.05} reproduces the legacy MATLAB D01 wheel-only model on
+# noise-free data. The cache stem is noise-tagged (clean/noisy never collide).
+SENSOR_NOISE = None
 
 # Where the leaderboard + parity/leakage plots are written (stage-tagged).
 SUMMARY_DIR = os.path.join("results", f"{STAGE}_summary")
@@ -214,8 +229,10 @@ def make_config(arch: dict, dofs: list[int], seed: int) -> dict:
     """One experiment_path entry - a multi-output REGRESSION config."""
     dof_str = "_".join(str(d) for d in dofs)
     return {
-        "name":            f"{arch['name_short']}_DOFs_{dof_str}_seed{seed}",
+        "name":            (f"{arch['name_short']}_DOFs_{dof_str}_seed{seed}"
+                            + (f"_{RUN_TAG}" if RUN_TAG else "")),
         "seed":            seed,
+        "sensor_noise":    SENSOR_NOISE,
         "name_short":      arch["name_short"],
         "method":          arch["method"],
         "dofs":            list(dofs),
@@ -281,7 +298,8 @@ def auto_select_pair() -> list[int]:
         db, _, _ = define_save_locations(phase_label, DATASET, [dof], DISCRETIZATION)
         vals: list[float] = []
         for seed in SEEDS:
-            study_name = f"{RANK_ARCH}_DOFs_{dof}_seed{seed}"
+            study_name = (f"{RANK_ARCH}_DOFs_{dof}_seed{seed}"
+                          + (f"_{RUN_TAG}" if RUN_TAG else ""))
             try:
                 study = optuna.load_study(study_name=study_name, storage=db)
                 vals.append(study.best_value)
