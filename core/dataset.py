@@ -362,11 +362,19 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
 
     Modes:
       {'mode': 'legacy_wheel', 'desvio': 0.05}
-          The legacy MATLAB D01 model: multiplicative gaussian
+          The legacy MATLAB D01 noise: multiplicative gaussian
           (std = desvio·|signal|) on the WHEEL channels only (global DOFs 3,4).
-          Reproduces the Stage-0/1 training distribution on noise-free data.
-    Per-channel additive noise-floor modes: add here when the noise-robustness
-    arm lands (anchor levels to the rail-qualified IMU datasheets in papers/).
+          APPROXIMATES (does NOT bit-reproduce) the Stage-0/1 baked-in noise:
+          D01 added the noise in the TIME domain BEFORE the space interpolation,
+          whereas here it is added in the SPACE domain after. Because interp1 is
+          linear, baked noise = interp(white) = band-limited/COLORED and
+          speed-dependent, with ~0.67x the variance but ~1.46x the energy
+          surviving PAA (verified: scratchpad/noise_domain_check.py). Same
+          nominal 5%, materially different perturbation - fine as a robustness
+          knob, NOT a reproduction. See framework_rationale (noise-domain entry).
+    Per-channel additive noise-floor modes (the physically-correct model: a
+    signal-INDEPENDENT floor from sensor datasheets, noise-density x sqrt(BW)):
+    add here when the noise-robustness arm lands.
     """
     rng = np.random.default_rng(42)
     X = np.array(X, dtype=np.float32, copy=True)
