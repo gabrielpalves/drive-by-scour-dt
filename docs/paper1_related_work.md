@@ -112,3 +112,45 @@ Classification in Deep Foundations of a Railway Bridge Using Optimized CNN.* LAT
   as our novelty (that belongs to Paper 2's *degradation-as-EOV*, which is different).
 - Verify the exact scour-class definitions and passage counts if you cite specific numbers;
   the abstracts above are the confirmed claims.
+
+---
+
+## Roughness, suspension filtering, and sensor fusion (v2 strand — grounds §4.4/§5.5/§6)
+
+From the deep-research report `papers/Drive-By Scour ML Literature Design.{md,docx}` (NotebookLM/
+Gemini synthesis; treat per-number claims with the usual verify-before-cite discipline — the
+report's own citations are listed there). This strand supports the EOV design and the
+roughness/fusion result; fold the confirmed items into §3 and cite the primary sources.
+
+- **Published drive-by ML holds the profile FIXED per scenario, not redrawn per passage.**
+  Locke et al. (2020, *J. Sound & Vibration*) use one fixed high-resolution roughness realisation
+  and report robustness "provided the roughness profile remains constant"; the NuBe-DBBM
+  benchmark (Sarwar & Cantero) uses fixed predefined profiles (P00/PA1/PA2); Fernandes fixes an
+  FRA class per scenario with per-passage speed/mass/suspension variation. ⇒ our **per-STATE**
+  profile draw is the literature-consistent choice; the first pilot's per-passage class+phase
+  redraw is the outlier (and the collapse cause).
+- **Physical pass-to-pass profile stability.** EN 13848-2 track-recording repeatability ≤0.5 mm
+  (D1 band) and MGT-scale settlement models (Sato; Shenton) ⇒ a track does not change class
+  between trains; per-passage class redraw over {4,5,6} is physically indefensible.
+- **FRA class vs speed.** Class 4 ≈ roughest geometry permissible at 70–90 km/h; classes 5–6 are
+  premium/high-speed track ⇒ fix at FRA 4 as the realistic worst case for a scour-prone regional
+  line.
+- **Suspension filtering vs unsprung tracing (why sprung channels collapse under roughness).**
+  Sprung masses (car body ~1–3 Hz, bogie) are low-pass isolated from the rail; strong per-pass
+  roughness drives them into their own inertial resonance and masks the quasi-static scour
+  deflection. The **axle-box / unsprung mass**, in direct wheel–rail contact, traces
+  profile+deflection directly (axle-box-acceleration monitoring literature). Continuous scour
+  **regression** from sprung channels under per-pass roughness is essentially undocumented ⇒ our
+  sprung-collapse / unsprung-survival inversion is expected, not a bug.
+- **Two-axle / TSD residual fusion.** OBrien, Keenahan et al. cancel the (shared) track profile by
+  differencing axle responses; conceptually a TSD. ⇒ supports our **mixed unsprung+sprung pair**
+  beating wheel+wheel: the wheel supplies the profile reference, the sprung channel the inertial
+  bridge response. Frame our mixed-pair result as a learned instance of this residual logic.
+- **Scour drive-by with roughness.** Prendergast/Fitzgerald/Malekjafarian wavelet-ODS scour work
+  averages over repeated passes on the *same* profile to pull the signature out; most drive-by
+  scour work is **classification**, not continuous regression ⇒ reinforces the regression-under-
+  roughness difficulty we report.
+
+*Guardrail:* do not over-claim novelty on "roughness matters" (well known); our specific
+contributions are the **systematic sprung-vs-unsprung inversion under a controlled per-state EOV**
+and the **learned mixed-pair fusion** result, both inside the staged design.

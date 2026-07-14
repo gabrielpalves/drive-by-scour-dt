@@ -84,7 +84,10 @@ To prevent the network from learning a single idealised operating point, each of
 passages per damage state is simulated under randomised environmental and operational
 variability (EOV):
 
-- **Measurement noise** — additive signal noise (std ⚠ σ = 5% of the signal).
+- **Measurement noise** — see the v2 addendum §A.4: the legacy model was *multiplicative*
+  (std = 5%·|signal|), applied to the **wheel channels only**, in the time domain before the
+  space interpolation. In the current (v2) design, generation is **noise-free** and noise is a
+  configurable **load-time** observation model (this bullet is superseded).
 - **Temperature** — sampled in ⚠ [3, 33] °C, entering through a temperature-dependent
   modulus of elasticity E(T) (⚠ −0.3%/°C about 15 °C).
 - **Vehicle-property variability** — per-vehicle randomisation of ⚠ three mechanical
@@ -174,10 +177,71 @@ statistics.
 ---
 
 ### Verify-before-submission checklist
-- ρ (bridge mass/length) value + units; sampling rate; signal crop window length.
-- Exact EOV ranges: noise σ, temperature range and E(T) law, which/how-many vehicle
-  properties, speed range.
-- N vehicles in the train and which vehicle carries the sensors (code: `AcelPrimVag` =
-  leading vehicle).
-- Optuna: exact HP count, trials, epochs, pruner settings; CWT scale count.
-- Confirm the "O'Brien-calibrated" vehicle citation and the Zhai track reference.
+- **⚠ Deck mass / fundamental frequency (HIGH PRIORITY).** A03 sets `ρ=9.6` and B43 sets
+  `A=1`, so deck mass/length = 9.6 kg/m; in isolation this implies a fundamental far above a
+  real bridge (~100+ Hz vs a few Hz). Confirm the as-built (deck+track+ballast) fundamental
+  from the model's `B09`/`B56` output is physically representative before submission, and
+  report it. This underpins the scour→frequency credibility of the whole method.
+- ρ/A value + units; sampling rate; signal crop window length; effective spans (mesh snap:
+  L40→19.8/20.1, L60→20.1/19.8/20.1, L99.6→4×24.9).
+- Exact EOV ranges: temperature range and E(T) law, which/how-many vehicle properties, speed
+  range — against the FINAL regenerated (noise-free, per-state-EOV) datasets.
+- N vehicles (Nveh=5) and which vehicle carries the sensors (`AcelPrimVag` = leading vehicle).
+- Optuna: exact HP count, trials (100 multi-damage / more for single-scour), epochs, pruner;
+  CWT scale count; PAA n_segments = 512.
+- Confirm the "O'Brien-calibrated" vehicle citation and the Zhai track reference; k_v0 value/units.
+
+---
+
+# v2 addendum (2026-07-13) — staged multi-damage regression
+
+The §4 above documents the single-scour **classification** architecture study. The paper's
+spine is now the **staged** extension; the deltas below are the additional methodology. Fold
+into §4 when porting to the journal template.
+
+**A.1 From classification to regression.** The 61-ordinal-class formulation (§4.6) becomes
+**continuous per-target regression**: one head per scoured pier (severity %) + one per bearing
+(seized-%), MSE loss, no discretisation (`core/task.py` `task='regression'`; heads laid out
+[scour…, bearing…]). Rationale: multiple independent piers make joint classes combinatorial;
+continuous severity is the digital-twin state; per-head error + a localisation read come for
+free. Backbone and PAA front end are unchanged — only the head and loss differ.
+
+**A.2 The staged design (one factor per stage).** Stage 0 = L60/3-span, scour at piers 2 & 3,
+no bearing, profile fixed (localisation + quantification). Stage 1 = + left/right **bearing
+heads** (disentanglement). Stage 1c = + **crack** EOV. Stage 1f = + **profile** EOV. Stage 2 =
+**L=99.6 / 4-span** scale-up (3 piers), same heads + EOVs. Stage 3 = + **track-layer + wheel-
+OOR** nuisances. The architecture is **fixed** after Stage 0 (all arms run there); later stages
+are champion-only, so each isolates one scientific factor. Metrics per stage: per-pier MSE,
+aggregate MSE, **localisation accuracy**, and (Stage 1+) bearing MSE + a **scour↔bearing
+leakage** report (false-scour-from-bearing = the safety-critical direction).
+
+**A.3 EOV as literature-anchored domain randomisation.** Persistent conditions — the
+track-profile **realisation** and any **crack** — are drawn **once per damage state** and held
+across its passages (track geometry evolves over MGT, not between trains — EN 13848-2 pass-to-
+pass repeatability ≤0.5 mm; Sato/Shenton degradation), plus a small per-passage jitter. Profile
+class is fixed at **FRA 4** (roughest permissible at 70–90 km/h; classes 5–6 = premium track).
+Crack prevalence ≈ 0.25 (⚠ verify range vs sources), Sinha-type local EI loss U(0.05,0.30) at
+U(0.1,0.9)·L. This **corrects** the first Stage-2 pilot's per-passage class+phase+crack redraw,
+which was physically indefensible and collapsed the sprung channels (Results §5.5). Draw
+frequency knobs: `crack_draw` / `profile_draw` / `track_draw = per_state`.
+
+**A.4 Measurement noise as a load-time observation model.** Generation is **noise-free**
+(`use_signal_noise=false`); noise is injected at **load time** per channel
+(`core/dataset._inject_sensor_noise`), so the sensor model stays configurable without
+regenerating data. **Domain caveat (verified, `scratchpad/noise_domain_check.py`):** the legacy
+noise was applied in the **time** domain *before* the space interpolation, so it is band-limited/
+coloured and speed-dependent — adding the same nominal 5% *after* interpolation (load time)
+gives ≈0.67× the variance but ≈1.46× the energy surviving PAA. State the noise model explicitly
+as an analysis-domain floor; prefer an **additive datasheet-anchored** floor going forward. **EN
+61373** position severities (carbody:bogie:axle) describe the vibration ENVIRONMENT for
+equipment qualification (range/reliability), **not** the acquisition noise floor — do not scale
+noise by them.
+
+**A.5 Champion metric.** Rank by **median** aggregate MSE + IQR + a **collapse-rate**, with a
+**UCB** variant; multi-damage grid runs **3 independent seeds/config** (init/HPO variance; split
+fixed at seed 42) and reports a median leaderboard. Single-scour study used 30-seed UCB. HPO:
+Optuna multivariate TPE, **100 trials**, 25% random start-up, successive-halving pruning.
+
+**A.6 Re-run/provenance policy.** Re-ablations start **from scratch** (tagged studies), never by
+extending existing Optuna studies; the noise mode enters the study name so a noise A/B on the
+same data trains separate studies.
