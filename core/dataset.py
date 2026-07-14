@@ -378,13 +378,32 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
     """
     rng = np.random.default_rng(42)
     X = np.array(X, dtype=np.float32, copy=True)
-    if sn['mode'] == 'legacy_wheel':
-        desvio = float(sn.get('desvio', 0.05))
+    desvio = float(sn.get('desvio', 0.05))
+    WHEELS = (3, 4)
+
+    def add_mult(mask_dofs):
         for i, d in enumerate(dofs):
-            if d in (3, 4):   # wheel channels only
+            if d in mask_dofs:
                 X[:, i, :] += (desvio * X[:, i, :] *
                                rng.standard_normal(X[:, i, :].shape)
                                .astype(np.float32))
+
+    if sn['mode'] == 'legacy_wheel':
+        # Reproduce (approximately) the legacy baked model: mult noise, WHEELS only.
+        add_mult(WHEELS)
+    elif sn['mode'] == 'all_mult':
+        # Uniform multiplicative 5% on EVERY channel. Use on NOISE-FREE data
+        # (varVST / new stages) to make all channels equally noisy. Do NOT use on
+        # legacy baked-wheel data (varNVST Stage-0/1) - the wheels would be
+        # DOUBLE-noised; use 'sprung_mult' there instead.
+        add_mult(set(dofs))
+    elif sn['mode'] == 'sprung_mult':
+        # Multiplicative 5% on the SPRUNG channels only (all DOFs except wheels
+        # 3,4). For the legacy baked-wheel data: brings the sprung channels up to
+        # ~5% without re-noising the already-noisy wheels. NOTE the channels then
+        # differ in noise CHARACTER (wheels = baked colored/speed-dep; sprung =
+        # load-time white) - see the domain caveat above; state it if reported.
+        add_mult({d for d in dofs if d not in WHEELS})
     else:
         raise ValueError(f"unknown sensor_noise mode {sn['mode']!r}")
     return X
