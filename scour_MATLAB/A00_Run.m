@@ -162,12 +162,21 @@ profile_fra_classes  = 4;            % 'psd_fra' class set (scalar = fixed class
 % Track x-coords: the bridge occupies [track_L_app, track_L_app+L_bridge].
 track_draw        = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
 track_L_app       = 30;          % = A04 minL_Approach (fixed, 50 sleepers)
-ballast_n_patches = [1 2];       % patches per passage, discrete uniform
+track_L_after     = 30;          % modelled track beyond the bridge [m] (mirrors the pad window)
+% COUNTS INCLUDE ZERO (fix 2026-07-14, user): the previous [1 2] / [1 3] ranges
+% made randi() return >=1, so EVERY state carried ballast AND hanging-sleeper
+% damage — no healthy-track state existed. A real line is mostly sound track, and
+% the network needs the "no track damage" case to avoid learning it as constant.
+% ⚠ BOTH counts are EXTRAPOLATIONS (docs/track_eov_sampling_spec.md flags
+% "1-2 ballast patches /100 m" and "1-3 sleeper groups /100 m" as un-cited); the
+% zero-inclusive lower bound is equally un-cited. PENDING the notebook follow-up
+% that anchors prevalence per 100 m of track.
+ballast_n_patches = [0 2];       % patches per state, discrete uniform (0 => sound ballast)
 ballast_patch_len = [5 20];      % patch length U(5,20) m (cited)
 ballast_p_wet     = 0.5;         % P(wet/saturated) vs dry-fouled state
 ballast_eta_k_dry = [1.2 2.0]; ballast_eta_c_dry = [0.4 0.8];   % (cited)
 ballast_eta_k_wet = [0.7 0.9]; ballast_eta_c_wet = [1.5 4.0];   % (cited)
-hang_n_groups     = [1 3];       % hanging-sleeper groups per passage
+hang_n_groups     = [0 3];       % hanging-sleeper groups per state (0 => sound sleepers)
 hang_group_size   = [1 5];       % consecutive sleepers, DU(1,5) (cited)
 hang_p_transition = 0.6;         % P(group in a transition zone) [assumption]
 hang_trans_margin = 15;          % density-spike zone +-15 m of abutments (cited)
@@ -330,7 +339,10 @@ case_info = struct( ...
     'profile_int_range', mat2str(profile_int_range), ...
     'profile_fra_classes', mat2str(profile_fra_classes), ...
     'use_track_eov', use_track_eov, 'track_draw', track_draw, ...
+    'track_L_after', track_L_after, ...
+    'ballast_n_patches', mat2str(ballast_n_patches), ...
     'ballast_patch_len', mat2str(ballast_patch_len), ...
+    'hang_n_groups', mat2str(hang_n_groups), ...
     'hang_group_size', mat2str(hang_group_size), ...
     'pad_p_fail', pad_p_fail, ...
     'use_oor_eov', use_oor_eov, ...
@@ -529,10 +541,15 @@ parfor DC = 1:n_states
           if strcmp(track_draw, 'per_passage') || j_pass == 1
             Tk = struct();
             % -- ballast fouling/degradation patches --
+            % Sampled over the WHOLE modelled track, not just the bridge span
+            % (fix 2026-07-14, user): the track continues before/after the
+            % bridge and degrades there too — the approach/exit is exactly
+            % where a drive-by vehicle is excited before it reaches the deck.
+            track_win = track_L_app + L_bridge + track_L_after;   % modelled track [0, track_win] m
             np_ = randi(ballast_n_patches);
             P_ = zeros(np_, 4);
-            x_lo = track_L_app - hang_trans_margin;
-            x_hi = track_L_app + L_bridge + hang_trans_margin;
+            x_lo = 0;
+            x_hi = track_win;
             for ip = 1:np_
                 plen = ballast_patch_len(1) + diff(ballast_patch_len)*rand();
                 x0 = x_lo + (x_hi - x_lo - plen)*rand();
@@ -550,11 +567,14 @@ parfor DC = 1:n_states
             H_ = zeros(ng_, 2);
             for ig = 1:ng_
                 gsz = randi(hang_group_size);
-                if rand() < hang_p_transition   % density spike at transitions
+                if rand() < hang_p_transition   % density spike at transitions (cited)
                     trans_x = track_L_app + (rand() < 0.5)*L_bridge;
                     gx = trans_x - hang_trans_margin + 2*hang_trans_margin*rand();
-                else                             % anywhere on the bridge
-                    gx = track_L_app + rand()*L_bridge;
+                else                             % anywhere on the MODELLED TRACK
+                    % (fix 2026-07-14, user): was `track_L_app + rand()*L_bridge`
+                    % = bridge span only. Hanging sleepers are a TRACK defect and
+                    % occur on the approach/exit too, not just over the deck.
+                    gx = rand()*track_win;
                 end
                 H_(ig,:) = [max(gx, 0), gsz];
             end
@@ -562,7 +582,7 @@ parfor DC = 1:n_states
             chi_ = min(max(wblrnd(pad_weibull(1), pad_weibull(2)), ...
                 pad_chi_range(1)), pad_chi_range(2));
             beta_ = pad_beta_range(1) + diff(pad_beta_range)*rand();
-            win_ = track_L_app + L_bridge + 30;          % app+bridge+after [m]
+            win_ = track_win;                            % app+bridge+after [m]
             nf_ = sum(rand(1, round(win_/0.6)) < pad_p_fail);
             fx_ = sort(rand(1, nf_))*win_;
             Tk.ballast_patches = P_;   Tk.hanging_groups = H_;
