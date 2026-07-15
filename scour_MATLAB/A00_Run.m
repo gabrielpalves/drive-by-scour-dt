@@ -166,7 +166,21 @@ bearing_max       = 1e9;    % 'target' mode upper bound [Nm/rad] (1e9 = seized, 
 % (local EI reduction, Sinha et al.).
 crack_draw       = 'per_state';   % 'per_state' (persistent damage) | 'per_passage' (DEPRECATED)
 crack_p          = 0.25;          % P(state carries a crack); report: 20-30% [VERIFY vs sources]
-crack_frac_range = [0.10 0.90];   % crack location as a fraction of L
+% Crack LOCATION ~ U(0.10, 0.90)*L. This looks naive (shouldn't cracks sit at
+% high-moment sections?) but is JUSTIFIED for a MOVING load: the |M| ENVELOPE
+% over all load positions is broad, because every section is near a peak for
+% SOME position of the train. Computed for our exact geometries (continuous EB
+% beam, moving unit load): only ~4% (L60) / ~2% (L99.6) of the [0.10, 0.90]*L
+% range ever sees |M| < 35% of max - two narrow inflection bands at x/L ~ 0.29
+% and ~0.70 (L60). Envelope peaks: mid-spans |M|/max = 1.00/0.84, over-piers
+% 0.51/0.42 - i.e. sagging at mid-span dominates hogging over the piers ~2:1.
+% So a uniform draw is ~96% structurally plausible AND is the broader (more
+% conservative) domain randomization for a NUISANCE the network must ignore.
+% OPTIONAL refinement (2nd-order, not implemented): weight mid-spans ~2x the
+% over-pier sections. Caveat for the paper: real hogging regions over piers may
+% crack MORE than their moment share (top-fibre tension + water/chloride
+% ingress) - the one aspect the moment envelope alone cannot capture.
+crack_frac_range = [0.10 0.90];   % crack location as a fraction of L (see above)
 crack_int_range  = [0.05 0.30];   % EI-loss fraction (Fernandes 2025: 0.14/0.22)
 crack_lc         = 0.0;           % half-length [m] each side; <=0 -> single element
 
