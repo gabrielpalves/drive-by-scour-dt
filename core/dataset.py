@@ -206,10 +206,25 @@ def _load_multi_output(
                         f"STAGE='stage1_bearing' (bearing_mode='target').")
                 bvec = np.ravel(data_struct['bearing_vector']).astype(float)[bidx]
 
+            # RAW format (2026-07-14+): channels are un-interpolated TIME series and
+            # the file carries the space-transform/crop parameters. Legacy files
+            # (no DimSpace) already hold the interpolated+cropped space window.
+            raw_fmt = 'DimSpace' in names
+
             available = data_struct['AcelPrimVag'].shape[1]
             for p in range(min(n_passages, available)):
-                channels = [data_struct[dof_source[dof][0]][0, p][dof_source[dof][1], :]
-                            for dof in requested_dofs]
+                channels = []
+                for dof in requested_dofs:
+                    src, row = dof_source[dof]
+                    ch = data_struct[src][0, p][row, :]
+                    if raw_fmt:
+                        ch = _raw_to_space_crop(
+                            ch,
+                            data_struct['DimAcel'][0, p],
+                            data_struct['DimSpace'][0, p],
+                            data_struct['crop_start'][0, p],
+                            data_struct['crop_end'][0, p])
+                    channels.append(ch)
                 X_list.append(np.vstack(channels))                       # (C, L)
                 y_scour.append(slabel.astype(np.float32))
                 if bidx is not None:
@@ -222,6 +237,12 @@ def _load_multi_output(
 
     if not X_list:
         raise RuntimeError(f"No multi-output passages loaded from {dataset_path}")
+    # Defensive: DimSpace can vary by a sample or two through round(), which would
+    # make the crop ragged and np.array() fail. Truncate to the common length.
+    lmin = min(x.shape[1] for x in X_list)
+    if any(x.shape[1] != lmin for x in X_list):
+        print(f"  [multi-output] ragged crop lengths - truncating all to {lmin} samples.")
+        X_list = [x[:, :lmin] for x in X_list]
     X = np.array(X_list, dtype=np.float32)
     y = np.array(y_scour, dtype=np.float32)                              # (N, n_scour)
 
@@ -341,6 +362,29 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     if sn:   # load-time noise injection -> its own cache, never collides with clean
         stem += f"_noise-{sn['mode']}" + (f"-{sn['desvio']}" if 'desvio' in sn else "")
     return stem
+
+
+def _raw_to_space_crop(y_time, dim_acel, dim_space, crop_start, crop_end) -> np.ndarray:
+    """MATLAB D01 mirror: uniform time->space resample + bridge crop ("Option B").
+
+    From 2026-07-14 the generator saves the RAW, un-interpolated, noise-free TIME
+    -domain signal plus these parameters, instead of a pre-interpolated cropped
+    window. This rebuilds exactly what the legacy MATLAB pipeline baked in:
+
+        xx = linspace(1, DimSpace, DimAcel);  xi = 1:DimSpace
+        y_space = interp1(xx, y_time, xi)      % linear  == np.interp
+        y_crop  = y_space(crop_start:crop_end) % 1-based, inclusive
+
+    The time->space map is uniform because the speed is constant within a passage.
+    Doing it HERE keeps the whole measurement model at load time: noise can be
+    injected in the TIME domain (physically correct - and then coloured by this
+    interpolation, exactly as the legacy baked noise was) or in SPACE afterwards
+    (white), without ever regenerating the data. See the noise-domain finding.
+    """
+    xx = np.linspace(1.0, float(dim_space), int(dim_acel))
+    xi = np.arange(1, int(dim_space) + 1, dtype=float)
+    y_space = np.interp(xi, xx, np.asarray(y_time, dtype=float))
+    return y_space[int(crop_start) - 1:int(crop_end)]      # 1-based inclusive
 
 
 def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray:
