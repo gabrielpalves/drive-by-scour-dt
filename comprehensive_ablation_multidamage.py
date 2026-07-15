@@ -78,57 +78,32 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 # folder, the scour targets, and whether bearing heads are added. The DATASET
 # names follow A00's case_name convention; VERIFY the exact folder name (esp.
 # the states<N> count) against what landed in data/ before a long run.
-STAGE = "stage0_multiscour"   # stage0_multiscour | stage1_bearing | stage1_crack | stage1_full | stage2_4span | stage3_alldamage
+STAGE = "s0_scour"   # see the ladder below; mirrors scour_MATLAB/A00_Run.m
 
-# EOV-tag convention (matches A00's eov_tag): crackST / prof-psd_fraST /
-# trackEOVST = the nuisance is drawn PER STATE (persistent condition, held for
-# all 50 passages of a state; 2026-07-12 EOV design review - see
-# docs/framework_rationale.md); the old crackON / prof-psd_fra / trackEOV tags
-# meant per-PASSAGE redraw (deprecated: physically indefensible for persistent
-# damage; kept only for reading legacy folders such as the L100 pilot data).
-if STAGE == "stage0_multiscour":
-    DATASET         = "L60_3span_multi_scour_scourS2-3_bearOFF_dano0-60pct_states259_Npass50_varNVST"
-    TARGET_SUPPORTS = [2, 3]
-    BEARING_TARGETS = None
-elif STAGE == "stage1_bearing":
-    # A00 STAGE='stage1_bearing' -> bearTGT; 17 anchors + 250 LHS = 267 states.
-    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_dano0-60pct_states267_Npass50_varNVST"
-    TARGET_SUPPORTS = [2, 3]
-    BEARING_TARGETS = ["left", "right"]
-elif STAGE == "stage1_crack":
-    # A00 STAGE='stage1_crack' -> Stage-1 bridge/targets + per-STATE crack EOV
-    # (p=0.25), profile FIXED. The BRIDGE-damage stage (Fernandes-comparable:
-    # scour + bearing + crack); rail-side EOVs enter at stage1_full.
-    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_dano0-60pct_states267_Npass50_varVST"  # CONFIRM (noise-free gen: no N in var_tag)
-    TARGET_SUPPORTS = [2, 3]
-    BEARING_TARGETS = ["left", "right"]
-elif STAGE == "stage1_full":
-    # A00 STAGE='stage1_full' -> stage1_crack + rail-profile EOV: FRA-class-4
-    # PSD realization drawn per STATE (fixed phases) + 0.5 mm per-passage
-    # jitter. Isolates the EOV effect on the known-good L60 geometry (the
-    # Stage-2 collapse attribution run) and gates Stage 3.
-    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states267_Npass50_varVST"  # CONFIRM (noise-free gen: no N in var_tag)
-    TARGET_SUPPORTS = [2, 3]
-    BEARING_TARGETS = ["left", "right"]
-elif STAGE == "stage3_alldamage":
-    # A00 STAGE='stage3_alldamage' -> stage1_full + track-layer damage (ballast
-    # patches, hanging sleepers, pads; per STATE) + wheel OOR (per passage =
-    # fleet variability). All nuisances (logged, not labels); heads = Stage 1.
-    # states267 = 17 anchors + 250 LHS; CONFIRM against the folder A00 writes.
-    DATASET         = "L60_3span_multi_scour_scourS2-3_bearTGT_crackST_prof-psd_fraST_trackEOVST_oorON_dano0-60pct_states267_Npass50_varVST"  # CONFIRM (noise-free gen: no N in var_tag)
-    TARGET_SUPPORTS = [2, 3]
-    BEARING_TARGETS = ["left", "right"]
-elif STAGE == "stage2_4span":
-    # A00 STAGE='stage2_4span' -> L=99.6 m / 4 spans of 24.9 m (grid-exact: all
-    # supports on mesh nodes), internal piers 2,3,4 + bearing, with the revised
-    # per-STATE crack + per-STATE FRA-4 profile EOVs.
-    # states271 = 21 anchors (1 healthy + 3 scour piers x 4 levels + 2 bearings x 4
-    # levels) + 250 LHS; CONFIRM the states<N> count against the folder A00 writes.
-    DATASET         = "L99.6_4span_multi_scour_scourS2-3-4_bearTGT_crackST_prof-psd_fraST_dano0-60pct_states271_Npass50_varVST"  # CONFIRM (noise-free gen: no N in var_tag)
-    TARGET_SUPPORTS = [2, 3, 4]
-    BEARING_TARGETS = ["left", "right"]
-else:
-    raise ValueError(f"unknown STAGE {STAGE!r}")
+# THE LADDER (mirrors A00_Run.m; ONE factor changes per rung so any degradation
+# is attributable). HEADS = scour (per pier) + bearing (per abutment) ONLY;
+# crack / rail profile / track-layer / wheel damage are NUISANCES the network
+# must be INVARIANT to, never estimate. Folder names are SHORT
+# (<stage>_L<len>_st<nstates>) — the full descriptor lives in case_info.case_desc
+# (Windows MAX_PATH; the old ~110-char names broke it).
+#   states = 250 LHS + anchors; anchors = 1 healthy + n_piers*4 (+ 2*4 if bearing)
+_LADDER = {
+    # L60 / 3-span, scour piers 2 & 3
+    "s0_scour":       ("s0_scour_L60_st259",        [2, 3],    None),
+    "s11_bear":       ("s11_bear_L60_st267",        [2, 3],    ["left", "right"]),
+    "s12_crack":      ("s12_crack_L60_st259",       [2, 3],    None),
+    "s13_bearcrack":  ("s13_bearcrack_L60_st267",   [2, 3],    ["left", "right"]),
+    "s14_prof":       ("s14_prof_L60_st267",        [2, 3],    ["left", "right"]),
+    "s15_track":      ("s15_track_L60_st267",       [2, 3],    ["left", "right"]),
+    "s16_all":        ("s16_all_L60_st267",         [2, 3],    ["left", "right"]),
+    # L99.6 / 4-span scale-up, scour piers 2, 3 & 4
+    "s21_scour4":     ("s21_scour4_L99.6_st263",    [2, 3, 4], None),
+    "s22_bearcrack4": ("s22_bearcrack4_L99.6_st271", [2, 3, 4], ["left", "right"]),
+    "s23_all4":       ("s23_all4_L99.6_st271",      [2, 3, 4], ["left", "right"]),
+}
+if STAGE not in _LADDER:
+    raise ValueError(f"unknown STAGE {STAGE!r} - pick one of {list(_LADDER)}")
+DATASET, TARGET_SUPPORTS, BEARING_TARGETS = _LADDER[STAGE]   # CONFIRM st<N> vs the folder A00 writes
 
 # Bearing heads (Stage 1+): laid out AFTER the scour heads, reported separately
 # (scour_mse vs bearing_mse) + a leakage/disentanglement report; localisation

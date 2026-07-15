@@ -32,46 +32,83 @@ clear; clc; close all
 %                         LAYER damage (ballast patches, hanging sleepers,
 %                         rail pads) + wheel OOR/flats. All nuisances, logged.
 %                         Spec: docs/stage3_alldamage_spec.md.
-STAGE = 'stage1_crack';
+% ===== THE ABLATION LADDER (2026-07-14 design; user-approved) ============
+% ONE factor changes per rung, so any degradation is ATTRIBUTABLE. The bridge
+% maintainer's questions in order: can I localise scour? does a bearing fool
+% me? does a crack fool me? do BOTH? does rail roughness? does track damage?
+% does the train itself? Then repeat the key rungs on the bigger bridge.
+%
+%   L60 / 3-span ladder (scour piers 2,3)
+%     s0_scour       scour only .................... baseline + architecture selection
+%     s11_bear       + bearing (HEAD)
+%     s12_crack      + crack (nuisance, no bearing)
+%     s13_bearcrack  + bearing + crack ............. all BRIDGE damages
+%     s14_prof       + rail profile (FRA-4, per-state) ...... the ROUGHNESS rung
+%     s15_track      + track-layer damage (ballast / hanging sleepers / pads)
+%     s16_all        + wheel OOR + flats ........... ALL damages
+%   L99.6 / 4-span scale-up (scour piers 2,3,4)
+%     s21_scour4     scour only
+%     s22_bearcrack4 + bearing + crack ............. all BRIDGE damages
+%     s23_all4       all damages
+%
+% HEADS = scour (per pier) + bearing (per abutment) ONLY. Crack, rail profile,
+% track-layer and wheel damage are NUISANCES: randomized, logged, never
+% estimated - the network must be INVARIANT to them, not report them. (Cracks
+% are visually inspectable; submerged scour is not - that is where drive-by
+% earns its keep.) Rationale: docs/framework_rationale.md.
+STAGE = 's0_scour';
 
-% Track-layer / wheel-OOR EOV toggles (only stage3 turns them on)
+% Defaults; each rung below only switches ON what it adds.
 use_track_eov = false;
 use_oor_eov   = false;
 
 switch STAGE
-    case 'stage0_multiscour'
+    % ---------------- L60 / 3-span bridge-damage ladder ------------------
+    case 's0_scour'
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='off';    use_crack_eov=false; profile_mode='fixed';
-    case 'stage1_bearing'
+    case 's11_bear'
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='target'; use_crack_eov=false; profile_mode='fixed';
-    case 'stage1_crack'
-        % BRIDGE-damage EOV stage (Fernandes-comparable: scour + bearing +
-        % crack; rail-side EOVs enter at stage1_full). Crack is drawn per
-        % STATE (persistent condition; 2026-07-12 EOV design review).
+    case 's12_crack'
+        damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
+        bearing_mode='off';    use_crack_eov=true;  profile_mode='fixed';
+    case 's13_bearcrack'
+        % All BRIDGE damages (Fernandes-comparable set: scour + bearing + crack).
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='target'; use_crack_eov=true;  profile_mode='fixed';
-    case 'stage1_eov'
-        damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
-        bearing_mode='off';    use_crack_eov=true;  profile_mode='psd_fra';
-    case 'stage1_full'
-        % stage1_crack + rail-profile EOV (per-STATE FRA-4 realization +
-        % per-passage jitter): the Stage-2 collapse ATTRIBUTION run on the
-        % known-good L60 geometry; also gates Stage 3.
+    case 's14_prof'
+        % THE ROUGHNESS RUNG: adds ONLY the rail profile (per-STATE FRA-4
+        % realization + per-passage jitter) on top of s13. Isolates the
+        % roughness effect that collapsed the sprung channels in the deprecated
+        % L100 pilot - the single most important open question in the chain.
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='target'; use_crack_eov=true;  profile_mode='psd_fra';
-    case 'stage2_4span'
-        % L=99.6 (not 100): spans of 24.9 m = 83 elements of 0.3 m EXACTLY, so
-        % all 5 supports land exactly on mesh nodes (B43 mesh / B02 snapping).
-        % L=100 would give a 99.9 m mesh with snapped spans 24.9/24.9/25.2/24.9
-        % and a floating-point knife-edge tie at the mid support. Verified
-        % 2026-07-09; see docs/framework_rationale.md.
+    case 's15_track'
+        % + TRACK-layer damage (ballast patches, hanging sleepers, rail pads).
+        damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
+        bearing_mode='target'; use_crack_eov=true;  profile_mode='psd_fra';
+        use_track_eov=true;
+    case 's16_all'
+        % + TRAIN (wheel OOR / flats) = ALL damages. Split from s15 so a drop
+        % is attributable to the rail vs the train.
+        damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
+        bearing_mode='target'; use_crack_eov=true;  profile_mode='psd_fra';
+        use_track_eov=true;    use_oor_eov=true;
+
+    % ---------------- L99.6 / 4-span scale-up ----------------------------
+    % L=99.6 (not 100): spans of 24.9 m = 83 elements of 0.3 m EXACTLY, so all 5
+    % supports land on mesh nodes (B43 mesh / B02 snapping). L=100 re-meshes to
+    % 99.9 m with snapped spans 24.9/24.9/25.2/24.9 AND a floating-point tie at
+    % the mid support - that is what the deprecated first Stage-2 run used.
+    case 's21_scour4'
         damage_mode='multi_scour'; L_bridge=99.6; num_spans=4; scour_supports=[2 3 4];
-        bearing_mode='target'; use_crack_eov=true;  profile_mode='psd_fra';
-    case 'stage3_alldamage'
-        % Same bridge/targets as Stage 1 -> clean marginal-effect chain
-        % (Stage 0 clean -> Stage 1 +bearing -> Stage 3 +everything).
-        damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
+        bearing_mode='off';    use_crack_eov=false; profile_mode='fixed';
+    case 's22_bearcrack4'
+        damage_mode='multi_scour'; L_bridge=99.6; num_spans=4; scour_supports=[2 3 4];
+        bearing_mode='target'; use_crack_eov=true;  profile_mode='fixed';
+    case 's23_all4'
+        damage_mode='multi_scour'; L_bridge=99.6; num_spans=4; scour_supports=[2 3 4];
         bearing_mode='target'; use_crack_eov=true;  profile_mode='psd_fra';
         use_track_eov=true;    use_oor_eov=true;
     otherwise
@@ -313,7 +350,14 @@ if use_track_eov
 end
 if use_oor_eov,                    eov_tag = [eov_tag, '_oorON']; end
 supp_tag = strjoin(string(scour_supports), '-');
-case_name = sprintf('L%g_%dspan_%s_scourS%s_bear%s%s_dano0-%gpct_states%d_Npass%d_var%s', ...
+% ---- Folder name: SHORT (2026-07-14) -----------------------------------
+% The old self-describing name ran to ~110 characters, which blew past
+% Windows' 260-char MAX_PATH once nested under the repo + results tree. The
+% folder is now just <stage>_L<len>_st<nstates> (~20 chars); the FULL
+% descriptor is preserved as case_info.case_desc (+ case_info.txt) so the
+% dataset stays self-describing without the path pain.
+case_name = sprintf('%s_L%g_st%d', STAGE, L_bridge, n_states);
+case_desc = sprintf('L%g_%dspan_%s_scourS%s_bear%s%s_dano0-%gpct_states%d_Npass%d_var%s', ...
     L_bridge, num_spans, damage_mode, supp_tag, bear_tag, eov_tag, ...
     dano_max*100, n_states, Npass, var_tag);
 run_folder = fullfile('Results', case_name);
@@ -321,7 +365,8 @@ if ~exist(run_folder, 'dir'), mkdir(run_folder); end
 
 % --- Manifest: machine-readable (.mat) + human-readable (.txt) -----------
 case_info = struct( ...
-    'case_name', case_name, 'timestamp', tempo_inicial_str, ...
+    'case_name', case_name, 'case_desc', case_desc, 'stage', STAGE, ...
+    'timestamp', tempo_inicial_str, ...
     'damage_mode', damage_mode, ...
     'L_bridge_m', L_bridge, 'num_spans', num_spans, ...
     'num_supports', n_supp, 'scour_supports', mat2str(scour_supports), ...
@@ -652,9 +697,20 @@ parfor DC = 1:n_states
     data.Velocidade = Velocidade;
     data.VehiclesProps = x_veh;
 
+    % RAW time-domain channels (Option B, 2026-07-14) — NOT interpolated, NOT
+    % cropped, noise-free. Python rebuilds the space domain + bridge crop at load
+    % time from the parameters saved just below (core/dataset._raw_to_space_crop).
     data2save.AcelPrimVag = data.AceleracaoPrimVag;
     data2save.AcelRodaPrimVag = data.AcelRodaPrimVag;
     data2save.PitchPrimVag = data.PitchPrimVag;
+    % Space-transform + crop parameters, per passage (1 x Npass each). The
+    % presence of DimSpace is what marks a file as RAW format for the loader.
+    data2save.DimAcel      = data.DimAcel;
+    data2save.DimSpace     = data.DimSpace;
+    data2save.crop_start   = data.crop_start;
+    data2save.crop_end     = data.crop_end;
+    data2save.bridge_samp  = data.bridge_samp;
+    data2save.L_bridge_eff = data.L_bridge_eff;
     % --- LABELS ---
     % Multi-output label = the full per-support scour-rate vector + which support
     % indices are the regression targets. Dano kept as the scalar AGGREGATE
