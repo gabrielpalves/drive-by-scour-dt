@@ -165,22 +165,30 @@ bearing_max       = 1e9;    % 'target' mode upper bound [Nm/rad] (1e9 = seized, 
 % and is physically indefensible). Semantics mirror TTBI_2D/damage_config.py
 % (local EI reduction, Sinha et al.).
 crack_draw       = 'per_state';   % 'per_state' (persistent damage) | 'per_passage' (DEPRECATED)
-crack_p          = 0.25;          % P(state carries a crack); report: 20-30% [VERIFY vs sources]
-% Crack LOCATION ~ U(0.10, 0.90)*L. This looks naive (shouldn't cracks sit at
-% high-moment sections?) but is JUSTIFIED for a MOVING load: the |M| ENVELOPE
-% over all load positions is broad, because every section is near a peak for
-% SOME position of the train. Computed for our exact geometries (continuous EB
-% beam, moving unit load): only ~4% (L60) / ~2% (L99.6) of the [0.10, 0.90]*L
-% range ever sees |M| < 35% of max - two narrow inflection bands at x/L ~ 0.29
-% and ~0.70 (L60). Envelope peaks: mid-spans |M|/max = 1.00/0.84, over-piers
-% 0.51/0.42 - i.e. sagging at mid-span dominates hogging over the piers ~2:1.
-% So a uniform draw is ~96% structurally plausible AND is the broader (more
-% conservative) domain randomization for a NUISANCE the network must ignore.
-% OPTIONAL refinement (2nd-order, not implemented): weight mid-spans ~2x the
-% over-pier sections. Caveat for the paper: real hogging regions over piers may
-% crack MORE than their moment share (top-fibre tension + water/chloride
-% ingress) - the one aspect the moment envelope alone cannot capture.
-crack_frac_range = [0.10 0.90];   % crack location as a fraction of L (see above)
+crack_p          = 0.25;          % P(state carries a crack) — CONFIRMED 2026-07-15:
+% deep research puts spans with a MACROSCOPIC EI loss in our Sinha 5-30% band at
+% 20-30% of an aged concrete/composite inventory (marginal non-structural cracks
+% reach 70-80%, but those do not produce a modelled EI drop). 0.25 stands.
+%
+% ===== Crack LOCATION: HOGGING-WEIGHTED (corrected 2026-07-15) ===========
+% We previously drew U(0.10, 0.90)*L and justified it from the moving-load |M|
+% ENVELOPE (broad; peaks mid-span 1.00/0.84 vs over-pier 0.51/0.42, i.e. ~2:1
+% FAVOURING mid-span; only ~2-4% of the range ever sees |M|<35% of max).
+% The deep research OVERTURNS that conclusion — and the moment envelope was the
+% wrong lens. Crack PREVALENCE is set by the MATERIAL and the ENVIRONMENT, not
+% by moment magnitude alone: over an internal support the deck is in HOGGING, so
+% the TOP fibre is in tension (concrete's weakest mode, f_ct ~ few MPa) and that
+% same top surface takes deck runoff / chlorides. At mid-span the tension is on
+% the soffit and early thermal/shrinkage cracks there tend to close under
+% compression, rarely giving a real EI loss. Reported ratio: hogging cracking
+% exceeds sagging by >4:1 to 5:1 in occurrence AND inertial impact. Eurocode 4
+% goes further and MANDATES analysing a "cracked" section over 15% of the span
+% each side of internal supports. So: sample cracks preferentially in the
+% over-pier zones. (Our earlier caveat — "hogging may crack more than its moment
+% share" — was right; this quantifies it.)
+crack_hog_ratio  = 4.0;           % hogging:sagging occurrence ratio (report >4:1..5:1)
+crack_hog_margin = 0.175;         % zone half-width as a fraction of SPAN (EC4: 15%; report 15-20%)
+crack_frac_range = [0.10 0.90];   % LEGACY uniform bounds — used only as a clamp now
 crack_int_range  = [0.05 0.30];   % EI-loss fraction (Fernandes 2025: 0.14/0.22)
 crack_lc         = 0.0;           % half-length [m] each side; <=0 -> single element
 
@@ -213,28 +221,68 @@ profile_fra_classes  = 4;            % 'psd_fra' class set (scalar = fixed class
 % Track x-coords: the bridge occupies [track_L_app, track_L_app+L_bridge].
 track_draw        = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
 track_L_app       = 30;          % = A04 minL_Approach (fixed, 50 sleepers)
-track_L_after     = 30;          % modelled track beyond the bridge [m] (mirrors the pad window)
-% COUNTS INCLUDE ZERO (fix 2026-07-14, user): the previous [1 2] / [1 3] ranges
-% made randi() return >=1, so EVERY state carried ballast AND hanging-sleeper
-% damage — no healthy-track state existed. A real line is mostly sound track, and
-% the network needs the "no track damage" case to avoid learning it as constant.
-% ⚠ BOTH counts are EXTRAPOLATIONS (docs/track_eov_sampling_spec.md flags
-% "1-2 ballast patches /100 m" and "1-3 sleeper groups /100 m" as un-cited); the
-% zero-inclusive lower bound is equally un-cited. PENDING the notebook follow-up
-% that anchors prevalence per 100 m of track.
-ballast_n_patches = [0 2];       % patches per state, discrete uniform (0 => sound ballast)
+track_L_after     = 30;          % modelled track beyond the bridge [m]
+% ===== COUNTS: now ANCHORED (deep research 2026-07-15) ===================
+% Source: papers/'Track Defect Prevalence Data Search' (Gemini Deep Research;
+% derivations flagged INFERENCE but each built on a cited anchor). It RESOLVED
+% the prevalence paradox that blocked us: the cited "~50% of concrete sleepers
+% show some voiding" and our ~9% mechanical model are BOTH right, because most
+% voids are SUB-THRESHOLD. Void taxonomy: <1.0 mm = accommodation (rail/fastener
+% elasticity absorbs it); 1.0-2.5 mm = DYNAMIC IMPACT threshold (a 1-2 mm void
+% raises adjacent sleeper-ballast contact force up to 70% and wheel loads ~85%);
+% >2.5 mm = critical. Only 10-20% of visibly-settled sleepers exceed 1.5-2.0 mm
+% => IMPACTFULLY unsupported = 5-10% of sleepers (mid 7.5%).
+% Derived counts PER 100 m: 0.075*167 = 12.5 sleepers / ~3 per group = 4.2
+% groups; post-tamping (3-5%) = 1.6-2.7 => the report recommends POISSON with
+% lambda ~ 2.0-3.0 for the intermediate degradation cycle. Ballast: GPR surveys
+% put FI>30 ("highly fouled") at 10-20% of route length; 15% / 12.5 m mean patch
+% = 1.2 patches per 100 m.
+% RATES are per 100 m and are SCALED BY THE MODELLED WINDOW below (our track is
+% 120 m at L60 / 159.6 m at L99.6 - drawing a fixed count regardless of length
+% was itself an error).
+% ⚠ Report-internal inconsistency, resolved in our favour of its own derivation:
+% its summary table claims P(no hanging group)~0.25 while its text recommends
+% lambda 2-3 (which gives P(0)=0.05-0.14). We follow the DERIVATION (lambda=2.5).
+% ⚠ VERIFY: the pivotal "FI>30 on 10-20% of length" cites a Slideshare deck -
+% re-check against the peer-reviewed GPR sources in the same report before the
+% paper (Tandfonline 2022 / MDPI Sensors GPR condition-index papers).
+% lambda = 3.0 RECONCILES the report's two self-inconsistent statements: it
+% recommends Poisson lambda 2.0-3.0 ("intermediate degradation cycle"), but its
+% own table demands 5-10% of sleepers impactfully unsupported. lambda*3 sleepers
+% per group / 167 per 100 m => lambda must be >= 2.78 for >=5%, and <= 3.0 to
+% stay in the recommended range. lambda = 3.0 is the only value satisfying BOTH
+% (gives 5.4%). MC-verified.
+hang_rate_100m    = 3.0;         % unsupported-sleeper GROUPS per 100 m (Poisson)
+ballast_rate_100m = 1.2;         % fouled PATCHES per 100 m (Poisson; = 15% length / 12.5 m)
 ballast_patch_len = [5 20];      % patch length U(5,20) m (cited)
+% Fouling <-> voiding are STRONGLY correlated (bidirectional: fouling -> mud
+% pumping -> lubrication -> void; void -> impact -> pulverisation -> fouling).
+% Report: weight hanging-group placement x3 inside a fouled patch (and ~1/3
+% outside). Drawing them independently was a documented modelling vulnerability.
+hang_foul_mult    = 3.0;         % relative density of hanging groups inside a fouled patch
+% Ballast fouling is ALSO elevated at bridge transitions (impact + deck runoff
+% into the expansion joint); corrective work there is 4-8x more frequent and the
+% settlement/pulverisation rate 3-4x. Report: multiply fouled-patch probability
+% by ~3 within 15-24 m of the abutment.
+ballast_trans_mult   = 3.0;      % fouled-patch density multiplier near the abutments
+ballast_trans_margin = 20;       % [m] extent of that zone (report: 15-24 m)
 ballast_p_wet     = 0.5;         % P(wet/saturated) vs dry-fouled state
 ballast_eta_k_dry = [1.2 2.0]; ballast_eta_c_dry = [0.4 0.8];   % (cited)
 ballast_eta_k_wet = [0.7 0.9]; ballast_eta_c_wet = [1.5 4.0];   % (cited)
-hang_n_groups     = [0 3];       % hanging-sleeper groups per state (0 => sound sleepers)
+% (group COUNT is now Poisson(hang_rate_100m * track_win/100) - see above)
 hang_group_size   = [1 5];       % consecutive sleepers, DU(1,5) (cited)
 hang_p_transition = 0.6;         % P(group in a transition zone) [assumption]
 hang_trans_margin = 15;          % density-spike zone +-15 m of abutments (cited)
 pad_chi_range     = [1.0 3.5];   % pad aging stiffness multiplier bounds
 pad_weibull       = [1.8 2.2];   % chi_pad ~ Weibull(lambda,k), clipped to range
 pad_beta_range    = [0.8 1.2];   % pad damping multiplier
-pad_p_fail        = 0.005;       % per-pad failure prob (~1-yr snapshot)
+% Pad failures: the cited 0.5% is an ANNUAL INCIDENCE RATE, not a snapshot
+% prevalence (2026-07-15 report). Secondary lines renew small components on a
+% 3-5 yr cadence, so failures ACCUMULATE: observed snapshot prevalence = 1.5-3.0%
+% of fastening positions. Our old 0.005 (=> ~0.83 pads/100 m) was ~4x
+% SUB-representative of real regional-line noise; the report asks for ~2-5 failed
+% positions per 100 m, which 0.02 delivers (0.02 * 167 = 3.3 per 100 m).
+pad_p_fail        = 0.02;        % per-pad SNAPSHOT failure prevalence (report 1.5-3.0%)
 
 % ===== Wheel flats + polygonization (Stage 3; use_oor_eov) =====
 % LITERATURE-VERIFIED (deep research 2026-07-09; docs/stage3_alldamage_spec.md):
@@ -391,6 +439,7 @@ case_info = struct( ...
     'bearing_max_Nm_rad', bearing_max, ...
     'use_crack_eov', use_crack_eov, 'crack_draw', crack_draw, ...
     'crack_p', crack_p, ...
+    'crack_hog_ratio', crack_hog_ratio, 'crack_hog_margin', crack_hog_margin, ...
     'crack_frac_range', mat2str(crack_frac_range), ...
     'crack_int_range', mat2str(crack_int_range), 'crack_lc', crack_lc, ...
     'profile_mode', profile_mode, 'profile_draw', profile_draw, ...
@@ -399,10 +448,13 @@ case_info = struct( ...
     'profile_fra_classes', mat2str(profile_fra_classes), ...
     'use_track_eov', use_track_eov, 'track_draw', track_draw, ...
     'track_L_after', track_L_after, ...
-    'ballast_n_patches', mat2str(ballast_n_patches), ...
+    'ballast_rate_100m', ballast_rate_100m, ...
     'ballast_patch_len', mat2str(ballast_patch_len), ...
-    'hang_n_groups', mat2str(hang_n_groups), ...
+    'ballast_trans_mult', ballast_trans_mult, ...
+    'ballast_trans_margin', ballast_trans_margin, ...
+    'hang_rate_100m', hang_rate_100m, ...
     'hang_group_size', mat2str(hang_group_size), ...
+    'hang_foul_mult', hang_foul_mult, ...
     'pad_p_fail', pad_p_fail, ...
     'use_oor_eov', use_oor_eov, ...
     'oor_q_bogie', oor_q_bogie, ...
@@ -548,7 +600,23 @@ parfor DC = 1:n_states
         % Crack: local EI reduction applied in B00; NOT a label.
         if use_crack_eov && (strcmp(crack_draw, 'per_passage') || j_pass == 1)
             if rand() <= crack_p
-                c_loc = (crack_frac_range(1) + diff(crack_frac_range)*rand()) * L_bridge;
+                % HOGGING-WEIGHTED placement (2026-07-15): pick an over-pier zone
+                % with probability ratio crack_hog_ratio:1 against a mid-span
+                % zone, then jitter within +-crack_hog_margin of a SPAN length.
+                % Nominal support positions (B02 snaps them a few cm - immaterial
+                % for a nuisance prior).
+                supp_nom = linspace(0, L_bridge, num_spans + 1);
+                int_supp = supp_nom(2:end-1);            % internal supports = piers
+                span_len = L_bridge / num_spans;
+                if ~isempty(int_supp) && rand() < crack_hog_ratio/(crack_hog_ratio + 1)
+                    s_ = int_supp(randi(numel(int_supp)));               % HOGGING
+                else
+                    k_ = randi(num_spans);                               % SAGGING
+                    s_ = (supp_nom(k_) + supp_nom(k_+1))/2;
+                end
+                c_loc = s_ + (2*rand() - 1) * crack_hog_margin * span_len;
+                c_loc = min(max(c_loc, crack_frac_range(1)*L_bridge), ...
+                                       crack_frac_range(2)*L_bridge);
                 c_int = crack_int_range(1) + diff(crack_int_range)*rand();
                 Damage.crack_locs      = c_loc;
                 Damage.crack_intensity = c_int;
@@ -605,13 +673,27 @@ parfor DC = 1:n_states
             % bridge and degrades there too — the approach/exit is exactly
             % where a drive-by vehicle is excited before it reaches the deck.
             track_win = track_L_app + L_bridge + track_L_after;   % modelled track [0, track_win] m
-            np_ = randi(ballast_n_patches);
+            % COUNT ~ Poisson(rate_per_100m * window/100): scales with the
+            % modelled length (120 m at L60, 159.6 m at L99.6) instead of a
+            % fixed draw, and admits the sound-track case naturally.
+            np_ = poissrnd(ballast_rate_100m * track_win / 100);
             P_ = zeros(np_, 4);
             x_lo = 0;
             x_hi = track_win;
+            % Fouled patches cluster at the bridge transitions (deck runoff into
+            % the joint + impact at the stiffness discontinuity): density x
+            % ballast_trans_mult within ballast_trans_margin of either abutment.
+            % Rejection-sample the patch START against that density.
+            abut_x = [track_L_app, track_L_app + L_bridge];
             for ip = 1:np_
                 plen = ballast_patch_len(1) + diff(ballast_patch_len)*rand();
-                x0 = x_lo + (x_hi - x_lo - plen)*rand();
+                % rejection-sample x0 against the transition-enriched density
+                for try_ = 1:50
+                    x0 = x_lo + (x_hi - x_lo - plen)*rand();
+                    near_ab = any(abs((x0 + plen/2) - abut_x) <= ballast_trans_margin);
+                    w_ = 1; if near_ab, w_ = ballast_trans_mult; end
+                    if rand() <= w_ / ballast_trans_mult, break; end
+                end
                 if rand() < ballast_p_wet
                     ek = ballast_eta_k_wet(1) + diff(ballast_eta_k_wet)*rand();
                     ec = ballast_eta_c_wet(1) + diff(ballast_eta_c_wet)*rand();
@@ -622,20 +704,36 @@ parfor DC = 1:n_states
                 P_(ip,:) = [x0, x0 + plen, ek, ec];
             end
             % -- hanging/unsupported sleeper groups --
-            ng_ = randi(hang_n_groups);
+            % COUNT ~ Poisson(2.5 per 100 m * window/100) — anchored via the
+            % impact-threshold derivation (7.5% of sleepers impactfully voided /
+            % ~3 per group). Group SIZE stays DU(1,5) (cited: 1-4 m of contiguous
+            % differential settlement at 0.6 m spacing = 2-6 sleepers).
+            ng_ = poissrnd(hang_rate_100m * track_win / 100);
             H_ = zeros(ng_, 2);
             for ig = 1:ng_
                 gsz = randi(hang_group_size);
-                if rand() < hang_p_transition   % density spike at transitions (cited)
-                    trans_x = track_L_app + (rand() < 0.5)*L_bridge;
-                    gx = trans_x - hang_trans_margin + 2*hang_trans_margin*rand();
-                else                             % anywhere on the MODELLED TRACK
-                    % (fix 2026-07-14, user): was `track_L_app + rand()*L_bridge`
-                    % = bridge span only. Hanging sleepers are a TRACK defect and
-                    % occur on the approach/exit too, not just over the deck.
-                    gx = rand()*track_win;
+                % Location: TWO composed priors — the cited transition spike, then
+                % a rejection step enriching placement inside fouled patches
+                % (fouling -> mud pumping -> loss of support; report x3 inside).
+                for try_ = 1:50
+                    if rand() < hang_p_transition   % density spike at transitions (cited)
+                        trans_x = track_L_app + (rand() < 0.5)*L_bridge;
+                        gx = trans_x - hang_trans_margin + 2*hang_trans_margin*rand();
+                    else                             % anywhere on the MODELLED TRACK
+                        % (fix 2026-07-14, user): was bridge-span only. Hanging
+                        % sleepers are a TRACK defect - they occur on the
+                        % approach/exit too, not just over the deck.
+                        gx = rand()*track_win;
+                    end
+                    gx = max(gx, 0);
+                    in_foul = false;
+                    for ip = 1:size(P_, 1)
+                        if gx >= P_(ip,1) && gx <= P_(ip,2), in_foul = true; break; end
+                    end
+                    w_ = 1/hang_foul_mult; if in_foul, w_ = hang_foul_mult; end
+                    if rand() <= w_ / hang_foul_mult, break; end
                 end
-                H_(ig,:) = [max(gx, 0), gsz];
+                H_(ig,:) = [gx, gsz];
             end
             % -- rail pads: global aging + sparse failures --
             chi_ = min(max(wblrnd(pad_weibull(1), pad_weibull(2)), ...
