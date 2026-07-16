@@ -27,10 +27,24 @@ if ~isfield(Beam.Prop, 'num_spans') || isempty(Beam.Prop.num_spans)
     Beam.Prop.num_spans = 2;   % 2 spans = 3 supports total
 end
 
-Beam.Prop.E = 35e9;     % Modulus of elasticity [N/m^2]
-Beam.Prop.I = 0.33;     % Second moment of area [m4]
-Beam.Damping.per = 3;   % Damping [%]
-Beam.Prop.rho = 9.6;  % Mass per unit length [kg/m]
+Beam.Prop.E = 35e9;     % Modulus of elasticity [N/m^2]  (Fernandes: 3.5e10)
+Beam.Prop.I = 0.33;     % Second moment of area [m4]     (Fernandes: 0.33)
+Beam.Damping.per = 3;   % Damping [%]                    (Fernandes: 3% all modes)
+% ===== CRITICAL FIX 2026-07-15: was 9.6 — a 1000x MASS ERROR ============
+% B43 sets Prop.A = 1 m^2 and B01/B03 build the mass matrix as rho_n * A_n,
+% so this value IS the deck mass per unit length. Fernandes specifies
+% rho = 9600 kg/m for this exact bridge (E=3.5e10, I=0.33, 2 x 20 m spans);
+% the code carried 9.6, i.e. 1000x too light (a ~0.004 m^2 rod, not a deck).
+% Verified against the model's own numbers (scratchpad/beam_freq.py, EB FE with
+% the real k_v0 = 344e6 N/m support springs):
+%     rho = 9.6   -> f1 = 130.6 Hz  (L40/2-span)  <- unphysical
+%     rho = 9600  -> f1 =   4.13 Hz               <- textbook for a 20 m span
+% ratio = sqrt(1000) = 31.6x exactly. A 131 Hz deck is effectively rigid to a
+% vehicle whose car body sits at 1-3 Hz and bogies at ~10-30 Hz, so the whole
+% vehicle-bridge INTERACTION was wrong: the deck contributed almost no dynamic
+% signature. EVERY dataset generated before this fix is invalid (all are being
+% regenerated anyway). Do not change without re-checking B09/B56 frequencies.
+Beam.Prop.rho = 9600;   % Deck mass per unit length [kg/m] (x Prop.A = 1 m^2)
 
 % Boundary conditions
 Beam.BC.text = 'UD';
