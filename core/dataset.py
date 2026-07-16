@@ -182,7 +182,8 @@ def _load_multi_output(
 
     X_list:  list[np.ndarray] = []
     y_scour: list[np.ndarray] = []
-    y_bear:  list[np.ndarray] = []                      # raw Nm/rad, normalised later
+    y_bear:  list[np.ndarray] = []            # fixity ratio, or legacy raw Nm/rad
+    bearing_is_fixity = False
 
     idx = 0
     while True:
@@ -204,7 +205,15 @@ def _load_multi_output(
                         f"{fname}: bearing heads requested but no "
                         f"data.bearing_vector - regenerate with A00 "
                         f"STAGE='stage1_bearing' (bearing_mode='target').")
-                bvec = np.ravel(data_struct['bearing_vector']).astype(float)[bidx]
+                # Bearing LABEL: prefer the fixity ratio (2026-07-15) - bounded
+                # [0,1], near-linear in response, and geometry-normalised, so it
+                # means the same thing on the L60 and L99.6 bridges. Legacy files
+                # carry only k_r and are normalised by bearing_max as before.
+                if 'bearing_fixity' in names:
+                    bvec = np.ravel(data_struct['bearing_fixity']).astype(float)[bidx]
+                    bearing_is_fixity = True
+                else:
+                    bvec = np.ravel(data_struct['bearing_vector']).astype(float)[bidx]
 
             # RAW format (2026-07-14+): channels are un-interpolated TIME series and
             # the file carries the space-transform/crop parameters. Legacy files
@@ -247,12 +256,17 @@ def _load_multi_output(
     y = np.array(y_scour, dtype=np.float32)                              # (N, n_scour)
 
     if bidx is not None:
-        B = np.array(y_bear, dtype=np.float32)                          # (N, n_bearing) raw
-        if bearing_max is None or bearing_max <= 0:
-            bearing_max = float(B.max()) or 1.0
-            print(f"  [multi-output] bearing_max not in manifest - normalising "
-                  f"by observed max {bearing_max:.3g} Nm/rad.")
-        y = np.hstack([y, (B / bearing_max) * 100.0]).astype(np.float32)
+        B = np.array(y_bear, dtype=np.float32)                          # (N, n_bearing)
+        if bearing_is_fixity:
+            # already a ratio in [0,1] -> report as fixity %
+            y = np.hstack([y, B * 100.0]).astype(np.float32)
+            print("  [multi-output] bearing label = FIXITY ratio (%).")
+        else:
+            if bearing_max is None or bearing_max <= 0:
+                bearing_max = float(B.max()) or 1.0
+                print(f"  [multi-output] bearing_max not in manifest - normalising "
+                      f"by observed max {bearing_max:.3g} Nm/rad.")
+            y = np.hstack([y, (B / bearing_max) * 100.0]).astype(np.float32)
 
     extra = f" + {len(bidx)} bearing" if bidx else ""
     print(f"  [multi-output] {X.shape[0]} passages, {idx} states, "

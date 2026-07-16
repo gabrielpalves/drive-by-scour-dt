@@ -153,7 +153,24 @@ Npass = 50;                 % passages per damage state (operational variability
 % 'target' bearing state [left,right] becomes a LABELLED TARGET — sampled
 %          JOINTLY with scour by one LHS and saved as data.bearing_vector.
 Bearing_Intensity = 0.0;    % 'fixed' mode value [Nm/rad]
-bearing_max       = 1e9;    % 'target' mode upper bound [Nm/rad] (1e9 = seized, Fernandes)
+% ===== RANGE EXTENDED 2026-07-15: sample FIXITY, not raw k_r =============
+% The old design sampled k_r ~ U(0, 1e9) and labelled seized-% = k_r/1e9.
+% Problem: Fernandes's 1e9 is the MINIMUM drive-by-DETECTABLE seized bearing
+% (a detectability FLOOR from the Feng/O'Brien line) — using it as our MAXIMUM
+% meant the whole label range sat between "healthy" and "barely detectable".
+% Khan (2022) sweeps k_r continuously to 1e12 and reports near-full fixity, so
+% real seized bearings live far above 1e9.
+% The response is governed by the ANALYTIC FIXITY RATIO  phi = k/(k + 4EI/L_end)
+% (verified by our own k_r sweep, results/bearing_sensitivity/). For our deck
+% 4EI/L_end ~ 2.3e9, so k_r = 1e9 is only phi ~ 0.30 — the lower third of the
+% available response. But a LINEAR draw over a big k_r range is also wrong: it
+% would pile almost all the response into the first 1% of the label.
+% FIX: draw phi ~ U(0, bearing_fixity_max) and invert  k_r = phi/(1-phi)*4EI/L.
+% phi is bounded [0,1], near-LINEAR in response (a good regression target), and
+% GEOMETRY-NORMALISED — so the bearing label means the same thing on the L60 and
+% L99.6 bridges, which the raw k_r never did. Fernandes's 1e9 survives as a
+% reportable landmark (phi ~ 0.30), not as a cap.
+bearing_fixity_max = 0.95;  % max fixity ratio sampled (0 = free, ->1 = fully fixed)
 
 % ===== Confounder damages — EOV nuisance augmentation =====
 % use_crack_eov is set by the STAGE preset; these are its numeric knobs.
@@ -317,6 +334,13 @@ vel_min = 70; vel_max = 90; % min and max velocity [km/h]
 % the saved label is always data.scour_vector = DamageStates(DC,:).
 n_supp = num_spans + 1;
 n_bear = 2 * strcmp(bearing_mode, 'target');  % bearing label dims (left,right)
+% Fixity->k_r conversion reference (see bearing_fixity_max above). A03 is a pure
+% function, so probe it for the beam properties actually used.
+Beam_probe  = A03_Bridge(struct('Prop', struct('L', L_bridge, 'num_spans', num_spans)));
+k_ref_bear  = 4 * Beam_probe.Prop.E * Beam_probe.Prop.I / (L_bridge / num_spans);
+fix2k       = @(phi) k_ref_bear .* phi ./ (1 - phi);   % k_r [Nm/rad] from fixity
+fprintf('Bearing: 4EI/L_end = %.3g Nm/rad; fixity %.2f -> k_r = %.3g (Fernandes 1e9 = fixity %.2f)\n', ...
+    k_ref_bear, bearing_fixity_max, fix2k(bearing_fixity_max), 1e9/(1e9 + k_ref_bear));
 if strcmp(damage_mode, 'single_scour')
     central = floor(n_supp / 2) + 1;
     DamageStates = zeros(numel(Dano), n_supp);
@@ -325,48 +349,57 @@ if strcmp(damage_mode, 'single_scour')
 else  % multi_scour
     rng(damage_seed);                         % reproducible joint grid
     n_tgt = numel(scour_supports);
-    anchors_s = zeros(1, n_supp);             % healthy (0,...,0)
-    anchors_b = zeros(1, 2);
+    anchors_s  = zeros(1, n_supp);            % healthy (0,...,0)
+    anchors_bf = zeros(1, 2);                 % bearing FIXITY (the label); k_r derived
     if include_anchors
         for ti = 1:n_tgt                      % single-pier scour anchors
             levels = linspace(dano_max / n_anchor_levels, dano_max, n_anchor_levels)';
             blk = zeros(numel(levels), n_supp);
             blk(:, scour_supports(ti)) = levels;   % ONE pier damaged, others 0
-            anchors_s = [anchors_s; blk]; %#ok<AGROW>
-            anchors_b = [anchors_b; zeros(numel(levels), 2)]; %#ok<AGROW>
+            anchors_s  = [anchors_s; blk]; %#ok<AGROW>
+            anchors_bf = [anchors_bf; zeros(numel(levels), 2)]; %#ok<AGROW>
         end
         if n_bear > 0                         % single-bearing anchors (scour 0)
             for bi = 1:2
-                levels = linspace(bearing_max / n_anchor_levels, bearing_max, n_anchor_levels)';
+                levels = linspace(bearing_fixity_max / n_anchor_levels, ...
+                                  bearing_fixity_max, n_anchor_levels)';
                 blk = zeros(numel(levels), 2);
                 blk(:, bi) = levels;
-                anchors_b = [anchors_b; blk]; %#ok<AGROW>
-                anchors_s = [anchors_s; zeros(numel(levels), n_supp)]; %#ok<AGROW>
+                anchors_bf = [anchors_bf; blk]; %#ok<AGROW>
+                anchors_s  = [anchors_s; zeros(numel(levels), n_supp)]; %#ok<AGROW>
             end
         end
     end
-    % ONE joint LHS over scour + bearing targets = broad joint coverage
+    % ONE joint LHS over scour + bearing targets = broad joint coverage.
+    % Bearing dims are sampled in FIXITY space (bounded, near-linear in response,
+    % geometry-normalised) and inverted to k_r for the physics.
     lhs = lhsdesign(n_states_multi, n_tgt + n_bear);
     joint_s = zeros(n_states_multi, n_supp);
     joint_s(:, scour_supports) = lhs(:, 1:n_tgt) * dano_max;
-    joint_b = zeros(n_states_multi, 2);
+    joint_bf = zeros(n_states_multi, 2);
     if n_bear > 0
-        joint_b = lhs(:, n_tgt+1:end) * bearing_max;
+        joint_bf = lhs(:, n_tgt+1:end) * bearing_fixity_max;
     end
-    DamageStates      = [anchors_s; joint_s];
-    BearingStatesMulti = [anchors_b; joint_b];
+    DamageStates       = [anchors_s; joint_s];
+    BearingFixityMulti = [anchors_bf; joint_bf];
+    BearingStatesMulti = fix2k(BearingFixityMulti);      % k_r [Nm/rad]
 end
 n_states = size(DamageStates, 1);
 
 % Bearing state per file (n_states x 2 = [left,right]), any damage_mode:
 switch bearing_mode
-    case 'off',    BearingStates = zeros(n_states, 2);
-    case 'fixed',  BearingStates = repmat([Bearing_Intensity, 0.0], n_states, 1);
+    case 'off'
+        BearingStates = zeros(n_states, 2);
+        BearingFixity = zeros(n_states, 2);
+    case 'fixed'
+        BearingStates = repmat([Bearing_Intensity, 0.0], n_states, 1);
+        BearingFixity = BearingStates ./ (BearingStates + k_ref_bear);
     case 'target'
         if strcmp(damage_mode, 'single_scour')
             error('A00: bearing_mode=''target'' requires damage_mode=''multi_scour''.');
         end
         BearingStates = BearingStatesMulti;
+        BearingFixity = BearingFixityMulti;
     otherwise, error('A00: unknown bearing_mode "%s"', bearing_mode);
 end
 
@@ -436,7 +469,9 @@ case_info = struct( ...
     'scour_dano_max_frac', dano_max, ...
     'bearing_mode', bearing_mode, ...
     'bearing_intensity_Nm_rad', Bearing_Intensity, ...
-    'bearing_max_Nm_rad', bearing_max, ...
+    'bearing_fixity_max', bearing_fixity_max, ...
+    'bearing_k_ref_Nm_rad', k_ref_bear, ...   % 4EI/L_end; k_r = phi/(1-phi)*k_ref
+    'bearing_label', 'fixity_ratio', ...      % label = phi in [0,1], NOT k_r/bearing_max
     'use_crack_eov', use_crack_eov, 'crack_draw', crack_draw, ...
     'crack_p', crack_p, ...
     'crack_hog_ratio', crack_hog_ratio, 'crack_hog_margin', crack_hog_margin, ...
@@ -475,7 +510,8 @@ case_info = struct( ...
     'vel_min_kmh', vel_min, 'vel_max_kmh', vel_max);
 save(fullfile(run_folder, 'case_info.mat'), 'case_info');
 % Also store the full damage-state matrices so the dataset is self-describing.
-save(fullfile(run_folder, 'damage_states.mat'), 'DamageStates', 'BearingStates', 'scour_supports');
+save(fullfile(run_folder, 'damage_states.mat'), 'DamageStates', 'BearingStates', ...
+    'BearingFixity', 'k_ref_bear', 'scour_supports');
 fid = fopen(fullfile(run_folder, 'case_info.txt'), 'w');
 fn = fieldnames(case_info);
 fprintf(fid, '%% TTBI dataset — case manifest\n');
@@ -525,7 +561,8 @@ parfor DC = 1:n_states
     % 2. CONFIGURE DAMAGE  (per-support scour vector; consumed by B02)
     % ---------------------------------------------------------------------
     scour_vec = DamageStates(DC, :);          % full per-support scour-rate row
-    bear_vec  = BearingStates(DC, :);         % [left,right] abutment Nm/rad
+    bear_vec  = BearingStates(DC, :);         % [left,right] abutment k_r [Nm/rad]
+    bear_fix  = BearingFixity(DC, :);         % [left,right] FIXITY ratio = the LABEL
     Damage.scour_rates   = scour_vec;
     Damage.bearing_left  = bear_vec(1);
     Damage.bearing_right = bear_vec(2);
@@ -831,7 +868,8 @@ parfor DC = 1:n_states
     data2save.scour_supports = scour_supports;
     data2save.Dano = max(scour_vec);
     % Bearing label ([left,right] Nm/rad; zeros unless bearing_mode='target'/'fixed')
-    data2save.bearing_vector = bear_vec;
+    data2save.bearing_vector = bear_vec;      % k_r [Nm/rad] (the physics)
+    data2save.bearing_fixity = bear_fix;      % fixity in [0,1] (the regression LABEL)
     % --- NUISANCE-EOV TRACEABILITY (not labels) ---
     data2save.crack_log    = CrackLog;      % per passage: [loc_m, EI-loss, lc_m]
     data2save.profile_mode = profile_mode;
