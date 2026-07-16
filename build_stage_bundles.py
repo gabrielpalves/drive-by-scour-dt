@@ -30,7 +30,8 @@ STAGES = {
     "s23_all4":       ("all_mult", "4-span, all damages"),
 }
 # Extra files that post-date the source bundle's manifest.
-EXTRA_FILES = ["scour_MATLAB/smoke_raw_parity.m", "check_raw_parity.py"]
+EXTRA_FILES = ["scour_MATLAB/smoke_raw_parity.m", "check_raw_parity.py",
+               "README_CAMPAIGN.md"]
 
 def set_a00_stage(t, stage):
     t2, n = re.subn(r"^STAGE = '[^']*';", f"STAGE = '{stage}';", t, count=1, flags=re.M)
@@ -84,6 +85,7 @@ def readme(stage, mode, adds):
 with zipfile.ZipFile(SRC_BUNDLE) as z:
     names = [n for n in z.namelist() if not n.endswith("/")]
 names = [n for n in names if n != "pilot_stage2_L100_mixed_pairs.py"]   # L100-specific
+names = [n for n in names if n != "README_STAGE2.md"]                   # renamed -> README_CAMPAIGN.md
 names = sorted(set(names) | set(EXTRA_FILES))
 
 blobs, missing = {}, []
