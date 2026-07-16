@@ -729,8 +729,11 @@ parfor DC = 1:n_states
                 for try_ = 1:50
                     x0 = x_lo + (x_hi - x_lo - plen)*rand();
                     near_ab = any(abs((x0 + plen/2) - abut_x) <= ballast_trans_margin);
-                    w_ = 1; if near_ab, w_ = ballast_trans_mult; end
-                    if rand() <= w_ / ballast_trans_mult, break; end
+                    % NB: name must NOT collide with a for-loop variable used
+                    % anywhere else in this parfor body (w_ is the wheel index
+                    % in the OOR block below -> parfor rejects assigning to it).
+                    wgt_ = 1; if near_ab, wgt_ = ballast_trans_mult; end
+                    if rand() <= wgt_ / ballast_trans_mult, break; end
                 end
                 if rand() < ballast_p_wet
                     ek = ballast_eta_k_wet(1) + diff(ballast_eta_k_wet)*rand();
@@ -768,8 +771,8 @@ parfor DC = 1:n_states
                     for ip = 1:size(P_, 1)
                         if gx >= P_(ip,1) && gx <= P_(ip,2), in_foul = true; break; end
                     end
-                    w_ = 1/hang_foul_mult; if in_foul, w_ = hang_foul_mult; end
-                    if rand() <= w_ / hang_foul_mult, break; end
+                    wgt_ = 1/hang_foul_mult; if in_foul, wgt_ = hang_foul_mult; end
+                    if rand() <= wgt_ / hang_foul_mult, break; end
                 end
                 H_(ig,:) = [gx, gsz];
             end
