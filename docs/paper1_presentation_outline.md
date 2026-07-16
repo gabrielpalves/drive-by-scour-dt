@@ -29,14 +29,21 @@ Convention below: **[N] Title** — bullets = on-slide; *say:* = the spoken why;
 - *say:* honesty guardrail — we are not claiming they lack robustness/EOV; our delta is the
   **staged, one-factor-at-a-time** character.
 
-**[4] The organising idea: a STAGED ablation (the spine).**
-- Diagram: Stage 0 (localise: 2 piers) → Stage 1 (+bearing: disentangle) → Stage 1c/1f
-  (+crack, +profile EOV) → Stage 2 (scale: 4 spans / ~100 m) → Stage 3 (all-damage).
-- Rule: **select the architecture once, then FIX it** → each stage changes exactly one factor.
+**[4] The organising idea: a STAGED ablation (the spine). ← THE ANCHOR SLIDE**
+- Diagram the 10 rungs as the maintainer's questions:
+  `s0` can I localise scour? → `s11` does a **bearing** fool me? → `s12` a **crack**? →
+  `s13` **both**? → `s14` does **rail roughness**? → `s15` **track damage**? → `s16` the
+  **train**? ‖ then scale: `s21` → `s22` → `s23` (4-span, ~100 m).
+- Rule: **select the architecture once, then FIX it** → each rung changes exactly one factor.
+- **Heads = scour + bearing ONLY.** Crack / profile / track / wheel are *nuisances* the
+  network must be **invariant** to — it never estimates them.
 - *say:* this is the core methodological contribution — it's what lets us attribute cause. A
   monolithic "train on everything" experiment can't tell you whether a drop came from the
   extra pier, the second damage, or the roughness.
-- *fig:* the staged pipeline (make this the anchor slide you return to).
+- *say (if asked why crack isn't a head):* **cracks are visually inspectable; submerged scour
+  is not.** Drive-by earns its keep on what inspection can't see — so the crack's job here is
+  to try to *fool* the scour estimate, not to be reported.
+- *fig:* the ladder (return to it between every result).
 
 **[5] Why classification → regression.**
 - Single-scour study: 61 **ordinal classes** (0–60% @1%), MSE on the class index (ordinal so
@@ -90,6 +97,30 @@ Convention below: **[N] Title** — bullets = on-slide; *say:* = the spoken why;
   answered with a number, not a hope. Tie to the k_r sensitivity sweep (methods fig).
 - *fig:* Stage-1 4-head parity + a leakage bar.
 
+**[10b] How we anchor the nuisances (the "are you sure?" slide).**
+- Every EOV parameter is cited or derived-from-cited — including the **draw frequency**:
+  persistent conditions (profile realisation, crack, track state) are drawn **per damage
+  state**, not per passage, because track geometry evolves over MGT, not between trains
+  (EN 13848-2: ≤0.5 mm pass-to-pass repeatability).
+- **The prevalence paradox, resolved** — a nice story: field data say *~50% of concrete
+  sleepers show some voiding*; our mechanical model tops out at ~9%. Both are right —
+  most voids are **sub-threshold** (<1 mm absorbed elastically; **1–2 mm** already raises
+  adjacent contact force **~70%**). Only 10–20% of settled sleepers exceed 1.5–2 mm ⇒
+  **5–10% impactfully unsupported** ⇒ Poisson λ=3.0 groups/100 m.
+- Also corrected: pads (the cited 0.5% is an **annual incidence rate**, not a snapshot — we
+  were ~4× under); fouling↔voiding **coupled** (mud pumping); ballast **×3** near abutments.
+- *say:* this is the slide that answers "did you just make these numbers up?" — no, and where
+  we couldn't source something we say so (⚠ one GPR figure still needs a better source).
+
+**[10c] A correction we're reporting, not hiding.**
+- For the crack location we computed the **moving-load |M| envelope** and concluded uniform
+  placement was fine (envelope is broad; peaks favour mid-span ~2:1).
+- **The literature overturned it:** real cracking is **hogging-dominated >4:1** — over a pier
+  the **top fibre** is in tension (concrete's weakest mode) *and* takes runoff/chlorides;
+  **Eurocode 4** mandates a cracked section over 15% of span each side of supports.
+- *say:* the envelope answers *"where is bending large?"*, not *"where does concrete fail?"* —
+  the wrong lens. Good slide for this audience: it shows the method self-corrects.
+
 **[11] Result — the roughness finding (the interesting one).**
 - Under realistic **per-passage** roughness (first pilot), **all sprung channels collapsed** to
   predict-the-mean; **unsprung wheel channels survived** → the clean-track ranking **inverted**.
@@ -100,7 +131,25 @@ Convention below: **[N] Title** — bullets = on-slide; *say:* = the spoken why;
 - **Caveat (say it):** pilot used deprecated geometry + an over-aggressive per-passage EOV;
   we corrected the EOV design (per-STATE profile, FRA-4, EN 13848-2 rationale) and are
   regenerating — direction is robust, magnitudes pending.
+- **The open question `s14_prof` answers:** with the corrected *per-state* profile the sprung
+  channels may well survive. **Either outcome is a result** — collapse = a real deployment
+  limit; survival = the collapse was an artefact of over-randomisation, and we've localised
+  the blame precisely. That's the ladder earning its keep.
 - *say:* this is where the group's roughness/UQ instincts will engage — lean in.
+
+**[11b] Why we train on INDEPENDENT scour when it's physically dependent.**
+- Piers of one bridge share a flood — scour *is* correlated. We still train with an
+  **independent** LHS across piers.
+- **Don't bake the prior into the likelihood:** the network learns `p(response | state)`;
+  the correlation is `p(state)`. Train on correlated states and it infers "pier 3 is scoured
+  because pier 2 is" — **without evidence** — and the twin then applies that prior *again*,
+  double-counting.
+- It would also **destroy the localisation claim**: the network would rarely see
+  "pier 2 damaged, pier 3 healthy" — the exact discrimination under test.
+- The dependence lives in the **twin**, modelled *mechanistically* (all piers respond to the
+  same flood driver), and — since correlation at ~20–25 m spacing isn't well established —
+  reported as a **swept sensitivity**, not asserted.
+- *say:* good slide for a Bayesian audience; it's a likelihood-vs-prior modularity argument.
 
 **[12] Whys, gathered (the intellectual core).**
 - Pooling wins because it matches two-timescale physics (not tuning luck) — consistent across
@@ -126,10 +175,18 @@ Convention below: **[N] Title** — bullets = on-slide; *say:* = the spoken why;
 ---
 
 ## Delivery notes
-- Anchor on slide [4] (the staged diagram) — return to it between results so the audience
-  always knows which factor is being varied.
-- Two "invite critique" moments for Todd's group: the **selection metric** [7] and the
-  **roughness/EOV** finding [11]. These are where methodological feedback is most valuable.
+- Anchor on slide [4] (the ladder) — return to it between results so the audience always
+  knows which factor is being varied.
+- **Status banner, say it once and early:** the campaign is being **regenerated from scratch**
+  on the corrected ladder + anchored EOVs; every number shown is a *direction* from the
+  superseded datasets, not a final value. This audience will respect that far more than
+  polished numbers with a shaky provenance — and it makes [10b]/[10c] land as strengths.
+- **Four "invite critique" moments** for Todd's group — these are where their feedback is
+  worth most: the **selection metric** [7], the **EOV anchoring** [10b], the **crack
+  correction** [10c], and the **roughness finding** [11].
 - Numbers to have memorised: localisation 0.99; 2≈8; scour 0.76→1.80 with bearing; leakage
-  2.4 pp; mixed-pair +17%. Everything else can live on slides.
-- If short on time, cut [5]-detail and [8]-detail, never [4], [7], [11].
+  2.4 pp; mixed-pair +17%; voids 1–2 mm ⇒ +70% contact force ⇒ 5–10% impactful.
+- If short on time, cut [5]-detail and [8]-detail; keep [4], [7], [10c], [11].
+- Two things to be ready to defend, because they *will* come up: the **deck-mass /
+  fundamental-frequency** check (§limitations — have the as-built frequency ready if you've
+  run it), and **why crack is a nuisance rather than a head** (slide [4] note).

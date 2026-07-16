@@ -7,10 +7,12 @@ scour and bearing damage in multi-span railway bridges*
 physics-matched inductive bias for drive-by railway-bridge damage identification: a staged
 architecture-and-sensor ablation*.)
 
-**Status:** enhanced 2026-07-13 to the current STAGED design. Supersedes the v1 skeleton
-(single-scour classification only). Grounded in the completed Stage-0 (multi-scour) and
-Stage-1 (bearing) results plus the EOV-redesign and mixed-pair pilot; Stage-1c/1f/2/3 are
-in generation. Numbers marked ⚠ need a final check at write-time (see the verify list).
+**Status:** updated 2026-07-15 to the final **10-rung ladder**, the anchored EOV design, the
+load-time noise model, and the corrected crack prior. Supersedes the v1 skeleton
+(single-scour classification only). Results below come from the *superseded* Stage-0/Stage-1
+datasets and the L100 pilot — the whole campaign is being **regenerated from scratch** on the
+new ladder, so treat every §5 number as a *direction*, not a final value, until it lands.
+Numbers marked ⚠ need a check at write-time (see the verify list).
 
 **Target venue:** TBD (confirm with advisor). Ranked fit — MSSP (top; signal-processing +
 drive-by community) → Structural Health Monitoring (Sage) → CACIE (ML angle) → Engineering
@@ -46,10 +48,14 @@ mechanism.
 ## 1. Contributions (state these explicitly in the intro)
 
 1. **A staged ablation methodology for drive-by damage ID.** We select the architecture ONCE
-   on the simplest task and then FIX it, so every later stage varies exactly one scientific
-   factor — number of piers (localisation), a second damage type (bearing disentanglement),
-   span count/length (scale), and EOV nuisances (robustness). This isolates *what causes what*
-   in a way a single monolithic experiment cannot. **(The organising contribution.)**
+   on the simplest task and then FIX it, so every later rung varies exactly one scientific
+   factor. The ladder follows the questions a bridge maintainer actually asks — *can I
+   localise scour? does a bearing fool me? a crack? both? does rail roughness? track damage?
+   the train itself?* — and answers each with a number rather than a hope. This isolates
+   *what causes what* in a way a monolithic "train on everything" experiment cannot.
+   **(The organising contribution.)** Ten rungs:
+   `s0_scour → s11_bear → s12_crack → s13_bearcrack → s14_prof → s15_track → s16_all`
+   (L60/3-span), then `s21_scour4 → s22_bearcrack4 → s23_all4` (L99.6/4-span).
 2. **A physics-matched architectural inductive bias.** N-HiTS multi-rate pooling mirrors the
    two-timescale physics of the drive-by signal — high-frequency wheel/rail-contact transients
    vs. the low-frequency modal/quasi-static deflection induced by support-stiffness loss — and
@@ -66,10 +72,18 @@ mechanism.
 5. **A robustness-based model-selection criterion** (median error + IQR + **collapse-rate**,
    with a UCB variant), rather than the single luckiest Optuna trial — rewards models that are
    *reliably* good and exposes fragile single-sensor configs a point estimate would hide.
-6. **A literature-anchored EOV domain-randomisation design** — and an empirical, physically-
-   explained result that **per-passage roughness collapses sprung-channel scour regression
-   while unsprung channels survive**, with a **mixed-pair fusion** remedy. *(Report the
-   direction now; final magnitudes after the L=99.6 regeneration.)*
+6. **A literature-anchored EOV domain-randomisation design** — every nuisance parameter cited
+   or derived-from-cited, with the draw *frequency* itself argued from physics (persistent
+   conditions per state, not per passage; EN 13848-2, Sato/Shenton) — and an empirical,
+   physically-explained result that **per-passage roughness collapses sprung-channel scour
+   regression while unsprung channels survive**, with a **mixed-pair fusion** remedy.
+   *(Report the direction now; final magnitudes after the regeneration.)*
+7. **A separation of likelihood from prior.** Inter-pier scour is physically dependent, yet we
+   train on an **independent** LHS: the network must learn `p(response | state)`, and baking
+   the correlation `p(state)` into it would (i) let the model infer a pier's condition without
+   evidence and (ii) destroy the localisation claim it is meant to test. The dependence is
+   modelled *mechanistically* in the digital twin (shared flood driver), not in the training
+   set — a modularity argument we believe generalises to other multi-damage SHM learners.
 
 > Positioning vs. Fernandes (prior art): they establish drive-by scour *feasibility* (and a
 > multi-damage *classification*). We answer *which architecture and why*, *how few sensors*,
@@ -156,29 +170,43 @@ joint-class scheme combinatorial; (ii) continuous severity is the state a **digi
 tracks; (iii) it exposes **per-pier / per-head** error and a **localisation** read directly.
 Same backbone, same PAA front end — only the head and loss change (`core/task.py`).
 
-**4.4 EOV as domain randomisation (literature-anchored; see the design review).** Generation
-is **noise-free**; measurement noise is a **load-time** model (below). Nuisances that are
-**persistent conditions** — the track-profile realisation and any crack — are drawn **once per
-damage state** and held across that state's passages (physical: track geometry evolves over
-MGT, not between trains; EN 13848-2 pass-to-pass repeatability ≤0.5 mm), with a small
-per-passage jitter; the profile class is fixed at **FRA 4** (roughest permissible at
-70–90 km/h; classes 5–6 are premium track). Per-passage operational variability = speed
-[70,90] km/h, temperature [3,33] °C via E(T), and vehicle-property randomisation. **This
-corrects the first Stage-2 pilot**, which redrew a fresh profile+class and a fresh random
-crack *every passage* — physically indefensible and the direct cause of the sprung-channel
-collapse (§5.5).
+**4.4 EOV as literature-anchored domain randomisation.** *(Full spec: methodology §A.3.)*
+Persistent **conditions** — the track-profile realisation, any crack, the track-layer state —
+are drawn **once per damage state** and held across its passages (track geometry evolves over
+MGT, not between trains: EN 13848-2 ≤0.5 mm repeatability; Sato/Shenton), plus a small
+per-passage jitter; only *operational* variability is redrawn per passage (speed, temperature,
+vehicle properties, wheel damage). Profile fixed at **FRA 4**. **This corrects the first
+scale-up pilot**, which redrew a fresh profile+class and crack *every passage* — the direct
+cause of its sprung-channel collapse (§5.5). Track-layer numbers are now **anchored** via a
+resolution of the *prevalence paradox*: the reported "~50% of sleepers show some voiding" and
+a ~9% mechanical model are both right because most voids are **sub-threshold** (impact
+threshold 1.0–2.5 mm; only 10–20% of settled sleepers exceed 1.5–2.0 mm ⇒ **5–10%
+impactfully unsupported**) → Poisson λ=3.0 groups and λ=1.2 fouled patches per 100 m, pads at
+**snapshot prevalence** 2% (the cited 0.5% is an annual *incidence* rate), fouling↔voiding
+**coupled ×3**, ballast **×3** near abutments. ⚠ one pivotal GPR figure needs a source
+re-check.
 
 **4.5 Measurement noise as a load-time observation model (not baked into the physics).**
-Acquisition noise is injected when the data is loaded, per channel, so the sensor model stays
-configurable without regenerating data — and because sensor grade is position-dependent
-(range, reliability), noise need not be uniform across channels. **Domain caveat (verified):**
-adding noise before vs after the time→space interpolation is **not** equivalent — the legacy
-before-interpolation noise is band-limited/coloured and speed-dependent (≈0.67× variance but
-≈1.46× the energy surviving PAA vs same-nominal white noise added after). We therefore state
-the noise model explicitly as an analysis-domain floor and, going forward, prefer an
-**additive datasheet-anchored** floor to the legacy multiplicative wheel-only model. *(EN
-61373 severities describe the vibration ENVIRONMENT for qualification — range/reliability —
-not the acquisition noise floor; do not scale noise by them.)*
+Generation is **noise-free**: the generator saves the **raw time-domain** signal plus the
+space-transform/crop parameters, and the interpolation, crop and noise injection all happen at
+**load time** — so the sensor model is configurable per channel and per experiment without
+ever regenerating data. **A reportable finding:** adding noise before vs after the time→space
+interpolation is **not** equivalent — because the interpolation is linear, time-domain noise
+becomes band-limited/coloured and speed-dependent (≈0.67× variance but ≈**1.46× the energy
+surviving PAA** vs white noise added after). Same nominal 5%, different perturbation; we
+state the model explicitly rather than leave it implicit. Future work: an **additive
+datasheet-anchored** floor. *(EN 61373 severities describe the vibration ENVIRONMENT for
+qualification — range/reliability — **not** an acquisition noise floor.)*
+
+**4.5b Damage-location priors, and a correction we report.** Scour (piers), bearing
+(abutments) and hanging sleepers (cited ±15 m transition spike) carry location priors by
+construction or citation. For the **crack** we first drew uniformly and justified it from the
+computed **moving-load |M| envelope** (broad: only ~2–4% of the range ever sees |M|<35% of
+max; peaks favour mid-span ~2:1). That was **wrong — the envelope is the wrong lens**: it
+answers *where bending is large*, not *where concrete fails*. Real cracking is
+**hogging-dominated >4:1** (top-fibre tension over supports + runoff/chlorides; mid-span
+soffit cracks close under compression), and **Eurocode 4 mandates** a cracked section over 15%
+of span each side of internal supports. Now: hogging:sagging **4:1**, ±17.5% of a span.
 
 **4.6 Signal preprocessing — PAA.** Per-channel standardisation fitted on the training split
 only (fixed 80/20, seed 42), then **PAA to 512 segments** as a structural low-pass filter:
@@ -192,11 +220,17 @@ two-timescale (fast wheel–rail transients over slow deflection); multi-rate po
 both by construction, letting the model read the slow scour/bearing component without
 discarding the fast one. Tested in §5.1.
 
-**4.8 Architecture policy (select once, then fix).** All arms run at Stage 0 (the architecture-
-selection stage, and the paper's architecture table); the winner is **fixed** for every later
-stage, which then varies only the scientific factor. Re-running is resumable and, by policy,
-**from scratch** (tagged studies) when a factor like the noise model changes — never silent
-extension.
+**4.8 Architecture policy + the ladder (select once, then fix).** All arms run at `s0_scour`
+(the architecture-selection rung, and the paper's architecture table); the winner is **fixed**
+for every later rung, which then varies only its one scientific factor. Ladder and the three
+design decisions (crack = nuisance; profile = its own rung; all-damages split track/train) in
+methodology §A.2. **Heads = scour + bearing only**; crack, profile, track and wheel damage are
+nuisances the network must be *invariant* to. Re-runs are, by policy, **from scratch** (tagged
+studies) — never silent extension.
+
+**4.9 Inter-pier scour: independent in training, dependent only in the twin.** See
+methodology §A.6 — the likelihood-vs-prior argument, and why a correlated training set would
+destroy the localisation claim.
 
 **4.9 Hyperparameter optimisation.** Optuna multivariate **TPE** (handles the conditional
 block search space), 25% random start-up, **100 trials**/study (⚠ single-scour study used more),
@@ -223,41 +257,56 @@ trial over-states performance and hides fragility (e.g. a single pitch channel t
 sweep. Champion pair (single-scour: RearBogie_Vert + CarBody_Pitch) ≈ full array at zero
 collapse; ~3 sensors saturate. The *which two* has a suspension-chain reading (§6).
 
-**5.3 Stage 0 — multi-pier localisation + quantification (regression).** L60 / 3-span, scour at
-piers 2 & 3, no bearing. **Champion pair RearBogie_Vert + CarBody_Pitch: aggregate MSE 0.757
-(RMSE ~0.87 pp), per-pier 0.72 / 0.79 (balanced), localisation accuracy 0.990.** Best single
-RearBogie_Vert 0.86 → the pair is only ~12% better = near-single-sensor sufficiency. One pass
-localises AND quantifies two independent piers → no aggregate/max fallback needed.
+**5.3 `s0_scour` — multi-pier localisation + quantification (regression).** L60 / 3-span, scour
+at piers 2 & 3. *(Superseded-dataset values:)* **champion pair RearBogie_Vert + CarBody_Pitch:
+aggregate MSE 0.757 (RMSE ~0.87 pp), per-pier 0.72 / 0.79 (balanced), localisation 0.990.**
+Best single RearBogie_Vert 0.86 → the pair is only ~12% better = near-single-sensor
+sufficiency. One pass localises AND quantifies two independent piers → no aggregate/max
+fallback needed.
 
-**5.4 Stage 1 — bearing disentanglement.** Add left/right bearing seized-% heads (same
-geometry). **Champion pair scour MSE 0.757 → 1.798** (RMSE 0.87 → 1.34 pp; per-pier balanced;
-localisation 0.988) = the measured cost of sharing the network with a second damage. **Bearing
-heads carry real skill** (pair bearing MSE 7.0; left 4.8 / right 9.2 → RMSE ~2.2 / 3.0
-seized-%, tight parity), consistent with a k_r sensitivity sweep (10–16% rel-RMS response at
-1e9; CarBody_Pitch most bearing-sensitive). **Cross-leakage** (single-damage anchor subsets):
-false-scour-from-bearing **2.37 pp**, false-bearing-from-scour 3.43 seized-%. The auto-pair
-**flips** to FrontBogie_Vert + CarBody_Pitch — explained by bearing sensitivity (CarBody_Pitch)
-and entry-abutment proximity (FrontBogie_Vert); right-bearing is harder than left because the
-crop ends before the exit abutment (deck-continuity info only). *Architecture-consistency note:*
-S2V edges the champion on the pair (~10%) but loses 7/8 singles — reported as robustness, policy
-unchanged.
+**5.4 `s11_bear` — bearing disentanglement.** Add left/right bearing seized-% heads.
+*(Superseded-dataset values:)* **champion-pair scour MSE 0.757 → 1.798** (RMSE 0.87 → 1.34 pp;
+localisation 0.988) = the measured cost of sharing the network with a second damage.
+**Bearing heads carry real skill** (pair bearing MSE 7.0; left 4.8 / right 9.2 → RMSE ~2.2 /
+3.0 seized-%, tight parity), consistent with the k_r sensitivity sweep (10–16% rel-RMS at 1e9;
+CarBody_Pitch most bearing-sensitive). **Cross-leakage:** false-scour-from-bearing **2.37 pp**,
+false-bearing-from-scour 3.43 seized-%. The auto-pair **flips** to FrontBogie_Vert +
+CarBody_Pitch — explained by bearing sensitivity (CarBody_Pitch) and entry-abutment proximity
+(FrontBogie_Vert); right-bearing is harder than left because the crop ends before the exit
+abutment (deck-continuity information only). *Architecture-consistency note:* S2V edges the
+champion on the pair (~10%) but loses 7/8 singles — reported as robustness; policy unchanged.
 
-**5.5 EOV robustness + the roughness finding (Stage 1c/1f/2; direction now, magnitudes after
-regen).** Injecting per-passage roughness in the first (deprecated) Stage-2 pilot **collapsed
-all six sprung channels** to predict-the-mean (scour MSE ≈ label variance; localisation ≈
-chance) while **wheel (unsprung) channels retained skill** (pair scour RMSE ~11 pp,
-localisation 0.744) — the clean-track ranking **inverted**. Physics: suspension filtering +
-car-body resonance masks the quasi-static scour signature under strong roughness, while the
-unsprung mass traces profile+deflection directly (§6). **Mixed-pair pilot (budget-matched):**
+**5.5 `s12`–`s13` — does a crack fool the scour estimate?** The bridge-damage rungs: crack
+alone, then bearing + crack (the Fernandes-comparable set). Read `scour_mse` and the leakage
+columns against `s0`/`s11`. *(Awaiting the regenerated chain.)*
+
+**5.6 `s14_prof` — the roughness rung (the interesting one).** *(Direction from the deprecated
+L100 pilot; magnitudes pending.)* Injecting **per-passage** roughness collapsed **all six
+sprung channels** to predict-the-mean (scour MSE ≈ label variance; localisation ≈ chance)
+while **wheel (unsprung) channels retained skill** (pair scour RMSE ~11 pp, localisation
+0.744) — the clean-track ranking **inverted**. Physics: suspension filtering + car-body
+resonance mask the quasi-static scour signature under strong roughness, while the unsprung
+mass traces profile + deflection directly (§6). **Mixed-pair pilot (budget-matched):**
 **FrontBogie_Vert + Wheel1 beat Wheel1 + Wheel2 by 17% scour MSE** (105 vs 126) and +5 pp
 localisation, *despite FrontBogie_Vert alone being collapse-level* — the TSD/two-axle residual
-(profile-reference) mechanism; CarBody + Wheel1 was worse than wheel+wheel (the sprung partner
-must sit low in the suspension chain). **Caveat banner:** these are pre-fix L=100 / per-passage-
-EOV data — re-established on the regenerated L=99.6, per-state-EOV chain before final numbers.
+(profile-reference) mechanism; CarBody + Wheel1 was **worse** than wheel+wheel (the sprung
+partner must sit low in the suspension chain). **The key open question:** the pilot used a
+physically indefensible *per-passage* redraw; with the corrected *per-state* profile the
+sprung channels may well survive. `s14_prof` is the clean test, and either outcome is a
+result — collapse confirms a real deployment limit; survival shows the collapse was an artefact
+of over-randomisation and localises the blame precisely.
 
-**5.6 Summary tables.** (i) Architecture (3-arm). (ii) Sensor economy. (iii) Staged chain:
-Stage-0 scour → +bearing cost → +EOV — one row per stage with scour MSE, localisation, bearing
-MSE, leakage. Pull exact numbers from the `*_summary/leaderboard*.csv` at write-time.
+**5.7 `s15`–`s16` — do the rail and the train interfere?** The maintainer-facing question,
+answered separately for track-layer damage and for wheel damage so any degradation is
+attributable to one or the other.
+
+**5.8 Scale-up (`s21`–`s23`).** Does the pair still suffice with 3 piers and ~100 m? Is the
+middle pier harder? How much do the EOVs inflate per-pier MSE at scale?
+
+**5.9 Summary tables.** (i) Architecture (3-arm). (ii) Sensor economy. (iii) **The ladder
+table** — one row per rung with scour MSE, localisation, bearing MSE and leakage, so the
+marginal cost of each factor is read directly down a column. Pull exact numbers from
+`results/<stage>_summary/leaderboard_median.csv` at write-time.
 
 ---
 

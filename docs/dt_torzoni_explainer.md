@@ -107,6 +107,19 @@ Same DBN spine; four substantive changes, each a Paper-2 contribution:
    consequence figures from Kamariotis: ~€20k/€600k/€50M/€150k-day tiers) and quantify the
    **value of a drive-by observation / an inspection** against it — the "is another train pass
    worth waiting for, or do we inspect now?" trade, risk-adjusted (CVaR/entropic toggles).
+5. **The inter-pier correlation lives HERE, not in the training set** (decided 2026-07-15;
+   Paper-1 methodology §A.6). Scour at the piers of one bridge is physically dependent — same
+   flood, same reach, same bed — but Paper 1 trains on an **independent** LHS on purpose: the
+   network must learn the *likelihood* `p(response | state)`, and baking the *prior*
+   `p(state)` into it would let the model infer a pier's condition without evidence, then have
+   the twin apply that same prior again through the DBN — double-counting. The twin is exactly
+   where the prior belongs. **Model it mechanistically, not as an imposed copula:** every pier
+   responds to the *same* compound-Poisson flood shock (`digital_twin/flood.py`, already
+   built) with its own sensitivity, so the correlation **emerges from shared hydrology** and is
+   defensible without quoting a copula coefficient. Since the correlation at our ~20–25 m pier
+   spacings is not well established, **sweep** the per-pier sensitivity spread (independent →
+   strongly coupled) and report how far the inspect/wait boundary actually moves — turning an
+   uncertain parameter into a VoI sensitivity *result* rather than an unsupported assumption.
 
 ## 4.1 Staged DT, mirroring the ablation stages
 

@@ -1,4 +1,4 @@
-# Multi-damage bundle v8 — the remaining campaign (2026-07-12 EOV + noise redesign)
+# Multi-damage campaign — 10-rung ladder, per-stage bundles (2026-07-15)
 
 > UPDATE 2026-07-12: Stage 1 is DONE + ANALYSED (bearing-head CONFIRMED).
 > The first Stage-2 run is DEPRECATED — it was generated with the pre-fix
