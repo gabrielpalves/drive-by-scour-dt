@@ -582,6 +582,7 @@ parfor DC = 1:n_states
     % train of the fleet each passage). Pre-initialised for parfor analysis.
     state_fra_class = profile_fra_classes(1);
     Tk = struct();
+    beam_f1 = NaN;   % deck 1st natural frequency [Hz] - see the capture below
 
     % Pre-allocate LHS for this specific damage case (speed/temperature)
     lhs_matrix = lhsdesign(2, Npass);
@@ -833,6 +834,19 @@ parfor DC = 1:n_states
         % Processing and Calculations
         [Calc_local, Beam_local, Track_local] = A04_Options(Beam_local, Track_local, Profile_cfg);
         [Sol_local, Calc_local, Train_local, Beam_local, Track_local] = B00_Calculations(Calc_local, Train_local, Track_local, Beam_local, Damage);
+        % ---- Deck fundamental frequency: SELF-DOCUMENT every dataset ----
+        % A 1000x deck-mass error (rho 9.6 vs 9600) hid for months precisely
+        % because the ML still trained: it put f1 at ~131 Hz instead of ~4 Hz,
+        % making the deck rigid to the vehicle. Recording f1 in every file makes
+        % that class of bug impossible to miss. Expect ~4.1 Hz (L60/L40) or
+        % ~2.8 Hz (L99.6). If it reads tens of Hz, STOP - check A03 rho / B43 A.
+        if j_pass == 1 && isfield(Beam_local, 'Modal') && ...
+                isfield(Beam_local.Modal, 'f') && ~isempty(Beam_local.Modal.f)
+            beam_f1 = Beam_local.Modal.f(1);
+            if DC == 1
+                fprintf('[CHECK] deck f1 = %.2f Hz (healthy state; expect a few Hz)\n', beam_f1);
+            end
+        end
 
         % Data Processing
         data = D01_DataProcessing(1, j_pass, Sol_local, Train_local, Calc_local, Damage, data);
@@ -868,6 +882,7 @@ parfor DC = 1:n_states
     data2save.scour_supports = scour_supports;
     data2save.Dano = max(scour_vec);
     % Bearing label ([left,right] Nm/rad; zeros unless bearing_mode='target'/'fixed')
+    data2save.beam_f1_Hz = beam_f1;           % deck 1st nat. freq [Hz] - sanity anchor
     data2save.bearing_vector = bear_vec;      % k_r [Nm/rad] (the physics)
     data2save.bearing_fixity = bear_fix;      % fixity in [0,1] (the regression LABEL)
     % --- NUISANCE-EOV TRACEABILITY (not labels) ---
