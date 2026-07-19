@@ -158,7 +158,10 @@ from the model's own `B09`/`B56` output before submission; report it and the eff
   `[0,1e9]` Nm/rad and regressed as a **seized-%** head. The `1e9` anchor = Fernandes's
   minimum drive-by-detectable seized bearing; our own sensitivity sweep (below) shows it maps
   to ~0–31% analytic fixity — a documented **range** limitation, not a noise floor.
-- **Crack** (Stage 1c+) = Sinha-type local EI reduction, a **nuisance/EOV** (not a label).
+- **Crack** (Stage 1c+) = damaged-element EI reduction (uniform I drop on the affected ~0.3 m
+  element(s), cf. Fernandes et al. 2025), a **nuisance/EOV** (not a label). ⚠ 2026-07-17: do NOT
+  cite this as Sinha — Sinha/Friswell/Edwards (2002) is a *tapered* (piecewise-linear) EI model
+  parametrized by crack depth; ours is the classical damaged-element benchmark.
 - **Track-layer + wheel OOR** (Stage 3) = ballast/hanging-sleeper/pad + wheel-flat nuisances.
 
 **4.3 From classification to regression (a deliberate reformulation).** The single-scour
@@ -209,7 +212,9 @@ soffit cracks close under compression), and **Eurocode 4 mandates** a cracked se
 of span each side of internal supports. Now: hogging:sagging **4:1**, ±17.5% of a span.
 
 **4.6 Signal preprocessing — PAA.** Per-channel standardisation fitted on the training split
-only (fixed 80/20, seed 42), then **PAA to 512 segments** as a structural low-pass filter:
+only (fixed 80/20, seed 42, **grouped by damage state** — 2026-07-17: validation holds out
+whole states/files, never passages of a trained state, so val = unseen-state generalisation),
+then **PAA to 512 segments** as a structural low-pass filter:
 smooths high-frequency rail/wheel content, preserves the deflection-basin signature, ~10×
 length reduction. (CWT scalogram branch as a 2-D comparator.) [Fernandes 2025 PAA precedent]
 

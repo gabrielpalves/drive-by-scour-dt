@@ -94,17 +94,40 @@ elseif Calc.Profile.Type == 1
     %Salvar um novo perfil
     %save('Calc.ProfileData06-06.mat','Calc')   
   
-% ---- Profile from a dataset ----
+% ---- Profile from a dataset ("fixed" measured baseline) ----
 elseif Calc.Profile.Type == 2
-    
-    A = Calc;
-    
-    load ('Calc.ProfileData15_05.mat','Calc')
-    
-    B = Calc.Profile;
-    Calc = A;
-    Calc.Profile = B;
-   
+
+    % AUDIT FIX 2026-07-17 (R4): load ONLY the elevation h and map it onto the
+    % LIVE x-grid WITHOUT rescaling; PRESERVE all live geometry. History:
+    %  - the original `Calc.Profile = B` reverted L_bridge to the stored 39.9 m
+    %    (wrong crop / contact span; too short for L99.6);
+    %  - R2 fixed geometry but WRAPPED the profile (mod), a step discontinuity
+    %    that tripped wheel-rail contact loss on L99.6;
+    %  - R3 replaced the wrap with a linear STRETCH — contact-safe, but it
+    %    rescaled wavelengths differently per geometry (L60 -4.2%, L99.6 +7.9%,
+    %    ~12.7% spectral gap), CONFOUNDING the scale-up comparison.
+    % R4 uses a triangle-wave REFLECT fold: the identity on [x0, x0+span] and a
+    % mirror beyond it. So the stored realization is used EXACTLY (no rescale)
+    % wherever the track is within the stored 325.8 m — which covers the whole
+    % deck+crop for BOTH L60 (track 312 m) and L99.6 (deck ends 222.6 m, crop
+    % ends ~240 m) — making the fixed baseline the SAME physical irregularity in
+    % every geometry. Only L99.6's tail (325.8-351.6 m, ~103 m PAST the deck
+    % exit and outside the crop) is mirrored; it just needs to keep wheel-rail
+    % contact, which smoke_geometry verifies at 70/80/90 km/h. The stored file
+    % is a synthetic realization, so a mirrored out-of-crop tail is immaterial.
+    stored_ = load('Calc.ProfileData15_05.mat','Calc');
+    x_st_ = stored_.Calc.Profile.x(:)';
+    h_st_ = stored_.Calc.Profile.h(:)';
+    span_ = x_st_(end) - x_st_(1);
+    xq_   = Calc.Profile.x;                          % live grid (set above)
+    t_    = mod(xq_ - x_st_(1), 2*span_);            % fold period = 2*span
+    xw_   = x_st_(1) + min(t_, 2*span_ - t_);        % identity on [0,span], mirror beyond
+    Calc.Profile.h = interp1(x_st_, h_st_, xw_, 'linear');
+    % PSD arrays from the stored realization are stale on the live grid; blank
+    % them so nothing downstream reads a mismatched spectrum.
+    Calc.Profile.PSD_X = [];
+    Calc.Profile.PSD_Y = [];
+
 end % if Calc.Profile.Type
 
 % ---- Rail-irregularity intensity toggle ----

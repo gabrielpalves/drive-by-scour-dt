@@ -10,14 +10,19 @@ def _track_vectors(Track, Model, Calc, Damage):
     """Per-sleeper track-layer property vectors from Damage.track descriptors.
 
     Exact mirror of scour_MATLAB/B54_ModelMatrices.m::local_track_vectors.
-    Descriptors use TRACK x-coordinates [m] (0..Calc.Profile.L; the bridge
-    occupies [L_Approach, L_Approach+L_bridge]). Optional fields of
-    Damage.track (attribute container or dict):
+    COORDINATE FRAME (audit fix 2026-07-17): descriptors carrying an
+    x_bridge_local field are in A00's BRIDGE-LOCAL window frame (deck starts
+    at x = x_bridge_local); the sleeper axis here is GLOBAL and under redux=0
+    the deck really starts at num_app*spacing = L_Approach + max_TL, so the
+    axis is shifted into the descriptor frame before any selection. Legacy
+    descriptors without x_bridge_local are read as global coordinates.
+    Optional fields of Damage.track (attribute container or dict):
         ballast_patches : rows [x_start, x_end, eta_k, eta_c]
         hanging_groups  : rows [x_start, n_consec]  (ballast support -> ~0)
         pad_stiff_mult  : scalar chi_pad (global pad aging)
         pad_damp_mult   : scalar beta_pad
         pad_failures    : x-positions of failed pads (k -> ~0)
+        x_bridge_local  : deck-start position in the descriptor frame [m]
     Healthy (Damage/track absent or empty) -> uniform vectors; assembled
     matrices are numerically identical to the legacy scalar path.
     """
@@ -31,6 +36,11 @@ def _track_vectors(Track, Model, Calc, Damage):
     if isinstance(T, dict):           # allow dict descriptors too
         class _D: pass
         d = _D(); [setattr(d, k, v) for k, v in T.items()]; T = d
+    if T is not None:
+        xbl = getattr(T, 'x_bridge_local', None)
+        if xbl is not None and np.size(xbl):
+            x_deck0 = Track.Sleeper.num_app * Track.Sleeper.spacing
+            x = x - (x_deck0 - float(np.ravel(xbl)[0]))
     if T is not None:
         patches = np.atleast_2d(np.asarray(getattr(T, 'ballast_patches', []) if
                                 getattr(T, 'ballast_patches', None) is not None else [], dtype=float))

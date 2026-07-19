@@ -24,7 +24,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 try:
@@ -33,7 +32,8 @@ except ImportError:
     optuna = None   # pipeline.py guards against this; trainer is still importable
 
 from core         import task
-from core.dataset import MemmapDataset, get_or_create_cache
+from core.dataset import (MemmapDataset, get_or_create_cache,
+                          canonical_train_val_split)
 from core.models  import build_model
 from core.utils   import set_global_seed
 
@@ -43,6 +43,81 @@ from core.utils   import set_global_seed
 # ──────────────────────────────────────────────────────────────────────────────
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Training + search-space PROTOCOL (unified protocol_hash, 2026-07-19)
+# ──────────────────────────────────────────────────────────────────────────────
+# Single source of truth: the training code below reads TRAIN_PROTOCOL, and
+# _suggest_params reads SEARCH_SPACE. core/protocol.py folds both into the
+# protocol hash, so changing any value here changes every study/manifest/
+# summary name in lockstep — a re-run can never silently resume studies that
+# trained under a different protocol. check_protocol_hash.py additionally
+# drives _suggest_params with a recording stub and verifies every suggestion
+# it makes matches SEARCH_SPACE exactly (belt-and-braces against drift).
+
+TRAIN_PROTOCOL = {
+    "batch_size":  32,       # train + val DataLoader batch size
+    "patience":    5,        # early-stop after this many non-improving epochs
+    "optimizer":   "Adam(lr, weight_decay)",
+    "scheduler":   "CosineAnnealingLR(T_max=n_epochs)",
+    "objective":   "best epoch-wise inner-val aggregate MSE (task.objective_value)",
+    "trial_seed":  "config['seed'] (independent init/shuffle per config seed)",
+}
+
+# The FULL hyperparameter search space, as data. Spec tuples:
+#     ("int",      low, high)          -> suggest_int(low, high)
+#     ("int_step", low, high, step)    -> suggest_int(low, high, step=step)
+#     ("float",    low, high)          -> suggest_float(low, high)
+#     ("logfloat", low, high)          -> suggest_float(low, high, log=True)
+#     ("cat",      [choices])          -> suggest_categorical(choices)
+# Structure mirrors the conditional shape of the space: per-layer blocks are
+# repeated with an _l{i} suffix; 'lstm'/'nhits' blocks are gated on the arch
+# flags; lstm_dropout is gated on lstm_num_layers > 1.
+SEARCH_SPACE = {
+    "base": {
+        "n_conv_layers":  ("int", 2, 4),
+        "n_dense_layers": ("int", 1, 3),
+        "lr":             ("logfloat", 1e-4, 1e-2),
+        "weight_decay":   ("logfloat", 1e-5, 1e-3),
+    },
+    "per_conv_layer": {                       # x n_conv_layers, suffix _l{i}
+        "n_filters":   ("int_step", 16, 128, 16),
+        "kernel_size": ("cat", [2, 3, 5, 7]),
+        "pooling":     ("cat", [True, False]),
+    },
+    "per_dense_layer": {                      # x n_dense_layers, suffix _l{i}
+        "n_dense_units": ("int_step", 32, 256, 16),
+        "dropout":       ("float", 0.1, 0.5),
+    },
+    "lstm": {                                 # iff config['use_lstm']
+        "lstm_num_layers":  ("int", 1, 2),
+        "lstm_hidden_size": ("int_step", 32, 128, 32),
+        "lstm_dropout":     ("float", 0.1, 0.4),   # iff lstm_num_layers > 1
+    },
+    "nhits": {                                # iff config['use_nhits']
+        "nhits_pool_rates_key": ("cat", ["1_2_4", "1_4_8", "1_3_6", "1_2_4_8"]),
+    },
+}
+
+
+def _suggest_one(trial, name: str, spec: tuple):
+    """Execute ONE search-space spec tuple against an Optuna trial.
+
+    This tiny interpreter is the only place spec tuples are turned into
+    suggest_* calls, so SEARCH_SPACE cannot drift from what is sampled."""
+    kind = spec[0]
+    if kind == "int":
+        return trial.suggest_int(name, spec[1], spec[2])
+    if kind == "int_step":
+        return trial.suggest_int(name, spec[1], spec[2], step=spec[3])
+    if kind == "float":
+        return trial.suggest_float(name, spec[1], spec[2])
+    if kind == "logfloat":
+        return trial.suggest_float(name, spec[1], spec[2], log=True)
+    if kind == "cat":
+        return trial.suggest_categorical(name, spec[1])
+    raise ValueError(f"unknown search-space spec kind {kind!r} for {name!r}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -80,22 +155,29 @@ def train_and_evaluate(
     Returns:
         float: Best validation MSE (lower is better).
     """
-    set_global_seed(42)
+    # AUDIT FIX 2026-07-17: seed from the config, not hardcoded 42. The
+    # multi-seed grid claims independent init/shuffle per seed ("Independent
+    # Optuna seeds per config"); the hardcoded 42 made every "seed" share the
+    # same init stream so only the Optuna sampler varied.
+    set_global_seed(config.get('seed', 42))
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    X, y, _ = get_or_create_cache(config, dataset_name, cache_dir)
+    X, y, _, groups = get_or_create_cache(config, dataset_name, cache_dir)
 
-    all_idx            = np.arange(len(y))
-    train_idx, val_idx = train_test_split(all_idx, test_size=0.20, random_state=42)
+    # Canonical split (seed 42 for ALL config-seeds/arms so they compare on
+    # identical partitions); grouped by damage state - audit fix 2026-07-17;
+    # family-STRATIFIED via the dataset's state table (Feature A 2026-07-19).
+    train_idx, val_idx = canonical_train_val_split(len(y), groups,
+                                                   dataset_name=dataset_name)
 
     label_dtype = task.label_dtype(config)
     train_loader = DataLoader(
         MemmapDataset(X, y, train_idx, label_dtype=label_dtype),
-        batch_size=32, shuffle=True, num_workers=0,
+        batch_size=TRAIN_PROTOCOL['batch_size'], shuffle=True, num_workers=0,
     )
     val_loader = DataLoader(
         MemmapDataset(X, y, val_idx, label_dtype=label_dtype),
-        batch_size=32, shuffle=False,
+        batch_size=TRAIN_PROTOCOL['batch_size'], shuffle=False,
     )
 
     # ── Hyperparameter suggestion ─────────────────────────────────────────────
@@ -112,7 +194,7 @@ def train_and_evaluate(
 
     # ── Training loop ─────────────────────────────────────────────────────────
     best_val_mse     = float('inf')
-    patience         = 5
+    patience         = TRAIN_PROTOCOL['patience']   # protocol constant (hashed)
     patience_counter = 0
     weights_path     = os.path.join(
         output_dir, f"weights_{config['name']}_trial_{trial.number}.pth"
@@ -162,6 +244,8 @@ def run_single_training(
     y:        np.ndarray,
     seed:     int,
     n_epochs: int,
+    groups:   np.ndarray | None = None,
+    dataset_name: str | None = None,   # Feature A: locates the state table
 ) -> tuple[float, float, float]:
     """
     Build, train, and evaluate one model with a fixed seed and known params.
@@ -176,8 +260,14 @@ def run_single_training(
         params  (dict):       Fixed hyperparameter dict (Optuna best_params).
         X       (np.ndarray): Memory-mapped feature array.
         y       (np.ndarray): Memory-mapped label array.
-        seed    (int):        Random seed for this run.
+        seed    (int):        Random seed for init/shuffle only; the split stays
+                              canonical (seed 42, grouped) so the cached scaler
+                              remains valid.
         n_epochs (int):       Training epochs (no early stopping - full run).
+        groups  (np.ndarray | None): damage-state id per sample from
+                              get_or_create_cache - grouped split when given
+                              (audit fix 2026-07-17); None = legacy
+                              per-passage split (classification only).
 
     Returns:
         dict of validation metrics (see core.task.evaluate). Always carries
@@ -187,17 +277,24 @@ def run_single_training(
     """
     set_global_seed(seed)
 
-    all_idx            = np.arange(len(y))
-    train_idx, val_idx = train_test_split(all_idx, test_size=0.20, random_state=seed)
+    # AUDIT FIX 2026-07-17: the split stays CANONICAL (seed 42, grouped) and only
+    # the init/shuffle varies with `seed`. The scaler in the cache was fit on the
+    # seed-42 grouped train partition; varying the split per seed (the old
+    # behaviour) let validation groups of some seeds leak into the scaler fit.
+    # Stochastic robustness is meant to measure init/optimisation variance, not
+    # split variance, so this is also the correct estimand. (True split/CV
+    # resampling would need a per-split scaler — a separate analysis.)
+    train_idx, val_idx = canonical_train_val_split(len(y), groups,
+                                                   dataset_name=dataset_name)
 
     label_dtype = task.label_dtype(config)
     train_loader = DataLoader(
         MemmapDataset(X, y, train_idx, label_dtype=label_dtype),
-        batch_size=32, shuffle=True, num_workers=0,
+        batch_size=TRAIN_PROTOCOL['batch_size'], shuffle=True, num_workers=0,
     )
     val_loader = DataLoader(
         MemmapDataset(X, y, val_idx, label_dtype=label_dtype),
-        batch_size=32, shuffle=False,
+        batch_size=TRAIN_PROTOCOL['batch_size'], shuffle=False,
     )
 
     model, _  = build_model(config, params, X.shape, DEVICE)
@@ -288,46 +385,45 @@ def _suggest_params(trial, config: dict) -> dict:
     Gated suggestions (LSTM params, N-HiTS pool rates) are only requested
     when the corresponding architecture flag is active, keeping the search
     space minimal and the Optuna DB schema clean across ablation variants.
+
+    PROTOCOL (2026-07-19): every range/choice comes from SEARCH_SPACE (the
+    hashed protocol data) via _suggest_one — no literal here. The CALL ORDER
+    is preserved exactly from the pre-refactor code (n_conv, n_dense, lr,
+    weight_decay, per-conv blocks, per-dense blocks, lstm_num_layers before
+    lstm_hidden_size, nhits) so a seeded sampler reproduces identical trials.
     """
-    n_conv  = trial.suggest_int('n_conv_layers',  2, 4)
-    n_dense = trial.suggest_int('n_dense_layers', 1, 3)
+    SS = SEARCH_SPACE
+    n_conv  = _suggest_one(trial, 'n_conv_layers',  SS['base']['n_conv_layers'])
+    n_dense = _suggest_one(trial, 'n_dense_layers', SS['base']['n_dense_layers'])
 
     params = {
-        'lr':             trial.suggest_float('lr',           1e-4, 1e-2, log=True),
-        'weight_decay':   trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
+        'lr':             _suggest_one(trial, 'lr',           SS['base']['lr']),
+        'weight_decay':   _suggest_one(trial, 'weight_decay', SS['base']['weight_decay']),
         'n_conv_layers':  n_conv,
         'n_dense_layers': n_dense,
     }
 
-    for i in range(n_conv):
-        params[f'n_filters_l{i}']   = trial.suggest_int(
-            f'n_filters_l{i}', 16, 128, step=16
-        )
-        params[f'kernel_size_l{i}'] = trial.suggest_categorical(
-            f'kernel_size_l{i}', [2, 3, 5, 7]
-        )
-        params[f'pooling_l{i}']     = trial.suggest_categorical(
-            f'pooling_l{i}', [True, False]
-        )
+    for i in range(n_conv):        # per-conv-layer block, suffix _l{i}
+        for key, spec in SS['per_conv_layer'].items():
+            params[f'{key}_l{i}'] = _suggest_one(trial, f'{key}_l{i}', spec)
 
-    for i in range(n_dense):
-        params[f'n_dense_units_l{i}'] = trial.suggest_int(
-            f'n_dense_units_l{i}', 32, 256, step=16
-        )
-        params[f'dropout_l{i}'] = trial.suggest_float(f'dropout_l{i}', 0.1, 0.5)
+    for i in range(n_dense):       # per-dense-layer block, suffix _l{i}
+        for key, spec in SS['per_dense_layer'].items():
+            params[f'{key}_l{i}'] = _suggest_one(trial, f'{key}_l{i}', spec)
 
     if config.get('use_lstm', False):
-        n_lstm = trial.suggest_int('lstm_num_layers', 1, 2)
-        params['lstm_hidden_size'] = trial.suggest_int(
-            'lstm_hidden_size', 32, 128, step=32
-        )
+        # ORDER MATTERS: lstm_num_layers is suggested BEFORE lstm_hidden_size
+        # (as in the original code); lstm_dropout only exists for 2-layer LSTMs.
+        n_lstm = _suggest_one(trial, 'lstm_num_layers', SS['lstm']['lstm_num_layers'])
+        params['lstm_hidden_size'] = _suggest_one(
+            trial, 'lstm_hidden_size', SS['lstm']['lstm_hidden_size'])
         params['lstm_num_layers'] = n_lstm
         if n_lstm > 1:
-            params['lstm_dropout'] = trial.suggest_float('lstm_dropout', 0.1, 0.4)
+            params['lstm_dropout'] = _suggest_one(
+                trial, 'lstm_dropout', SS['lstm']['lstm_dropout'])
 
     if config.get('use_nhits', False):
-        params['nhits_pool_rates_key'] = trial.suggest_categorical(
-            'nhits_pool_rates_key', ["1_2_4", "1_4_8", "1_3_6", "1_2_4_8"]
-        )
+        params['nhits_pool_rates_key'] = _suggest_one(
+            trial, 'nhits_pool_rates_key', SS['nhits']['nhits_pool_rates_key'])
 
     return params

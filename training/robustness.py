@@ -95,7 +95,7 @@ def evaluate_stochastic_robustness(
         )
         return None
 
-    X, y, _ = get_or_create_cache(config, dataset_name, cache_dir)
+    X, y, _, groups = get_or_create_cache(config, dataset_name, cache_dir)
     best_params   = study.best_params
     json_path     = os.path.join(output_dir, "robustness_stochastic.json")
     n_seeds       = 30
@@ -111,7 +111,8 @@ def evaluate_stochastic_robustness(
         for run in pbar:
             seed = 42 + run
             m    = run_single_training(
-                config, best_params, X, y, seed=seed, n_epochs=n_epochs
+                config, best_params, X, y, seed=seed, n_epochs=n_epochs,
+                groups=groups, dataset_name=dataset_name,   # Feature A split
             )
             # 'primary' = accuracy (classification) or localisation_acc (regression)
             accs.append(m['primary']); maes.append(m['mae']); mses.append(m['mse'])
@@ -182,7 +183,7 @@ def evaluate_parametric_robustness(
     """
     print(f"\n--> Parametric robustness: {config['name']}")
 
-    X, y, _      = get_or_create_cache(config, dataset_name, cache_dir)
+    X, y, _, groups = get_or_create_cache(config, dataset_name, cache_dir)
     best_params  = study.best_params
     json_path    = os.path.join(output_dir, "robustness_sensitivity.json")
     multipliers  = [0.90, 0.95, 1.00, 1.05, 1.10]
@@ -215,11 +216,12 @@ def evaluate_parametric_robustness(
             perturbed[param_name]    = new_val
 
             m = run_single_training(
-                config, perturbed, X, y, seed=42, n_epochs=n_epochs
+                config, perturbed, X, y, seed=42, n_epochs=n_epochs,
+                groups=groups, dataset_name=dataset_name,   # Feature A split
             )
             results[param_name][key] = {'mae': m['mae'], 'mse': m['mse']}
             _save_sensitivity_checkpoint(json_path, results)
-            pbar.set_postfix({"param": param_name, "mult": key, "MSE": f"{mse:.4f}"})
+            pbar.set_postfix({"param": param_name, "mult": key, "MSE": f"{m['mse']:.4f}"})
 
     # ── Worst-case degradation ────────────────────────────────────────────────
     worst_mse = max(

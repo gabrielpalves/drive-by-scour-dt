@@ -35,8 +35,10 @@ Damage semantics
 * bearing          — absolute rotational stiffness [Nm/rad]; 0 = free (healthy),
                      1e9 = min detectable "seized" bearing (Feng/O'Brien/Khan).
                      Only the abutments (first/last support) carry a bearing.
-* crack            — local EI reduction (Sinha et al.): each element within
-                     [loc-lc, loc+lc] has its I scaled by (1 - intensity).
+* crack            — DAMAGED-ELEMENT EI reduction (cf. Fernandes 2025): each
+                     element within [loc-lc, loc+lc] has its I scaled by the
+                     SAME (1 - intensity) (uniform block, NOT Sinha's tapered
+                     model; mis-citation corrected 2026-07-17).
                      lc<=0 cracks only the single element containing `loc`.
                      Fernandes: ratios 0.05/0.1 -> ~14%/22% EI loss on a 30 cm element.
 * profile_intensity— multiplies the generated rail-irregularity amplitude.
@@ -100,7 +102,10 @@ def make_damage(
       track      — attribute container or dict with any of: ballast_patches
                    (rows [x_start, x_end, eta_k, eta_c]), hanging_groups
                    (rows [x_start, n_consec]), pad_stiff_mult, pad_damp_mult,
-                   pad_failures (x positions). Consumed by b54_model_matrices.
+                   pad_failures (x positions), x_bridge_local (deck-start
+                   position of the descriptor frame - audit fix 2026-07-17;
+                   omit for legacy global coordinates). Consumed by
+                   b54_model_matrices.
       oor_flats  — wheel flat rows [veh(1-based), wheel(1-based), flat_len_m,
                    depth_m, phase_rad] (depth pre-computed: fresh L^2/8R,
                    run-in L^2/16R). Consumed by b25_wheel_profiles.
@@ -145,7 +150,8 @@ def make_damage(
 
 
 def apply_cracks(Beam, Damage):
-    """Apply crack damage as a local EI reduction (Sinha et al.).
+    """Apply crack damage as a DAMAGED-ELEMENT EI reduction (uniform block;
+    cf. Fernandes et al. 2025 - NOT the Sinha 2002 tapered model).
 
     Called from b00_calculations on the BRIDGE only, after the per-element
     properties (Beam.Prop.I_n) and node coordinates exist. Each crack at

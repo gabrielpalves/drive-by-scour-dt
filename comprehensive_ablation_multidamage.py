@@ -52,21 +52,24 @@ for _stream in (_sys.stdout, _sys.stderr):
         pass
 
 import csv
+import json
 import os
 
 import numpy as np
 import optuna
 import torch
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from core            import task
-from core.dataset    import get_or_create_cache, MemmapDataset
+from core.dataset    import (get_or_create_cache, MemmapDataset,
+                             canonical_train_val_split, canonical_test_split)
 from core.models     import build_model
+from core.protocol   import (build_protocol_descriptors, protocol_hash,
+                             short_hash, descriptor_diff)
 from core.utils      import (set_global_seed, define_save_locations,
                              IDX_TO_DOF_NAME)
 from training.pipeline import execute_ablation_pipeline
-from training.trainer  import DEVICE
+from training.trainer  import DEVICE, TRAIN_PROTOCOL, SEARCH_SPACE
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -86,20 +89,24 @@ STAGE = "s0_scour"   # see the ladder below; mirrors scour_MATLAB/A00_Run.m
 # must be INVARIANT to, never estimate. Folder names are SHORT
 # (<stage>_L<len>_st<nstates>) — the full descriptor lives in case_info.case_desc
 # (Windows MAX_PATH; the old ~110-char names broke it).
-#   states = 250 LHS + anchors; anchors = 1 healthy + n_piers*4 (+ 2*4 if bearing)
+#   states = 250 LHS + Feature-A family anchors (2026-07-19):
+#     12 target_healthy + n_piers*(4 levels x 2 reps) scour_only
+#     + 2*(4x2) bearing_only (bearing rungs) + 6 nuisance_only (crack rungs).
+#   e.g. s0: 12+16+250=278; s11: +16 bearing=294; s12: 12+16+6+250=284;
+#   s13..s16: 300; s21: 12+24+250=286; s22/s23: 12+24+16+6+250=308.
 _LADDER = {
     # L60 / 3-span, scour piers 2 & 3
-    "s0_scour":       ("s0_scour_L60_st259",        [2, 3],    None),
-    "s11_bear":       ("s11_bear_L60_st267",        [2, 3],    ["left", "right"]),
-    "s12_crack":      ("s12_crack_L60_st259",       [2, 3],    None),
-    "s13_bearcrack":  ("s13_bearcrack_L60_st267",   [2, 3],    ["left", "right"]),
-    "s14_prof":       ("s14_prof_L60_st267",        [2, 3],    ["left", "right"]),
-    "s15_track":      ("s15_track_L60_st267",       [2, 3],    ["left", "right"]),
-    "s16_all":        ("s16_all_L60_st267",         [2, 3],    ["left", "right"]),
+    "s0_scour":       ("s0_scour_L60_st278",        [2, 3],    None),
+    "s11_bear":       ("s11_bear_L60_st294",        [2, 3],    ["left", "right"]),
+    "s12_crack":      ("s12_crack_L60_st284",       [2, 3],    None),
+    "s13_bearcrack":  ("s13_bearcrack_L60_st300",   [2, 3],    ["left", "right"]),
+    "s14_prof":       ("s14_prof_L60_st300",        [2, 3],    ["left", "right"]),
+    "s15_track":      ("s15_track_L60_st300",       [2, 3],    ["left", "right"]),
+    "s16_all":        ("s16_all_L60_st300",         [2, 3],    ["left", "right"]),
     # L99.6 / 4-span scale-up, scour piers 2, 3 & 4
-    "s21_scour4":     ("s21_scour4_L99.6_st263",    [2, 3, 4], None),
-    "s22_bearcrack4": ("s22_bearcrack4_L99.6_st271", [2, 3, 4], ["left", "right"]),
-    "s23_all4":       ("s23_all4_L99.6_st271",      [2, 3, 4], ["left", "right"]),
+    "s21_scour4":     ("s21_scour4_L99.6_st286",    [2, 3, 4], None),
+    "s22_bearcrack4": ("s22_bearcrack4_L99.6_st308", [2, 3, 4], ["left", "right"]),
+    "s23_all4":       ("s23_all4_L99.6_st308",      [2, 3, 4], ["left", "right"]),
 }
 if STAGE not in _LADDER:
     raise ValueError(f"unknown STAGE {STAGE!r} - pick one of {list(_LADDER)}")
@@ -143,12 +150,88 @@ PAIR_DOFS = None
 # for chain-wide comparability.
 EXTRA_PAIRS: list[list[int]] = [[1, 3]]   # FrontBogie_Vert + Wheel1_Vert
 
+# ── Pair search vs FROZEN pair across the ladder (audit R6 C8B/C9) ───────────
+# WHICH rungs run the full C(8,2)=28-pair exhaustive search (to find the best
+# 2-sensor PLACEMENT), and which reuse a single FROZEN pair carried in the
+# champion manifest. This is the lever that keeps the ladder one-factor-at-a-time
+# AND controls cost:
+#   * A SEARCH stage runs all 28 pairs x champion arch x SEEDS and selects the
+#     best pair by median INNER-VALIDATION MSE (never the outer test set).
+#   * A NON-search stage runs ONLY the frozen champion_pair (+ EXTRA_PAIRS as a
+#     cheap cross-check), so its degradation vs the SAME sensor set is attributable
+#     to the ONE nuisance that changed at that rung — not to a shifting pair.
+#
+# Rationale for the DEFAULT below (hybrid, RECOMMENDED — pending user confirmation
+# via the AskUserQuestion in this session):
+#   - s0_scour SELECTS the pair (clean, scour-only) and freezes it in the manifest.
+#   - s11..s16 (L60 EOV rungs) reuse the frozen pair -> clean attribution of each
+#     EOV's effect on a fixed placement (and ~40x cheaper: 3 studies/rung vs 108).
+#   - s16_all (fully-EOV) and s21+/s22+/s23+ (L99.6 4-span scale-up, DIFFERENT
+#     geometry) RE-SEARCH, because the design premise genuinely changes there and
+#     the L100 pilot showed the best pair can shift under heavy roughness
+#     (FrontBogie+Wheel1 beat the clean auto-pair by 17% MSE). Their per-rung
+#     winners are EXPLORATORY (reported separately; they do NOT overwrite the
+#     frozen s0 pair used for the degradation curve).
+# Set to a set of STAGE keys. {"s0_scour"} = freeze everywhere after s0; every
+# ladder key = re-search every rung (old behaviour, breaks one-factor + expensive).
+PAIR_SEARCH_STAGES = {"s0_scour", "s16_all", "s21_scour4", "s22_bearcrack4", "s23_all4"}
+# Derived: this stage runs the exhaustive sweep iff it is a search stage.
+EXHAUSTIVE_PAIRS = STAGE in PAIR_SEARCH_STAGES
+
+# ── Feature B (2026-07-19): FINAL DEPLOYMENT SELECTION stages ────────────────
+# User-approved design (Codex-concept R7.1): the two fully-realistic rungs —
+# all-EOV L60 (s16_all) and the all-EOV L99.6 scale-up (s23_all4) — re-open the
+# ARCHITECTURE question too, running ALL arms x all 28 pairs x SEEDS
+# (3 x 28 x 3 = 252 studies per rung). Why: the s0 arch was selected on CLEAN
+# scour-only data; carrying it is right for the one-factor ladder, but the
+# DEPLOYMENT recommendation ("what would you actually install?") must not be
+# conditioned on a clean-data winner (the L100 pilot showed heavy roughness can
+# reorder arms). The winner here is EXPLORATORY: it goes into a SEPARATE
+# deployment manifest, never overwrites the s0 champion manifest, and no later
+# rung reads it. The claim it supports is exactly:
+#   "best among THESE {n_arch} architectures x C(8,2)=28 two-sensor pairs, at
+#    this trial budget, seed count and geometry" — NOT a best-sensor-COUNT or
+#    global-optimum claim.
+# Comparators everywhere are keyed by (architecture, pair) — at single-arch
+# rungs that reduces to today's pair keying, at deployment rungs it
+# distinguishes the same pair under different arms.
+DEPLOYMENT_SELECTION_STAGES = {"s16_all", "s23_all4"}
+assert DEPLOYMENT_SELECTION_STAGES <= PAIR_SEARCH_STAGES, (
+    "deployment selection re-searches pairs by definition — every deployment "
+    "stage must be in PAIR_SEARCH_STAGES.")
+
+# State-level BOOTSTRAP CI of the reported outer-test aggregate MSE (Feature B):
+# resample whole STATES (the independent units — passages within a state share
+# the label AND the persistent nuisance realization) with replacement, 95%
+# percentile interval. Applied to every reported test row.
+BOOTSTRAP_N    = 2000
+BOOTSTRAP_SEED = 42
+
 # Fresh-run tag (2026-07-12 user policy: re-runs start FROM SCRATCH, never
 # extend). When set (e.g. "v7"), every study/output name gets the suffix, so
 # re-ablating a dataset that already holds studies trains NEW full-budget
 # studies while the old DB rows and weights stay untouched (provenance).
 # Leave "" for the first run on a new dataset (nothing to collide with).
 RUN_TAG = ""
+
+# Generator/pipeline schema tag. Baked into EVERY study, champion-manifest and
+# output name via _cfg_suffix, so a re-run on a reused results/DB directory can
+# NEVER resume a pre-audit Optuna study or reuse an old champion manifest (the
+# pipeline uses load_if_exists=True, and the study name is the only key). Bumped
+# in lockstep with the MATLAB gen_schema (audit-2026-07-19-r8) and the
+# core.dataset `_gs5` cache tag whenever the data or protocol changes. R5 = the
+# 3-way train/val/test split + reflect-fold profile + canonical fingerprint.
+# R6 (reviewer-hardening) = profile-asset hash + loader finiteness/count guards +
+# inner-val pair selection. R7 (Codex re-review of R6) = STRICT test-once protocol
+# (leaderboard from inner-val; test touched only for the frozen winner +
+# pre-registered comparators), all-architecture completeness, Optuna finished =
+# no-RUNNING/WAITING + useful-budget met, cache-artifact digests + atomic writes,
+# stricter loader payload (dano_max ceiling, per-channel counts, contact ranges).
+# R8 (2026-07-19, in-house close-out of the R7.1 queue) = unified protocol hash
+# (this tag is INSIDE it), Feature A state families + stratified split (state
+# counts changed), Feature B deployment selection, MATLAB resume full payload
+# validation. r7 datasets/studies are a different design and must be orphaned.
+SCHEMA_TAG = "gs5a20260719r8"
 
 # Load-time sensor noise (None = the noise-free chain default). Generation is
 # NOISE-FREE from stage1_crack onward (A00 use_signal_noise=false; folder tag
@@ -161,14 +244,44 @@ SENSOR_NOISE = None
 
 def _cfg_suffix() -> str:
     """Suffix appended to every study/config name. Keeps differently-configured
-    runs (load-time noise, fresh-run tag) in SEPARATE Optuna studies - without
-    it, re-running a stage with a different SENSOR_NOISE would silently RESUME
-    and extend studies whose earlier trials trained on differently-noised data."""
-    s = f"_nz-{SENSOR_NOISE['mode']}" if SENSOR_NOISE else ""
+    runs in SEPARATE Optuna studies - without it, re-running a stage under a
+    changed protocol would silently RESUME and extend studies whose earlier
+    trials trained under the old protocol.
+
+    PROTOCOL (2026-07-19): the suffix now carries the SHORT unified protocol
+    hash `_ph-<12hex>` instead of the old `_sc-<SCHEMA_TAG>` + `_nz-<noise>`
+    tags. The hash COVERS SCHEMA_TAG, the full SENSOR_NOISE dict, the dataset
+    fingerprint, split policy, seeds/trials/epochs, pruner, search space,
+    targets and preprocessing — so ANY protocol change (not just the few that
+    had hand-made tags) forces fresh studies. The noise tag is kept as a
+    human-readable extra; RUN_TAG stays OUTSIDE the hash (it is the explicit
+    "fresh re-run, same protocol" knob)."""
+    # AUDIT R3 2026-07-17: include STAGE. define_save_locations collapses every
+    # ladder dataset to the tag 'all' (none contain noise/temp/vehicle/speed),
+    # so without STAGE in the name s0/s11/s12... shared one SQLite DB and one
+    # output dir, and load_if_exists let s11 silently RESUME s0's studies (even
+    # mixing 2-head weights with a 4-head bearing config).
+    s = f"_st-{STAGE}_ph-{PROTOCOL_HASH_SHORT}"     # stage + unified protocol hash
+    if SENSOR_NOISE:
+        # Human-readable noise tag (the hash already isolates noise configs —
+        # audit R7.1 P3's level-collision concern is covered by the hash).
+        s += f"_nz-{SENSOR_NOISE['mode']}"
+        if 'desvio' in SENSOR_NOISE:
+            s += f"-{SENSOR_NOISE['desvio']}"
     return s + (f"_{RUN_TAG}" if RUN_TAG else "")
 
-# Where the leaderboard + parity/leakage plots are written (stage-tagged).
-SUMMARY_DIR = os.path.join("results", f"{STAGE}_summary")
+
+def _locs(phase_label: str, dofs: list[int]):
+    """define_save_locations with STAGE-qualified paths (audit R3 2026-07-17), so
+    the DB file, output dir and cache dir are per-rung — not shared across the
+    ladder. Used everywhere a phase's DB/paths are (re)constructed."""
+    return define_save_locations(f"{STAGE}__{phase_label}", DATASET, dofs,
+                                 DISCRETIZATION)
+
+# Where the leaderboard + parity/leakage plots are written: SUMMARY_DIR is
+# defined BELOW, after the unified protocol hash is computed, because its name
+# carries the hash (audit R7.1 item 1: the summary dir previously had no schema
+# tag at all, so a protocol change silently overwrote old summaries in place).
 
 # ===== Architecture policy: SELECT at Stage 0, FIX thereafter ================
 # Stage 0 is the architecture-SELECTION stage: every arm runs (the paper's
@@ -194,21 +307,278 @@ ALL_ARCHITECTURES = [
      "model_type": "1D_MODULAR"},
 ]
 
-# The backbone carried into Stage 1/2, and the arch used to RANK single sensors
-# for the auto-pair. CONFIRM against the completed 3-arm Stage-0 leaderboard
-# BEFORE running Stage 1/2 (change only if another arm wins Stage 0).
-CHAMPION_ARCH = "PAA_NHiTS"
+# Architecture policy (audit 2026-07-17 — replaces the old hardcoded champion).
+# Stage 0 SELECTS the backbone from the post-mass-fix leaderboard and WRITES it
+# to a manifest; every later rung READS the manifest (and errors if it is
+# missing) instead of silently trusting a stale PAA_NHiTS. The old value came
+# from the 1000x-light deck and is VOID. `ARCH_SELECTION_STAGES` also fixes the
+# earlier name bug (the check compared STAGE to the pre-ladder 'stage0_multiscour',
+# so the renamed 's0_scour' ran only one arm and never selected).
+ARCH_SELECTION_STAGES = {"s0_scour"}
+# The selection stage must SEARCH pairs (it freezes the pair the rest of the
+# ladder reuses), so it can never run in frozen mode (audit R6 C8B).
+assert ARCH_SELECTION_STAGES <= PAIR_SEARCH_STAGES, (
+    f"ARCH_SELECTION_STAGES {ARCH_SELECTION_STAGES} must be a subset of "
+    f"PAIR_SEARCH_STAGES {PAIR_SEARCH_STAGES}: the selection stage has to search "
+    f"pairs to freeze one for the later rungs.")
+# s0 selects the LADDER champion; deployment stages make a SEPARATE exploratory
+# choice — the two roles must never coincide (a deployment winner overwriting
+# the ladder champion would break every downstream one-factor comparison).
+assert not (ARCH_SELECTION_STAGES & DEPLOYMENT_SELECTION_STAGES), (
+    "a stage cannot be both the ladder arch-selection stage and a deployment-"
+    "selection stage.")
 
-if STAGE == "stage0_multiscour":
-    ARCHITECTURES = ALL_ARCHITECTURES      # selection stage - run every arm
-else:
-    ARCHITECTURES = [a for a in ALL_ARCHITECTURES
-                     if a["name_short"] == CHAMPION_ARCH]
-    if not ARCHITECTURES:
-        raise ValueError(f"CHAMPION_ARCH {CHAMPION_ARCH!r} is not one of "
+# =============================================================================
+#  UNIFIED PROTOCOL HASH (audit R7.1 remaining item 1, 2026-07-19)
+# =============================================================================
+# ONE SHA-256 over the ENTIRE experimental protocol — see core/protocol.py for
+# the full design rationale. Computed at import time, which means the GENERATED
+# DATASET MUST EXIST AND BE COMPLETE before this script even starts (that was
+# already true operationally: the loader requires the completion marker; now it
+# fails in the first second instead of at first data load).
+#
+# Two hashes:
+#   PROTOCOL_CORE_HASH — dataset/stage-INDEPENDENT part (split, seeds, trials,
+#       epochs, pruner, search space, noise, architectures, selection policy,
+#       code tags). This is what a later rung must MATCH for the s0 champion
+#       (arch + frozen pair) to be validly carried forward.
+#   PROTOCOL_HASH — the full per-rung identity (core + stage + dataset name,
+#       targets, gen_fingerprint, source root digest). Baked into every study
+#       name (_cfg_suffix) and SUMMARY_DIR, so ANY protocol change — including
+#       a mere dataset regeneration — orphans all old studies/summaries.
+PROTOCOL_CORE_DESC, PROTOCOL_FULL_DESC = build_protocol_descriptors(
+    stage                = STAGE,
+    dataset              = DATASET,
+    dataset_dir          = os.path.join("data", DATASET),
+    target_supports      = TARGET_SUPPORTS,
+    bearing_targets      = BEARING_TARGETS,
+    task                 = TASK,
+    discretization       = DISCRETIZATION,
+    seeds                = SEEDS,
+    n_trials             = N_TRIALS,
+    epochs               = EPOCHS,
+    sensor_noise         = SENSOR_NOISE,
+    architectures        = ALL_ARCHITECTURES,
+    extra_pairs          = EXTRA_PAIRS,
+    pair_search_stages   = PAIR_SEARCH_STAGES,
+    arch_selection_stages = ARCH_SELECTION_STAGES,
+    deployment_selection_stages = DEPLOYMENT_SELECTION_STAGES,   # Feature B
+    bootstrap            = {"unit": "state", "n_boot": BOOTSTRAP_N,
+                            "seed": BOOTSTRAP_SEED, "ci": 0.95},
+    schema_tag           = SCHEMA_TAG,
+    train_protocol       = TRAIN_PROTOCOL,
+    search_space         = SEARCH_SPACE,
+)
+PROTOCOL_CORE_HASH  = protocol_hash(PROTOCOL_CORE_DESC)
+PROTOCOL_HASH       = protocol_hash(PROTOCOL_FULL_DESC)
+PROTOCOL_HASH_SHORT = short_hash(PROTOCOL_HASH)
+
+# Where the leaderboard + parity/leakage plots are written. Stage- AND
+# protocol-tagged: a protocol change writes a NEW summary dir, never over an
+# old one (the old dir remains as the auditable record of the old protocol).
+SUMMARY_DIR = os.path.join("results", f"{STAGE}_summary_ph-{PROTOCOL_HASH_SHORT}")
+
+
+def _write_protocol_record() -> None:
+    """Persist the FULL hashed descriptor + both hashes into SUMMARY_DIR.
+
+    Written at run start (driver __main__), so even a crashed run leaves an
+    auditable record of the exact protocol it ran under. The 'environment'
+    block is informational ONLY — it is NOT part of the hash (library versions
+    differ across the campaign PCs; the protocol must not fracture on that)."""
+    import platform
+    env = {"python": platform.python_version()}
+    for mod_name in ("torch", "numpy", "optuna", "sklearn"):
+        try:
+            env[mod_name] = __import__(mod_name).__version__
+        except Exception:                                    # noqa: BLE001
+            env[mod_name] = "unavailable"
+    os.makedirs(SUMMARY_DIR, exist_ok=True)
+    _write_json_atomic(
+        os.path.join(SUMMARY_DIR, "protocol_descriptor.json"),
+        {"protocol_hash": PROTOCOL_HASH,
+         "protocol_core_hash": PROTOCOL_CORE_HASH,
+         "descriptor": PROTOCOL_FULL_DESC,
+         "environment_unhashed": env})
+# Manifest path: env var CHAMPION_MANIFEST overrides, so a multi-PC campaign can
+# point s11+ at the file copied from the PC that ran s0 (the bundles do NOT ship
+# it — it does not exist until s0 completes). Default lives under results/.
+# PROTOCOL (2026-07-19): the filename carries the CORE protocol hash (not the
+# full one — the manifest is deliberately shared across rungs whose datasets
+# differ), so a protocol change cannot even FIND an old manifest, before the
+# in-file hash check below fires.
+CHAMPION_MANIFEST = os.environ.get(
+    "CHAMPION_MANIFEST",
+    os.path.join("results",
+                 f"_champion_arch_{SCHEMA_TAG}_ph-{short_hash(PROTOCOL_CORE_HASH)}.json"))
+# Cross-PC escape hatch: after reading the s0 leaderboard, set this to the winner
+# to run s11+ on a machine that has no manifest file. Leave "" to require the
+# manifest. An explicit value is validated against ALL_ARCHITECTURES.
+CHAMPION_ARCH_OVERRIDE = os.environ.get("CHAMPION_ARCH_OVERRIDE", "")
+# Frozen-PAIR cross-PC escape hatch (audit R6 C8B): e.g. "1,3" for a machine
+# with no manifest. Validated to exactly 2 DOFs. Leave "" to require the manifest.
+CHAMPION_PAIR_OVERRIDE = os.environ.get("CHAMPION_PAIR_OVERRIDE", "")
+
+def _load_champion_manifest() -> dict | None:
+    """The validated champion manifest dict (audit R6 C8B: now also carries the
+    frozen pair), or None if the manifest file does not exist."""
+    if not os.path.exists(CHAMPION_MANIFEST):
+        return None
+    with open(CHAMPION_MANIFEST) as fh:
+        m = json.load(fh)
+    if m.get("schema") != SCHEMA_TAG:
+        raise SystemExit(
+            f"{STAGE}: champion manifest {CHAMPION_MANIFEST} has schema "
+            f"{m.get('schema')!r} != current {SCHEMA_TAG!r}. It is from a "
+            f"different code version — re-run s0 or point CHAMPION_MANIFEST at "
+            f"the matching file.")
+    if m.get("dataset") and m["dataset"].split("_L")[0] != DATASET.split("_L")[0]:
+        print(f"[champion] NOTE: manifest was selected on {m['dataset']} "
+              f"(this rung is {DATASET}); architecture is intentionally fixed "
+              f"across the ladder, continuing.")
+    # Protocol provenance (audit R5): the champion is only comparable across
+    # rungs if the SELECTION PROTOCOL matches — a mismatch is a HARD error, not
+    # a warning (a champion chosen under different seeds/trials is not valid to
+    # carry forward). Dataset differs by design across the ladder (L60 -> L99.6),
+    # so that stays a note.
+    # MANDATORY fields (audit R7.1 P3): the protocol keys must be PRESENT, not
+    # merely truthy-if-present — an absent seeds/n_trials/dataset/champion_pair
+    # previously skipped its check silently.
+    for f in ("champion_arch", "dataset", "seeds", "n_trials",
+              "selected_at_stage", "champion_pair", "protocol_core_hash"):
+        if f not in m:
+            raise SystemExit(f"{STAGE}: champion manifest {CHAMPION_MANIFEST} is "
+                             f"missing required field {f!r} — regenerate by "
+                             f"running s0 with the current code.")
+    # ── UNIFIED PROTOCOL GATE (2026-07-19) ───────────────────────────────────
+    # The champion (arch + frozen pair) is only valid to carry forward if the
+    # SELECTION PROTOCOL is bit-identical: same split, seeds, trials, epochs,
+    # pruner, search space, noise, architectures, selection policy, code tags.
+    # That is exactly the CORE hash. The FULL hash intentionally differs across
+    # rungs (dataset/targets change on the ladder), so it is recorded but never
+    # required to match here.
+    if m["protocol_core_hash"] != PROTOCOL_CORE_HASH:
+        # Show the actual knob-level differences, not two opaque hashes: the
+        # manifest stores its full core descriptor for exactly this purpose.
+        diffs = descriptor_diff(m.get("protocol_core", {}), PROTOCOL_CORE_DESC)
+        diff_txt = "\n    ".join(diffs[:20]) or "(stored descriptor missing)"
+        raise SystemExit(
+            f"{STAGE}: champion manifest {CHAMPION_MANIFEST} was selected under "
+            f"a DIFFERENT core protocol (hash {m['protocol_core_hash'][:12]}... "
+            f"!= current {PROTOCOL_CORE_HASH[:12]}...). Carrying it forward "
+            f"would mix selection protocols. Differing knobs:\n    {diff_txt}\n"
+            f"Either restore the old protocol or re-run s0 under the new one.")
+    # A valid s0 champion ALWAYS has a known architecture AND a real 2-DOF pair;
+    # neither may be null (audit R7.1 P3).
+    if m["champion_arch"] not in {a["name_short"] for a in ALL_ARCHITECTURES}:
+        raise SystemExit(f"{STAGE}: manifest champion_arch={m['champion_arch']!r} "
+                         f"is not one of {[a['name_short'] for a in ALL_ARCHITECTURES]}.")
+    if m["champion_pair"] is None:
+        raise SystemExit(f"{STAGE}: manifest champion_pair is null — a valid s0 run "
+                         f"always freezes a 2-sensor pair. Re-run s0.")
+    if m.get("selected_at_stage") not in ARCH_SELECTION_STAGES:
+        raise SystemExit(f"{STAGE}: champion manifest selected_at_stage="
+                         f"{m.get('selected_at_stage')!r} is not a selection "
+                         f"stage — regenerate it by running s0.")
+    if list(m["seeds"]) != list(SEEDS):
+        raise SystemExit(f"{STAGE}: manifest seeds {m['seeds']} != this run's "
+                         f"{SEEDS}. The champion was selected under a different "
+                         f"protocol — re-run s0 with matching SEEDS or align them.")
+    if m["n_trials"] != N_TRIALS:
+        raise SystemExit(f"{STAGE}: manifest n_trials {m['n_trials']} != this "
+                         f"run's {N_TRIALS} — align the protocol or re-run s0.")
+    # champion_pair must be two DISTINCT valid DOFs (rejects [1,1] and nulls).
+    _validate_pair(m["champion_pair"], "manifest champion_pair")
+    if m.get("exhaustive_pairs") is not None and m["exhaustive_pairs"] != EXHAUSTIVE_PAIRS:
+        print(f"[champion] NOTE: manifest exhaustive_pairs={m['exhaustive_pairs']} "
+              f"!= this run's {EXHAUSTIVE_PAIRS} (arch choice unaffected).")
+    return m
+
+
+def _validate_pair(dofs, src: str) -> list[int]:
+    """Two DISTINCT valid DOFs (audit R7.1 P3: reject [1,1] etc.)."""
+    dofs = sorted(int(x) for x in dofs)
+    if len(dofs) != 2 or len(set(dofs)) != 2 or any(d not in ALL_DOFS for d in dofs):
+        raise SystemExit(f"{src} = {dofs} must be TWO DISTINCT valid DOFs from "
+                         f"{ALL_DOFS} (got a duplicate or invalid index).")
+    return dofs
+
+
+def _parse_pair_override(s: str) -> list[int] | None:
+    """Parse CHAMPION_PAIR_OVERRIDE ('1,3') into a validated 2-DOF list."""
+    if not s:
+        return None
+    return _validate_pair(s.replace(" ", "").split(","), "CHAMPION_PAIR_OVERRIDE")
+
+def _write_champion_arch(arch: str, medians: dict,
+                         champion_pair: list[int] | None = None) -> None:
+    os.makedirs(os.path.dirname(CHAMPION_MANIFEST) or ".", exist_ok=True)
+    _write_json_atomic(CHAMPION_MANIFEST,          # atomic (audit R7 P2/P3)
+        {"champion_arch": arch, "selected_at_stage": STAGE,
+         "dataset": DATASET, "schema": SCHEMA_TAG,
+         "seeds": list(SEEDS), "n_trials": N_TRIALS,
+         "exhaustive_pairs": EXHAUSTIVE_PAIRS,
+         # ── Unified protocol provenance (2026-07-19) ──
+         # core hash+descriptor: the cross-rung validity condition (s11+ hard-
+         # fails on a mismatch, and diffs the stored descriptor to say WHY).
+         # full hash: the exact identity of THE run that selected this champion
+         # (includes s0's dataset fingerprint) — recorded, not matched later.
+         "protocol_core_hash": PROTOCOL_CORE_HASH,
+         "protocol_core":      PROTOCOL_CORE_DESC,
+         "protocol_hash":      PROTOCOL_HASH,
+         # Frozen sensor PAIR (audit R6 C8B): selected here on INNER-VAL and
+         # carried to every non-search rung for one-factor-at-a-time degradation.
+         # None only if s0 ran without a pair phase.
+         "champion_pair": list(champion_pair) if champion_pair else None,
+         "pair_select_metric": "inner_val_mse",
+         "per_arch_median_single_dof_mse": medians})
+    print(f"[champion] wrote {CHAMPION_MANIFEST}  -> arch={arch}, "
+          f"pair={champion_pair}\n"
+          f"[champion] COPY this file to the PCs that will run s11+ (or set "
+          f"CHAMPION_ARCH_OVERRIDE={arch} and CHAMPION_PAIR_OVERRIDE).")
+
+def _validate_arch(name: str, src: str) -> list:
+    arches = [a for a in ALL_ARCHITECTURES if a["name_short"] == name]
+    if not arches:
+        raise ValueError(f"champion {name!r} (from {src}) is not one of "
                          f"{[a['name_short'] for a in ALL_ARCHITECTURES]}")
+    return arches
 
-RANK_ARCH = CHAMPION_ARCH
+CHAMPION_PAIR: list[int] | None = None     # frozen pair for non-search rungs
+if STAGE in ARCH_SELECTION_STAGES:
+    ARCHITECTURES = ALL_ARCHITECTURES      # selection stage - run every arm
+    CHAMPION_ARCH = None                   # decided at the END of this run
+    RANK_ARCH     = None                   # set after phase 1 (winner ranks sensors)
+else:
+    _manifest = _load_champion_manifest()
+    CHAMPION_ARCH = (_manifest.get("champion_arch") if _manifest
+                     else None) or (CHAMPION_ARCH_OVERRIDE or None)
+    if CHAMPION_ARCH is None:
+        raise SystemExit(
+            f"{STAGE}: no champion. Run STAGE='s0_scour' first (it selects the "
+            f"backbone and writes {CHAMPION_MANIFEST}), then either copy that "
+            f"file here / point CHAMPION_MANIFEST at it, or set "
+            f"CHAMPION_ARCH_OVERRIDE to the s0 winner. The pre-audit PAA_NHiTS "
+            f"default is VOID and no longer assumed.")
+    ARCHITECTURES = _validate_arch(
+        CHAMPION_ARCH, "manifest" if os.path.exists(CHAMPION_MANIFEST) else "override")
+    RANK_ARCH = CHAMPION_ARCH
+    # Frozen pair (audit R6 C8B): required only when THIS rung reuses it (i.e. it
+    # is NOT a pair-search stage). A search rung re-derives its own pair, so a
+    # missing frozen pair is fine there.
+    CHAMPION_PAIR = ((_manifest.get("champion_pair") if _manifest else None)
+                     or _parse_pair_override(CHAMPION_PAIR_OVERRIDE))
+    if CHAMPION_PAIR is not None:
+        CHAMPION_PAIR = sorted(int(d) for d in CHAMPION_PAIR)
+    if STAGE not in PAIR_SEARCH_STAGES and CHAMPION_PAIR is None:
+        raise SystemExit(
+            f"{STAGE}: this rung reuses the FROZEN pair but the champion manifest "
+            f"has no champion_pair (older s0 run?) and CHAMPION_PAIR_OVERRIDE is "
+            f"unset. Re-run s0 to freeze a pair, or add {STAGE!r} to "
+            f"PAIR_SEARCH_STAGES to re-search here, or set CHAMPION_PAIR_OVERRIDE.")
+    print(f"[champion] using arch={CHAMPION_ARCH}"
+          + (f", frozen pair={CHAMPION_PAIR}" if STAGE not in PAIR_SEARCH_STAGES
+             else f" (this rung RE-SEARCHES pairs)"))
 
 # Records every phase that ran so the summary can re-evaluate each champion.
 _RAN_PHASES: list[dict] = []
@@ -236,6 +606,9 @@ def make_config(arch: dict, dofs: list[int], seed: int) -> dict:
         "task":            TASK,
         "target_supports": TARGET_SUPPORTS,
         "bearing_targets": BEARING_TARGETS,   # None for Stage 0
+        # Unified protocol hash (2026-07-19): travels with the config so the
+        # pipeline stamps it into DT_metadata.json next to the weights.
+        "protocol_hash":   PROTOCOL_HASH,
     }
 
 
@@ -245,9 +618,7 @@ def run_phase(phase_label: str, dofs: list[int]) -> None:
     One pipeline call per seed: study names carry the seed suffix, so a re-run
     (or a seed added later) only trains the missing studies (pipeline resume).
     """
-    db, out, cache = define_save_locations(
-        phase_label, dataset=DATASET, DOFs=dofs, discretization=DISCRETIZATION,
-    )
+    db, out, cache = _locs(phase_label, dofs)
     all_configs: list[dict] = []
     for seed in SEEDS:
         configs = [make_config(arch, dofs, seed) for arch in ARCHITECTURES]
@@ -277,6 +648,91 @@ def phase_1_single_dof() -> None:
         run_phase(f"MD0_SingleDOF_{IDX_TO_DOF_NAME[dof]}", [dof])
 
 
+def _study_is_finished(study, n_trials: int) -> bool:
+    """Has an Optuna study cleanly exhausted its budget? (audit R6 C1 / R7 P1)
+
+    PRUNED trials count against the budget by design (the SuccessiveHalvingPruner
+    kills unpromising trials — a study with 1 COMPLETE + 99 PRUNED is the pruner
+    working, and its best_value is the surviving best, so that is FINISHED). The
+    old ``n_complete >= N_TRIALS`` gate could never be met under pruning and
+    deadlocked selection. A study is finished iff:
+      * NO in-flight trials — any RUNNING/WAITING means a live or crashed-stale
+        worker, so the study is not settled (rejects 1-COMPLETE-99-RUNNING/WAITING);
+      * the terminal-USEFUL budget is met: COMPLETE + PRUNED >= n_trials. FAILed
+        trials do NOT count, so 1-COMPLETE-99-FAIL is NOT finished — and because
+        the pipeline now RETRIES past FAILs (pipeline.py) up to a cap, a genuine
+        run reaches the full useful budget while a broken config stops short and
+        is correctly flagged incomplete;
+      * >= 1 COMPLETE, so best_value exists.
+    """
+    TS = optuna.trial.TrialState
+    states = [t.state for t in study.trials]
+    n_complete = sum(s == TS.COMPLETE for s in states)
+    n_pruned   = sum(s == TS.PRUNED for s in states)
+    n_inflight = sum(s in (TS.RUNNING, TS.WAITING) for s in states)
+    n_fail     = sum(s == TS.FAIL for s in states)
+    if n_inflight:
+        print(f"  [study] {study.study_name}: {n_inflight} RUNNING/WAITING trial(s)"
+              f" — not settled, NOT finished.")
+        return False
+    if (n_complete + n_pruned) < n_trials:
+        if n_fail:
+            print(f"  [study] {study.study_name}: {n_fail} FAILED trial(s), only "
+                  f"{n_complete + n_pruned}/{n_trials} useful — NOT finished "
+                  f"(investigate the failures / delete the study to re-run).")
+        return False
+    return n_complete >= 1
+
+
+def _pick_champion_arch() -> tuple[str, dict]:
+    """Best architecture by MEDIAN single-DOF aggregate MSE across all sensors and
+    seeds (audit 2026-07-17). Called at Stage 0 after phase 1 so the winner — not
+    a hardcoded name — ranks the auto-pair and is written to the champion
+    manifest that every later rung consumes."""
+    n_expected = len(ALL_DOFS) * len(SEEDS)
+    per_arch: dict[str, list[float]] = {a["name_short"]: [] for a in ALL_ARCHITECTURES}
+    for dof in ALL_DOFS:
+        phase_label = f"MD0_SingleDOF_{IDX_TO_DOF_NAME[dof]}"
+        db, _, _ = _locs(phase_label, [dof])
+        for arch in ALL_ARCHITECTURES:
+            for seed in SEEDS:
+                name = f"{arch['name_short']}_DOFs_{dof}_seed{seed}{_cfg_suffix()}"
+                try:
+                    st = optuna.load_study(study_name=name, storage=db)
+                    if _study_is_finished(st, N_TRIALS):   # budget-exhausted study
+                        per_arch[arch["name_short"]].append(st.best_value)
+                except Exception:                                # noqa: BLE001
+                    pass
+    # AUDIT R5/R6: only architectures with the COMPLETE matrix (all DOF x seed
+    # studies budget-exhausted) are eligible — otherwise an arch with 1 lucky
+    # study could beat fully-run rivals. "Finished" now = COMPLETE-or-PRUNED
+    # budget reached (audit R6 C1), not N_TRIALS COMPLETE (which the pruner made
+    # unreachable and deadlocked selection).
+    # AUDIT R7 P1: EVERY architecture must have a COMPLETE matrix before selection.
+    # Previously an arch with ZERO finished studies was silently ignored (it was
+    # neither in `complete` nor in `incomplete`, which only caught 0<len<n_expected),
+    # so a single finished arch could "win" unopposed. Now the champion is only
+    # chosen when ALL_ARCHITECTURES are fully run — a fair comparison.
+    complete = {k: v for k, v in per_arch.items() if len(v) == n_expected}
+    deficient = {a["name_short"]: len(per_arch[a["name_short"]])
+                 for a in ALL_ARCHITECTURES
+                 if len(per_arch[a["name_short"]]) != n_expected}
+    if deficient:
+        raise RuntimeError(
+            f"champion selection needs the COMPLETE {n_expected}-study matrix "
+            f"(all DOF x seed, each budget-exhausted with >=1 COMPLETE) for EVERY "
+            f"architecture {[a['name_short'] for a in ALL_ARCHITECTURES]}, but "
+            f"these are short: {deficient}. Finish (or investigate) their studies "
+            f"before selecting a champion — a partial matrix must not decide it.")
+    medians = {k: float(np.median(v)) for k, v in complete.items()}
+    winner = min(medians, key=medians.get)
+    print("\n[champion] per-architecture MEDIAN single-DOF agg MSE "
+          "(complete matrices only, lower=better):")
+    for k in sorted(medians, key=medians.get):
+        print(f"        {k:18} {medians[k]:.3f}{'   <- CHAMPION' if k == winner else ''}")
+    return winner, medians
+
+
 def auto_select_pair() -> list[int]:
     """Two best single sensors by RANK_ARCH aggregate MSE (MEDIAN across seeds)."""
     if PAIR_DOFS:
@@ -286,21 +742,33 @@ def auto_select_pair() -> list[int]:
     scores: list[tuple[float, int, int]] = []      # (median MSE, dof, n_seeds)
     for dof in ALL_DOFS:
         phase_label = f"MD0_SingleDOF_{IDX_TO_DOF_NAME[dof]}"
-        db, _, _ = define_save_locations(phase_label, DATASET, [dof], DISCRETIZATION)
+        db, _, _ = _locs(phase_label, [dof])
         vals: list[float] = []
         for seed in SEEDS:
             study_name = f"{RANK_ARCH}_DOFs_{dof}_seed{seed}{_cfg_suffix()}"
             try:
                 study = optuna.load_study(study_name=study_name, storage=db)
-                vals.append(study.best_value)
+                # Only rank on budget-exhausted studies (audit R6 C1): otherwise a
+                # sensor could be ranked on a half-run / interrupted study.
+                if _study_is_finished(study, N_TRIALS):
+                    vals.append(study.best_value)
+                else:
+                    print(f"  [pair] skip DOF {dof} seed {seed} "
+                          f"({IDX_TO_DOF_NAME[dof]}): study not finished.")
             except Exception as e:                           # noqa: BLE001
                 print(f"  [pair] skip DOF {dof} seed {seed} "
                       f"({IDX_TO_DOF_NAME[dof]}): {e}")
-        if vals:
+        # Require the FULL seed set per sensor so the median is comparable across
+        # sensors (audit R6 C1/C8A) — a sensor with 1 surviving seed must not rank.
+        if len(vals) == len(SEEDS):
             scores.append((float(np.median(vals)), dof, len(vals)))
+        elif vals:
+            print(f"  [pair] DOF {dof} ({IDX_TO_DOF_NAME[dof]}): only {len(vals)}/"
+                  f"{len(SEEDS)} seeds finished — excluded from ranking.")
 
     if len(scores) < 2:
-        raise RuntimeError("auto-pair needs >=2 completed single-DOF studies.")
+        raise RuntimeError("auto-pair needs >=2 single-DOF sensors with the full "
+                           "seed set finished.")
     scores.sort(key=lambda t: t[0])
     print("\n[pair] single-sensor ranking (MEDIAN aggregate MSE, %^2, lower=better):")
     for mse, dof, n in scores:
@@ -319,19 +787,67 @@ def phase_2_pair(pair: list[int]) -> None:
 # =============================================================================
 #  Results summary - the actual Stage-0 answer
 # =============================================================================
-def _val_loader(config: dict, cache_dir: str):
-    """Canonical (seed-42) validation loader + processed shape for one config."""
-    X, y, _ = get_or_create_cache(config, DATASET, cache_dir)
-    _, val_idx = train_test_split(np.arange(len(y)), test_size=0.20, random_state=42)
+def _test_loader(config: dict, cache_dir: str):
+    """Loader over the UNTOUCHED outer TEST set (audit R5). Everything the model
+    saw during fit/HPO/selection was train+inner-val; the summary reports here so
+    the paper's numbers come from a set that never influenced model choice.
+
+    Also returns the per-sample STATE ids of the test set (Feature A) so the
+    disentanglement probe can look samples up by family IDENTITY, not by
+    thresholding labels."""
+    X, y, _, groups = get_or_create_cache(config, DATASET, cache_dir)
+    test_idx = canonical_test_split(len(y), groups, dataset_name=DATASET)
+    if len(test_idx) == 0:                 # legacy classification (no test set)
+        _, test_idx = canonical_train_val_split(len(y), groups,
+                                                dataset_name=DATASET)
     loader = DataLoader(
-        MemmapDataset(X, y, val_idx, label_dtype=task.label_dtype(config)),
+        MemmapDataset(X, y, test_idx, label_dtype=task.label_dtype(config)),
         batch_size=64, shuffle=False,
     )
-    return loader, X.shape
+    test_states = (np.asarray(groups)[test_idx] if groups is not None else None)
+    return loader, X.shape, test_states
+
+
+def _inner_val_of(cfg: dict, db: str) -> float | None:
+    """study.best_value (best INNER-VAL MSE) for a config, but ONLY if its study is
+    finished (audit R7 P1/P2). Returns None otherwise. Touches NO test data."""
+    try:
+        study = optuna.load_study(study_name=cfg["name"], storage=db)
+    except Exception as e:                                   # noqa: BLE001
+        print(f"  [summary] cannot load study {cfg['name']}: {e}")
+        return None
+    if not _study_is_finished(study, N_TRIALS):
+        print(f"  [summary] study {cfg['name']} NOT finished - excluded.")
+        return None
+    return float(study.best_value)
+
+
+def _state_bootstrap_ci(P: np.ndarray, T: np.ndarray, states: np.ndarray,
+                        n_boot: int = BOOTSTRAP_N,
+                        seed: int = BOOTSTRAP_SEED) -> tuple[float, float]:
+    """95% CI of the aggregate test MSE by BOOTSTRAP OVER STATES (Feature B).
+
+    The independent sampling unit is the damage STATE, not the passage —
+    passages within a state share the label and the persistent-nuisance
+    realization, so a per-passage bootstrap would understate the variance.
+    States all carry the same passage count (the loader enforces exact Npass),
+    so the mean of per-state mean errors equals the overall mean and the
+    cluster bootstrap is the plain state-resample below. Deterministic
+    (BOOTSTRAP_SEED), so re-summarising reproduces identical intervals."""
+    err = ((P - T) ** 2).mean(axis=1)                # per-sample aggregate SE
+    uniq = np.unique(states)
+    per_state = np.array([err[states == s].mean() for s in uniq])
+    rng = np.random.default_rng(seed)
+    draws = rng.integers(0, len(per_state), size=(n_boot, len(per_state)))
+    boots = per_state[draws].mean(axis=1)
+    return float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))
 
 
 def evaluate_champion(config: dict, db: str, output_dir: str, cache_dir: str) -> dict | None:
-    """Rebuild a phase's champion, load its exported weights, return full metrics."""
+    """Load a config's champion weights and return its OUTER-TEST metrics — ONLY if
+    the study is FINISHED and weights exist (audit R7 P1). Called for the frozen
+    winner + pre-registered comparators only, so the test set is touched once.
+    Adds the state-level bootstrap CI of the aggregate test MSE (Feature B)."""
     weights = os.path.join(output_dir, config["name"], "DT_champion_weights.pth")
     if not os.path.exists(weights):
         print(f"  [summary] no champion weights for {config['name']} - skipped.")
@@ -341,79 +857,351 @@ def evaluate_champion(config: dict, db: str, output_dir: str, cache_dir: str) ->
     except Exception as e:                                   # noqa: BLE001
         print(f"  [summary] cannot load study {config['name']}: {e}")
         return None
-
-    loader, shape = _val_loader(config, cache_dir)
+    if not _study_is_finished(study, N_TRIALS):
+        print(f"  [summary] study {config['name']} NOT finished - not reported.")
+        return None
+    loader, shape, test_states = _test_loader(config, cache_dir)
     model, _ = build_model(config, study.best_params, shape, DEVICE)
     model.load_state_dict(torch.load(weights, map_location=DEVICE))
-    return task.evaluate(model, loader, config, DEVICE)
+    m = task.evaluate(model, loader, config, DEVICE)
+    m["inner_val_mse"] = float(study.best_value)
+    # State-level bootstrap CI (regression + grouped data only). One extra
+    # forward pass over the small test set — negligible next to training.
+    if test_states is not None and task.is_regression(config):
+        model.eval()
+        preds, trues = [], []
+        with torch.no_grad():
+            for bx, by in loader:
+                preds.append(model(bx.to(DEVICE)).cpu().numpy())
+                trues.append(by.numpy())
+        lo, hi = _state_bootstrap_ci(np.vstack(preds), np.vstack(trues),
+                                     np.asarray(test_states))
+        m["agg_mse_ci95_lo"], m["agg_mse_ci95_hi"] = lo, hi
+    return m
 
 
-def summarize() -> None:
-    """Leaderboard CSV + per-head MSE + localisation accuracy + parity plot, plus
-    (Stage 1+) a scour-vs-bearing disentanglement/leakage report."""
-    os.makedirs(SUMMARY_DIR, exist_ok=True)
-    rows: list[dict] = []
-    print("\n" + "=" * 64 + f"\n  {STAGE} - RESULTS SUMMARY\n" + "=" * 64)
+def _metrics_row(ph: dict, cfg: dict, m: dict) -> dict:
+    """One reported row: OUTER-TEST metrics + the inner-val objective."""
+    n_s = len(TARGET_SUPPORTS)
+    bt = cfg.get("bearing_targets") or []
+    head_cols = {}
+    for i, v in enumerate(m.get("per_head_mse", [])):
+        if i < n_s:
+            head_cols[f"mse_support_{TARGET_SUPPORTS[i]}"] = round(v, 4)
+        else:
+            bname = bt[i - n_s] if (i - n_s) < len(bt) else (i - n_s)
+            head_cols[f"mse_bearing_{bname}"] = round(v, 4)
+    row = {
+        "phase": ph["phase_label"], "architecture": cfg["name_short"],
+        "dofs": "+".join(IDX_TO_DOF_NAME[d] for d in cfg["dofs"]),
+        "seed": cfg.get("seed", SEEDS[0]), "n_sensors": len(cfg["dofs"]),
+        "inner_val_mse": round(m["inner_val_mse"], 4),
+        "agg_mse": round(m["mse"], 4), "agg_mae": round(m["mae"], 4),
+        "localisation_acc": (round(m["primary"], 4)
+                             if m["primary"] == m["primary"] else "nan"),
+    }
+    # State-level bootstrap CI of the aggregate test MSE (Feature B).
+    if "agg_mse_ci95_lo" in m:
+        row["agg_mse_ci95_lo"] = round(m["agg_mse_ci95_lo"], 4)
+        row["agg_mse_ci95_hi"] = round(m["agg_mse_ci95_hi"], 4)
+    if "scour_mse" in m:
+        row["scour_mse"] = round(m["scour_mse"], 4)
+        row["bearing_mse"] = round(m["bearing_mse"], 4)
+    row.update(head_cols)
+    return row
 
-    for ph in _RAN_PHASES:
-        for cfg in ph["configs"]:
-            m = evaluate_champion(cfg, ph["db"], ph["output_dir"], ph["cache_dir"])
-            if not m:
-                continue
-            per_head = m.get("per_head_mse", [])
-            # Head columns: scour heads named by support; any extra heads are the
-            # Stage-1 bearing targets (laid out after the scour heads).
-            n_s = len(TARGET_SUPPORTS)
-            bt = cfg.get("bearing_targets") or []
-            head_cols = {}
-            for i, v in enumerate(per_head):
-                if i < n_s:
-                    head_cols[f"mse_support_{TARGET_SUPPORTS[i]}"] = round(v, 4)
-                else:
-                    bname = bt[i - n_s] if (i - n_s) < len(bt) else (i - n_s)
-                    head_cols[f"mse_bearing_{bname}"] = round(v, 4)
-            row = {
-                "phase":        ph["phase_label"],
-                "architecture": cfg["name_short"],
-                "dofs":         "+".join(IDX_TO_DOF_NAME[d] for d in cfg["dofs"]),
-                "seed":         cfg.get("seed", SEEDS[0]),
-                "n_sensors":    len(cfg["dofs"]),
-                "agg_mse":      round(m["mse"], 4),
-                "agg_mae":      round(m["mae"], 4),
-                "localisation_acc": (round(m["primary"], 4)
-                                     if m["primary"] == m["primary"] else "nan"),
-            }
-            # Stage-1 scour-vs-bearing split (present only when bearing heads exist)
-            if "scour_mse" in m:
-                row["scour_mse"]   = round(m["scour_mse"], 4)
-                row["bearing_mse"] = round(m["bearing_mse"], 4)
-            row.update(head_cols)
-            rows.append(row)
 
-    if not rows:
-        print("  [summary] nothing to summarise (no champions found).")
-        return
-
-    rows.sort(key=lambda r: r["agg_mse"])
-    # union of keys across rows so DictWriter never trips on a missing column
+def _write_rows_csv(path: str, rows: list[dict]) -> None:
     fields = list(dict.fromkeys(k for r in rows for k in r))
-    csv_path = os.path.join(SUMMARY_DIR, "leaderboard.csv")
-    with open(csv_path, "w", newline="") as f:
+    with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
-    print(f"  Leaderboard ({len(rows)} models) -> {csv_path}")
-    print(f"  Best: {rows[0]['architecture']} on {rows[0]['dofs']} "
-          f"(seed {rows[0]['seed']})  agg_MSE={rows[0]['agg_mse']}  "
-          f"loc_acc={rows[0]['localisation_acc']}")
-
-    _median_leaderboard(rows)
-    _parity_plot_for_best(rows[0])
-    if BEARING_TARGETS:
-        disentanglement_report(rows)
 
 
-def _median_leaderboard(rows: list[dict]) -> None:
+def _write_json_atomic(path: str, obj) -> None:
+    """Atomic JSON write (temp + os.replace) — audit R7 P2/P3."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(obj, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def summarize() -> list[int] | None:
+    """STRICT select-then-report protocol (audit R7 P2). The outer TEST set is
+    touched EXACTLY ONCE, and only for the frozen winner + pre-registered
+    comparators:
+      (1) build the leaderboard from INNER-VALIDATION only (study.best_value) —
+          no test data opened here;
+      (2) validate study + pair-matrix completeness;
+      (3) SELECT the winner on inner-val and FREEZE it (returned to the driver,
+          which writes the manifest);
+      (4) evaluate the TEST set ONLY for {winner} + {frozen ladder pair, EXTRA_PAIRS}
+          — comparators declared in config, never chosen from test;
+      (5) report those + parity + disentanglement on that same held set.
+    Returns the selected best-PAIR DOFs, or None if no pair ran.
+    """
+    os.makedirs(SUMMARY_DIR, exist_ok=True)
+    print("\n" + "=" * 64 + f"\n  {STAGE} - RESULTS SUMMARY\n" + "=" * 64)
+
+    # ── (1) INNER-VALIDATION leaderboard — NO test touched ───────────────────
+    iv_rows: list[dict] = []
+    for ph in _RAN_PHASES:
+        for cfg in ph["configs"]:
+            iv = _inner_val_of(cfg, ph["db"])
+            if iv is None:
+                continue
+            iv_rows.append({
+                "phase": ph["phase_label"], "architecture": cfg["name_short"],
+                "dofs": "+".join(IDX_TO_DOF_NAME[d] for d in cfg["dofs"]),
+                "seed": cfg.get("seed", SEEDS[0]), "n_sensors": len(cfg["dofs"]),
+                # FULL precision (audit R7.1 P3): rounding to 4 dp before selection
+                # could flip near-tied candidates. Rounded only for display later.
+                "inner_val_mse": float(iv),
+            })
+    if not iv_rows:
+        raise RuntimeError(
+            f"{STAGE}: NO finished studies to summarise — every study failed to "
+            f"reach the useful budget (or none ran). This is fatal at ANY rung; "
+            f"do not proceed to selection/reporting.")
+    iv_rows.sort(key=lambda r: r["inner_val_mse"])
+    _write_rows_csv(os.path.join(SUMMARY_DIR, "leaderboard_innerval.csv"), iv_rows)
+    print(f"  Inner-val leaderboard ({len(iv_rows)} finished models — the SELECTION "
+          f"basis) -> {os.path.join(SUMMARY_DIR, 'leaderboard_innerval.csv')}")
+    iv_agg = _median_leaderboard(iv_rows, "leaderboard_innerval_median.csv")
+
+    # ── (2)+(3) SELECT the winner on inner-val + completeness gate ───────────
+    # EVERY stage runs a pair phase (search or frozen); NO singleton fallback
+    # (audit R7.1 P1) — a stage with no finished pair is a hard error, never a
+    # champion published on a singleton with champion_pair=None.
+    pair_rows = [r for r in iv_agg if r.get("n_sensors") == 2]
+    if not pair_rows:
+        raise RuntimeError(
+            f"{STAGE}: NO finished pair studies — cannot select/report a pair "
+            f"(the pair phase did not complete). Do not publish a champion.")
+    _assert_pair_matrix_complete(pair_rows)
+    selected_pair = None
+    if STAGE in PAIR_SEARCH_STAGES:
+        win = min(pair_rows, key=lambda r: r["inner_val_mse"])
+        _, win_cfg = _find_cfg(win)
+        if win_cfg is None:
+            raise RuntimeError(
+                f"{STAGE}: winner pair {win['dofs']} could not be resolved to a "
+                f"config — internal error; refusing to publish.")
+        selected_pair = list(win_cfg["dofs"])
+        print(f"  BEST PAIR (SELECTED by median INNER-VAL MSE): "
+              f"{win['architecture']} on {win['dofs']}  "
+              f"inner_val={win['inner_val_mse']:.6g} "
+              f"(IQR {win.get('inner_val_mse_iqr', 'n/a')})")
+    else:
+        frozen_str = "+".join(IDX_TO_DOF_NAME[d] for d in CHAMPION_PAIR)
+        win = next((r for r in pair_rows if r["dofs"] == frozen_str), None)
+        if win is None:
+            raise RuntimeError(
+                f"frozen pair {frozen_str} is not among the FINISHED pair studies "
+                f"at {STAGE} — its studies did not complete; cannot report the "
+                f"ladder point.")
+        selected_pair = list(CHAMPION_PAIR)
+        print(f"  FROZEN PAIR (carried from s0): {win['architecture']} on "
+              f"{win['dofs']}  inner_val={win['inner_val_mse']:.6g}")
+
+    # ── (4) PRE-REGISTERED comparator set (declared BEFORE any test touch) ────
+    # Feature B (2026-07-19): comparators are keyed by (ARCHITECTURE, pair) —
+    # at single-arch rungs this reduces to the old pair keying; at deployment
+    # rungs it distinguishes the same pair under different arms.
+    comparators: set = set()
+    _, win_cfg = _find_cfg(win)
+    if win_cfg:
+        comparators.add((win["architecture"], tuple(sorted(win_cfg["dofs"]))))
+    # The carried s0 champion combo = the ladder-continuity point. At a
+    # deployment rung this is exactly the (arch, pair) the ladder would deploy,
+    # so the deployment claim is reported AGAINST it.
+    if CHAMPION_ARCH and CHAMPION_PAIR:
+        comparators.add((CHAMPION_ARCH, tuple(sorted(CHAMPION_PAIR))))
+    for xp in EXTRA_PAIRS:                   # physics-motivated cross-check,
+        comparators.add((RANK_ARCH or win["architecture"],   # on the carried arm
+                         tuple(sorted(int(d) for d in xp))))
+
+    def _ckey_str(c):                        # ('ARCH', (d0, d1)) -> readable
+        return f"{c[0]} on " + "+".join(IDX_TO_DOF_NAME[d] for d in c[1])
+
+    # FREEZE the selection to disk BEFORE any test touch (audit R7 P2): an
+    # auditable record that the winner + comparator set were fixed on inner-val,
+    # independent of the test numbers computed next.
+    _write_json_atomic(
+        os.path.join(SUMMARY_DIR, "frozen_selection.json"),
+        {"stage": STAGE, "architecture": win["architecture"], "dofs": win["dofs"],
+         "selected_pair": selected_pair,
+         "inner_val_mse": win.get("inner_val_mse"),
+         "selection_metric": "median_inner_val_mse",
+         "deployment_selection": STAGE in DEPLOYMENT_SELECTION_STAGES,
+         # Unified protocol hash (2026-07-19): binds this frozen selection to
+         # the exact protocol (and dataset fingerprint) it was made under.
+         "protocol_hash": PROTOCOL_HASH,
+         "protocol_core_hash": PROTOCOL_CORE_HASH,
+         "pre_registered_comparators": [_ckey_str(c) for c in sorted(comparators)]})
+    # PREFLIGHT (audit R7.1 P4): confirm every comparator has all SEEDS finished +
+    # weighted BEFORE opening the test set — never touch test on a partial set.
+    _preflight_comparators(comparators)
+    print("  Touching the OUTER TEST set ONCE, only for the frozen winner + "
+          "pre-registered comparators: "
+          + str([_ckey_str(c) for c in sorted(comparators)]))
+
+    # ── (4b) TEST — winner + comparators ONLY, requiring the FULL seed set ────
+    reported: list[dict] = []
+    for ph in _RAN_PHASES:
+        for cfg in ph["configs"]:
+            if (cfg["name_short"], tuple(sorted(cfg["dofs"]))) not in comparators:
+                continue
+            m = evaluate_champion(cfg, ph["db"], ph["output_dir"], ph["cache_dir"])
+            if m:
+                reported.append(_metrics_row(ph, cfg, m))
+    # Every reported (arch, pair) comparator must have EXACTLY len(SEEDS)
+    # finished test rows (audit R7.1 P1) — a missing weight or a short seed set
+    # must be a hard error, not a silent drop from the published table.
+    _assert_reported_complete(reported, comparators)
+    test_agg = []
+    if reported:
+        reported.sort(key=lambda r: r.get("inner_val_mse", float("inf")))
+        _write_rows_csv(os.path.join(SUMMARY_DIR, "leaderboard_test.csv"), reported)
+        print(f"  Reported OUTER-TEST leaderboard ({len(reported)} models: winner + "
+              f"comparators) -> {os.path.join(SUMMARY_DIR, 'leaderboard_test.csv')}")
+        test_agg = _median_leaderboard(reported, "leaderboard_test_median.csv")
+    else:
+        print("  [summary] winner/comparator weights missing — TEST not evaluated.")
+
+    # ── (5) headline (winner's median TEST) + parity + disentanglement ───────
+    win_test = next((r for r in test_agg
+                     if r["architecture"] == win["architecture"]
+                     and r["dofs"] == win["dofs"]), None)
+    if win_test:
+        print(f"    -> reported OUTER-TEST agg_MSE={win_test.get('agg_mse')} "
+              f"(median, IQR {win_test.get('agg_mse_iqr', 'n/a')}, "
+              f"{win_test.get('n_seeds', '?')} seeds)  "
+              f"loc_acc={win_test.get('localisation_acc')}")
+    # ── (5b) Feature B: SEPARATE deployment manifest at deployment rungs ─────
+    # Records the exploratory (arch, pair) winner + its precise CLAIM. Never
+    # touches the s0 champion manifest and no later rung reads this file.
+    if STAGE in DEPLOYMENT_SELECTION_STAGES:
+        dep_path = os.path.join(
+            "results", f"_deployment_selection_{STAGE}_{SCHEMA_TAG}"
+                       f"_ph-{PROTOCOL_HASH_SHORT}.json")
+        arch_names = sorted(a["name_short"] for a in ARCHITECTURES)
+        _write_json_atomic(dep_path, {
+            "selection_kind": "deployment (exploratory — does NOT replace the "
+                              "s0 ladder champion)",
+            "stage": STAGE, "dataset": DATASET, "schema": SCHEMA_TAG,
+            "protocol_hash": PROTOCOL_HASH,
+            "protocol_core_hash": PROTOCOL_CORE_HASH,
+            "seeds": list(SEEDS), "n_trials": N_TRIALS,
+            "winner": {"architecture": win["architecture"],
+                       "pair": selected_pair,
+                       "inner_val_mse_median": win.get("inner_val_mse"),
+                       "test_agg_mse_median": (win_test or {}).get("agg_mse"),
+                       "test_agg_mse_ci95": [(win_test or {}).get("agg_mse_ci95_lo"),
+                                             (win_test or {}).get("agg_mse_ci95_hi")]},
+            "carried_s0_champion": {"architecture": CHAMPION_ARCH,
+                                    "pair": list(CHAMPION_PAIR) if CHAMPION_PAIR else None},
+            # The EXACT claim this selection supports — quote it, no more:
+            "claim": (f"best among architectures {arch_names} x C(8,2)=28 "
+                      f"two-sensor pairs, at {N_TRIALS} Optuna trials x "
+                      f"{len(SEEDS)} seeds, on {DATASET} (this budget and "
+                      f"geometry). NOT a best-sensor-COUNT claim and NOT a "
+                      f"global optimum."),
+        })
+        print(f"  [deployment] wrote {dep_path}  -> "
+              f"{win['architecture']} on {selected_pair} (exploratory; s0 "
+              f"champion untouched)")
+    _parity_plot_for_best(win_test or win)
+    if BEARING_TARGETS and reported:
+        disentanglement_report(reported)
+    return selected_pair
+
+
+def _assert_pair_matrix_complete(pair_rows: list[dict]) -> None:
+    """The best-pair claim requires the FULL pair matrix (audit R6 C8A), mirroring
+    _pick_champion_arch's arch-matrix guard. Every (arch, pair) config must have
+    all SEEDS, and — under EXHAUSTIVE_PAIRS — all C(8,2)=28 pairs must be present
+    PER ARCHITECTURE RUNNING AT THIS STAGE (Feature B: a deployment rung runs
+    all arms, so its matrix is 28 x n_arch median rows = 252 studies). Without
+    this, a combo backed by a single lucky seed (or a sweep missing pairs) could
+    be crowned 'best'."""
+    import itertools
+    short_seeds = [(r["architecture"], r["dofs"]) for r in pair_rows
+                   if r.get("n_seeds") != len(SEEDS)]
+    if short_seeds:
+        raise RuntimeError(
+            f"pair selection: these (arch, pair) combos lack the full "
+            f"{len(SEEDS)}-seed matrix {short_seeds} — finish them before "
+            f"declaring a best pair.")
+    if EXHAUSTIVE_PAIRS:
+        n_pairs = len(list(itertools.combinations(ALL_DOFS, 2)))
+        # ARCHITECTURES is rebound by the driver to the arm set actually running
+        # the pair phase (1 normally; all arms at a deployment rung).
+        arch_names = {a["name_short"] for a in ARCHITECTURES}
+        expected = n_pairs * len(arch_names)
+        if len(pair_rows) != expected:
+            got = sorted((r["architecture"], r["dofs"]) for r in pair_rows)
+            raise RuntimeError(
+                f"pair selection: EXHAUSTIVE_PAIRS expects {n_pairs} pairs x "
+                f"{len(arch_names)} arch(s) = {expected} rows but "
+                f"{len(pair_rows)} were evaluated ({got[:8]}...). Finish the "
+                f"full sweep before declaring a best pair.")
+        # Per-arch completeness too: 3 arms with 84 mixed rows must not pass.
+        for an in sorted(arch_names):
+            n_a = sum(1 for r in pair_rows if r["architecture"] == an)
+            if n_a != n_pairs:
+                raise RuntimeError(
+                    f"pair selection: architecture {an} has {n_a}/{n_pairs} "
+                    f"finished pair rows — its sweep is incomplete.")
+
+
+def _preflight_comparators(comparators: set) -> None:
+    """BEFORE the outer test is opened (audit R7.1 P4), verify that every
+    comparator — keyed (ARCHITECTURE, pair), Feature B — has the EXACT set of
+    SEEDS, each with a FINISHED study AND exported weights. This is a preflight:
+    if anything is missing the run aborts without ever touching test."""
+    for arch, dofs in sorted(comparators):
+        dof_str = "+".join(IDX_TO_DOF_NAME[d] for d in dofs)
+        found_seeds: list = []
+        for ph in _RAN_PHASES:
+            for cfg in ph["configs"]:
+                if (cfg["name_short"] != arch
+                        or tuple(sorted(cfg["dofs"])) != dofs):
+                    continue
+                weights = os.path.join(ph["output_dir"], cfg["name"],
+                                       "DT_champion_weights.pth")
+                try:
+                    study = optuna.load_study(study_name=cfg["name"], storage=ph["db"])
+                except Exception:                            # noqa: BLE001
+                    study = None
+                if os.path.exists(weights) and study is not None \
+                        and _study_is_finished(study, N_TRIALS):
+                    found_seeds.append(cfg.get("seed", SEEDS[0]))
+        if sorted(found_seeds) != sorted(SEEDS):
+            raise RuntimeError(
+                f"pre-test preflight FAILED for {arch} on {dof_str}: usable "
+                f"seeds {sorted(found_seeds)} != required {sorted(SEEDS)} "
+                f"(missing weights / unfinished study / duplicate). Refusing to "
+                f"open the outer test on an incomplete comparison.")
+
+
+def _assert_reported_complete(reported: list[dict], comparators: set) -> None:
+    """Post-test guard (audit R7.1 P4): every (arch, pair) comparator's reported
+    rows must be EXACTLY the SEEDS set — no missing seed AND no duplicate (a
+    count of 3 with a repeated seed is NOT complete)."""
+    for arch, dofs in sorted(comparators):
+        dof_str = "+".join(IDX_TO_DOF_NAME[d] for d in dofs)
+        seeds = [r["seed"] for r in reported
+                 if r["dofs"] == dof_str and r["architecture"] == arch]
+        if len(seeds) != len(SEEDS) or set(seeds) != set(SEEDS):
+            raise RuntimeError(
+                f"reported OUTER-TEST set for {arch} on {dof_str}: seeds "
+                f"{sorted(seeds)} != {sorted(SEEDS)} (missing or duplicated). "
+                f"Refusing to publish an incomplete comparison.")
+
+
+def _median_leaderboard(rows: list[dict], csv_name: str = "leaderboard_median.csv") -> list[dict]:
     """Seed-aggregated leaderboard: median + IQR per (phase, architecture, dofs).
 
     The paper-facing table (see ablation methodology: report median, not mean -
@@ -435,40 +1223,62 @@ def _median_leaderboard(rows: list[dict]) -> None:
                     if isinstance(g.get(col), (int, float))]
             if not vals:
                 continue
-            row[col] = round(float(np.median(vals)), 4)
-            if col == "agg_mse" and len(vals) > 1:
+            # Keep the SELECTION metric (inner-val) at full precision; round only
+            # display metrics (audit R7.1 P3 — avoid flipping near-tied pairs).
+            row[col] = float(np.median(vals)) if col == "inner_val_mse" \
+                else round(float(np.median(vals)), 4)
+            if col in ("agg_mse", "inner_val_mse") and len(vals) > 1:
                 q75, q25 = np.percentile(vals, [75, 25])
-                row["agg_mse_iqr"] = round(float(q75 - q25), 4)
+                row[f"{col}_iqr"] = round(float(q75 - q25), 4)
         agg_rows.append(row)
 
-    agg_rows.sort(key=lambda r: r.get("agg_mse", float("inf")))
-    fields = list(dict.fromkeys(k for r in agg_rows for k in r))
-    csv_path = os.path.join(SUMMARY_DIR, "leaderboard_median.csv")
-    with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(agg_rows)
+    # Rank by the SELECTION metric (inner-val), not the test metric (audit R6 C2).
+    agg_rows.sort(key=lambda r: r.get("inner_val_mse", float("inf")))
+    csv_path = os.path.join(SUMMARY_DIR, csv_name)
+    _write_rows_csv(csv_path, agg_rows)
     print(f"  Median leaderboard ({len(agg_rows)} configs x {len(SEEDS)} seeds) "
           f"-> {csv_path}")
+    return agg_rows
 
 
 def _find_cfg(row: dict) -> tuple[dict | None, dict | None]:
-    """(phase, config) dicts for a leaderboard row, or (None, None)."""
+    """(phase, config) dicts for a leaderboard row, or (None, None).
+
+    AUDIT R5 2026-07-17: match the row's DOFS and SEED, not just its architecture.
+    Per-seed rows (leaderboard / disentanglement) now resolve to their OWN seed's
+    model — previously every seed mapped to the SEEDS[0] config, so a 'seed 1337'
+    or 'seed 2026' row plotted/reported the seed-42 predictions. A median row
+    (no seed) resolves to the SEEDS[0] representative."""
     ph = next((p for p in _RAN_PHASES if p["phase_label"] == row["phase"]), None)
     if ph is None:
         return None, None
+    want_seed = row.get("seed", SEEDS[0])
+    want_dofs = row.get("dofs")
+
+    def _dofs_str(c):
+        return "+".join(IDX_TO_DOF_NAME[d] for d in c["dofs"])
+
     cfg = next((c for c in ph["configs"]
-                if c["name_short"] == row["architecture"]), None)
+                if c["name_short"] == row["architecture"]
+                and c.get("seed") == want_seed
+                and (want_dofs is None or _dofs_str(c) == want_dofs)), None)
+    if cfg is None:      # median row (no exact seed) -> SEEDS[0] representative
+        cfg = next((c for c in ph["configs"]
+                    if c["name_short"] == row["architecture"]
+                    and c.get("seed") == SEEDS[0]
+                    and (want_dofs is None or _dofs_str(c) == want_dofs)), None)
     return ph, cfg
 
 
-def _predictions(ph: dict, cfg: dict) -> tuple[np.ndarray, np.ndarray] | None:
-    """Champion predictions and ground truth on the canonical val set: (P, T)."""
+def _predictions(ph: dict, cfg: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Champion predictions, ground truth and per-sample STATE ids on the outer
+    TEST set: (P, T, states). `states` indexes the dataset's state-family table
+    (Feature A) so probes select samples by generated IDENTITY."""
     weights = os.path.join(ph["output_dir"], cfg["name"], "DT_champion_weights.pth")
     if not os.path.exists(weights):
         return None
     study = optuna.load_study(study_name=cfg["name"], storage=ph["db"])
-    loader, shape = _val_loader(cfg, ph["cache_dir"])
+    loader, shape, test_states = _test_loader(cfg, ph["cache_dir"])
     model, _ = build_model(cfg, study.best_params, shape, DEVICE)
     model.load_state_dict(torch.load(weights, map_location=DEVICE))
     model.eval()
@@ -477,18 +1287,40 @@ def _predictions(ph: dict, cfg: dict) -> tuple[np.ndarray, np.ndarray] | None:
         for bx, by in loader:
             preds.append(model(bx.to(DEVICE)).cpu().numpy())
             trues.append(by.numpy())
-    return np.vstack(preds), np.vstack(trues)
+    return np.vstack(preds), np.vstack(trues), test_states
 
 
 def disentanglement_report(rows: list[dict]) -> None:
-    """Stage-1 scour<->bearing leakage: does a seized bearing induce a false scour
-    reading (the dangerous case), and vice versa? Uses the single-damage anchor
-    subsets present in the data (scour-only / bearing-only states). Writes
-    `disentanglement.csv` (one row per config with bearing heads)."""
+    """Leakage / false-positive probes by state-family IDENTITY (Feature A,
+    2026-07-19 — replaces the old threshold-on-labels version, which could not
+    distinguish `target_healthy` from `nuisance_only` because per-STATE
+    persistent nuisances are invisible in `y`).
+
+    On the outer TEST set, per config with bearing heads:
+      * bearing_only  states -> mean of max predicted SCOUR   (false scour —
+                                the dangerous case: a seized bearing must not
+                                look like scour);
+      * scour_only    states -> mean of max predicted BEARING (false bearing);
+      * nuisance_only states -> mean of max predicted scour AND bearing (the
+                                invariance probe: crack forced ON, all heads 0);
+      * target_healthy states -> the same false-positive baselines on clean
+                                zero-head states (crack forced OFF).
+    Coverage of every family in TEST is GUARANTEED by the stratified split, so
+    an empty probe here is a split/loader BUG and raises (the old probabilistic
+    WARNING is gone). Families absent from the DATASET (e.g. nuisance_only at
+    no-crack rungs) report NaN and are noted, not errors."""
     n_s = len(TARGET_SUPPORTS)
-    S_THR, B_THR = 5.0, 20.0        # "damaged" thresholds: 5% scour, 20% seized
+    from core.dataset import read_state_table
+    table = read_state_table(os.path.join("data", DATASET))
+    fam_by_state = np.array(table["family"])
+    present_fams = set(table["family"])
+
+    def _mean_max(block: np.ndarray, mask: np.ndarray) -> float:
+        """Mean over selected samples of the per-sample max across heads."""
+        return float(block[mask].max(axis=1).mean()) if mask.any() else float("nan")
+
     out: list[dict] = []
-    print("\n  --- Stage-1 disentanglement (scour<->bearing leakage) ---")
+    print("\n  --- disentanglement / false-positive probes (by state family) ---")
     for r in rows:
         ph, cfg = _find_cfg(r)
         if cfg is None or not cfg.get("bearing_targets"):
@@ -496,35 +1328,57 @@ def disentanglement_report(rows: list[dict]) -> None:
         pt = _predictions(ph, cfg)
         if pt is None:
             continue
-        P, T = pt
-        Ts, Tb = T[:, :n_s], T[:, n_s:]        # true scour / bearing
-        Ps, Pb = P[:, :n_s], P[:, n_s:]        # pred scour / bearing
-        s_max_t, b_max_t = Ts.max(1), Tb.max(1)
-        # bearing-only states -> how much false SCOUR the model reports (bad)
-        m_bear_only = (s_max_t < S_THR) & (b_max_t > B_THR)
-        # scour-only states -> how much false BEARING the model reports
-        m_scour_only = (b_max_t < S_THR) & (s_max_t > S_THR)
-        leak_s = float(Ps[m_bear_only].max(1).mean()) if m_bear_only.any() else float("nan")
-        leak_b = float(Pb[m_scour_only].max(1).mean()) if m_scour_only.any() else float("nan")
+        P, _T, states = pt
+        fams = fam_by_state[states]            # family per TEST sample
+        Ps, Pb = P[:, :n_s], P[:, n_s:]        # pred scour / bearing heads
+        m_bear = fams == "bearing_only"
+        m_scour = fams == "scour_only"
+        m_nuis = fams == "nuisance_only"
+        m_healthy = fams == "target_healthy"
+        # A family that EXISTS in this dataset but has no TEST samples means
+        # the stratified-split guarantee was violated — that is a bug, never
+        # a statistic to report around.
+        for fam, mask in (("bearing_only", m_bear), ("scour_only", m_scour),
+                          ("nuisance_only", m_nuis), ("target_healthy", m_healthy)):
+            if fam in present_fams and not mask.any():
+                raise RuntimeError(
+                    f"disentanglement: family {fam!r} exists in {DATASET} but "
+                    f"has ZERO outer-test samples — stratified-split guarantee "
+                    f"violated (split/loader bug; do not report).")
         out.append({
             "architecture": cfg["name_short"], "dofs": r["dofs"],
             "seed": cfg.get("seed", SEEDS[0]),
-            "scour_leak_on_bearing_%": round(leak_s, 3),   # ideal ~0 (false scour alarm)
-            "bearing_leak_on_scour_%": round(leak_b, 3),
-            "n_bearing_only": int(m_bear_only.sum()),
-            "n_scour_only":   int(m_scour_only.sum()),
+            # ideal ~0 everywhere below; units = % (same scale as the heads)
+            "false_scour_on_bearing_only_%":  round(_mean_max(Ps, m_bear), 3),
+            "false_bearing_on_scour_only_%":  round(_mean_max(Pb, m_scour), 3),
+            "false_scour_on_nuisance_only_%": round(_mean_max(Ps, m_nuis), 3),
+            "false_bearing_on_nuisance_only_%": round(_mean_max(Pb, m_nuis), 3),
+            "false_scour_on_healthy_%":       round(_mean_max(Ps, m_healthy), 3),
+            "false_bearing_on_healthy_%":     round(_mean_max(Pb, m_healthy), 3),
+            "n_bearing_only": int(m_bear.sum()), "n_scour_only": int(m_scour.sum()),
+            "n_nuisance_only": int(m_nuis.sum()), "n_healthy": int(m_healthy.sum()),
         })
         print(f"    {cfg['name_short']:16} {r['dofs']:28} seed={cfg.get('seed', '?'):<5} "
-              f"false-scour-from-bearing={leak_s:6.2f}%  "
-              f"false-bearing-from-scour={leak_b:6.2f}%")
+              f"false-scour(bearing)={out[-1]['false_scour_on_bearing_only_%']:6.2f}%  "
+              f"false-bearing(scour)={out[-1]['false_bearing_on_scour_only_%']:6.2f}%  "
+              f"false-scour(nuis)={out[-1]['false_scour_on_nuisance_only_%']:6.2f}%")
     if not out:
         return
+    if "nuisance_only" not in present_fams:
+        print(f"  [disentanglement] NOTE: {DATASET} has no nuisance_only states "
+              f"(no crack EOV at this rung) — those columns are NaN by design.")
+    print(f"  [disentanglement] test-set family counts: "
+          f"bearing_only={out[0]['n_bearing_only']}, "
+          f"scour_only={out[0]['n_scour_only']}, "
+          f"nuisance_only={out[0]['n_nuisance_only']}, "
+          f"healthy={out[0]['n_healthy']} (coverage guaranteed by the "
+          f"stratified split).")
     csv_path = os.path.join(SUMMARY_DIR, "disentanglement.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(out[0].keys()))
         w.writeheader()
         w.writerows(out)
-    print(f"  Disentanglement -> {csv_path}  (low scour_leak_on_bearing = clean)")
+    print(f"  Disentanglement -> {csv_path}  (low false_* = clean)")
 
 
 def _parity_plot_for_best(best_row: dict) -> None:
@@ -542,7 +1396,7 @@ def _parity_plot_for_best(best_row: dict) -> None:
     pt = _predictions(ph, cfg)
     if pt is None:
         return
-    P, T = pt
+    P, T, _states = pt
 
     n_s = len(TARGET_SUPPORTS)
     bt = cfg.get("bearing_targets") or []
@@ -561,6 +1415,9 @@ def _parity_plot_for_best(best_row: dict) -> None:
         ax.set_xlabel(f"True {unit}"); ax.set_ylabel(f"Predicted {unit}")
         ax.set_title(label)
         ax.set_aspect("equal", "box")
+    # Label the seed of the model ACTUALLY plotted (cfg, = SEEDS[0]), not the
+    # leaderboard row's seed, so the figure caption can't mislabel it (audit R4).
+    best_row = {**best_row, "seed": cfg.get("seed", SEEDS[0])}
     fig.suptitle(f"{STAGE} parity - {best_row['architecture']} on {best_row['dofs']}"
                  f" (seed {best_row.get('seed', '?')})")
     fig.tight_layout()
@@ -577,16 +1434,67 @@ if __name__ == "__main__":
     print(f"### DATASET = {DATASET}")
     print(f"### targets: scour {TARGET_SUPPORTS}"
           + (f" + bearing {BEARING_TARGETS}" if BEARING_TARGETS else "")
-          + f"   seeds: {SEEDS}   trials/study: {N_TRIALS}\n")
+          + f"   seeds: {SEEDS}   trials/study: {N_TRIALS}")
+    print(f"### protocol: full={PROTOCOL_HASH_SHORT} "
+          f"core={short_hash(PROTOCOL_CORE_HASH)}  (descriptor -> "
+          f"{os.path.join(SUMMARY_DIR, 'protocol_descriptor.json')})\n")
+    # Persist the full hashed descriptor FIRST — even a crashed run leaves an
+    # auditable record of the protocol it started under (2026-07-19).
+    _write_protocol_record()
     set_global_seed(SEEDS[0])
-    phase_1_single_dof()
-    auto_pair = auto_select_pair()
-    phase_2_pair(auto_pair)
-    for xp in EXTRA_PAIRS:
-        xp = sorted(int(d) for d in xp)
-        if xp == sorted(auto_pair):
-            print(f"[extra-pair] {xp} is already the auto pair - skipped.")
-            continue
-        phase_2_pair(xp)
-    summarize()
+
+    # Single-DOF sweep + architecture selection run ONLY at the selection stage
+    # (audit R6 C9). Later rungs read the champion arch from the manifest and
+    # never re-sweep single sensors — a frozen-pair rung costs ~3 studies, not the
+    # ~108 the old "phase_1 + 28 pairs at every rung" design incurred.
+    _champ_pending = None
+    if STAGE in ARCH_SELECTION_STAGES:
+        phase_1_single_dof()
+        champ, medians = _pick_champion_arch()
+        RANK_ARCH = CHAMPION_ARCH = champ            # rebind module globals
+        _champ_pending = (champ, medians)
+
+    # Pair phase: SEARCH all 28 pairs (search stages) or reuse the FROZEN pair.
+    # Feature B (2026-07-19): DEPLOYMENT stages run the pair sweep over ALL
+    # architecture arms (3 x 28 x seeds = 252 studies) — the deployment
+    # recommendation must not be conditioned on the clean-data s0 winner. All
+    # other stages run the single carried/selected arm as before.
+    if STAGE in DEPLOYMENT_SELECTION_STAGES:
+        ARCHITECTURES = ALL_ARCHITECTURES
+    else:
+        ARCHITECTURES = [a for a in ALL_ARCHITECTURES if a["name_short"] == RANK_ARCH]
+    if STAGE in PAIR_SEARCH_STAGES:
+        import itertools
+        all_pairs = [sorted(p) for p in itertools.combinations(ALL_DOFS, 2)]
+        arch_lbl = (f"{len(ARCHITECTURES)} archs (DEPLOYMENT selection)"
+                    if STAGE in DEPLOYMENT_SELECTION_STAGES else RANK_ARCH)
+        print(f"[pairs] SEARCH: {len(all_pairs)} pairs x {arch_lbl} x "
+              f"{len(SEEDS)} seeds (best combo chosen on INNER-VAL)")
+        for pr in all_pairs:
+            phase_2_pair(pr)
+    else:
+        # Frozen pair carried across the ladder for one-factor-at-a-time (C8B): the
+        # only thing that changes vs the previous rung is this rung's nuisance.
+        print(f"[pairs] FROZEN champion pair {CHAMPION_PAIR} x {RANK_ARCH} x "
+              f"{len(SEEDS)} seeds (+ EXTRA_PAIRS cross-check)")
+        phase_2_pair(CHAMPION_PAIR)
+        for xp in EXTRA_PAIRS:
+            xp = sorted(int(d) for d in xp)
+            if xp == sorted(CHAMPION_PAIR):
+                print(f"[extra-pair] {xp} is the frozen pair - skipped.")
+                continue
+            phase_2_pair(xp)
+
+    selected_pair = summarize()
+    # Publish the champion (arch + FROZEN pair from summarize's inner-val choice)
+    # ONLY at the selection stage and ONLY after a full completion, so a crashed
+    # run never leaves a half-baked champion for s11+. A selection stage MUST have
+    # produced a pair (audit R7.1 P1) — refuse to publish a pairless champion.
+    if _champ_pending is not None:
+        if not selected_pair or len(set(selected_pair)) != 2:
+            raise RuntimeError(
+                f"{STAGE}: refusing to publish champion — selected_pair="
+                f"{selected_pair!r} is not a valid 2-sensor pair. The pair sweep "
+                f"must complete and select a pair before the manifest is written.")
+        _write_champion_arch(*_champ_pending, champion_pair=selected_pair)
     print("\n" + "=" * 64 + f"\n  {STAGE} multi-damage ablation finished.\n" + "=" * 64)

@@ -72,6 +72,14 @@ group sizes above 5 (cited range = 1-5 consecutive, 5 = wheel-load critical limi
   ballast spring under the affected sleepers.*
 - **Severity:** void depth g_v = 0.5–3.0 mm (max boundary 5.0 mm);
   distribution **Lognormal**: ln(g_v) ~ N(−0.2, 0.4).
+  ⚠ **NOT IMPLEMENTED (audit 2026-07-17):** the code stores only
+  `[x_start, n_consec]` and applies the same near-zero support (×1e-6) to every
+  group — i.e. every hanging group behaves FULLY voided regardless of depth.
+  The g_v distribution above is a spec-only refinement. The paper must describe
+  the implemented model as a BINARY removed-support linearisation (severity
+  gradation and gap-closure impact both absent); do not claim g_v sampling.
+  If g_v is ever implemented it must actually enter the mechanics (a gap state
+  or depth-dependent stiffness), not just the log.
 - **Count:** 1–3 clustered groups per 100 m *(Extrapolation: field data shows up to
   ~50% of concrete sleepers have some voiding globally — Augustin et al.; Li & Sun —
   but impactful gaps are highly clustered)*.

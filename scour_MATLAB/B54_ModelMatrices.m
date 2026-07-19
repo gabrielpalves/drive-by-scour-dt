@@ -115,7 +115,10 @@ end % if Track.PadUnderSleeperOnBeam.included == 1
 % the sleeper x-positions. Healthy (no descriptors) -> uniform vectors that
 % assemble numerically identical matrices to the legacy scalar path.
 % Mirrors TTBI_2D/b54_model_matrices.py::_track_vectors.
-[TrkV] = local_track_vectors(Track,Model,Calc,Damage);
+% Second output = placement diagnostics (resolved GLOBAL coordinates of every
+% modified sleeper/pad + the frame offset applied) - consumed by the smoke
+% tests to assert the damage actually lands on/around the deck.
+[TrkV,Model.TrackDmgDbg] = local_track_vectors(Track,Model,Calc,Damage);
 
 % ---------------------- Building Global matrices -------------------------
 
@@ -290,11 +293,19 @@ function [OutM] = funDiag(size,value)
         OutM = diag(value(:).');
     end
 
-function [V] = local_track_vectors(Track,Model,Calc,Damage)
+function [V,Dbg] = local_track_vectors(Track,Model,Calc,Damage)
 
     % Per-sleeper track-layer property vectors from Damage.track descriptors.
-    % All descriptors use TRACK x-coordinates [m] (0..Calc.Profile.L; the
-    % bridge occupies [L_Approach, L_Approach+L_bridge]). Fields (optional):
+    % COORDINATE FRAME (audit fix 2026-07-17): descriptors carrying an
+    % .x_bridge_local field are in A00's BRIDGE-LOCAL window frame (deck
+    % starts at x = x_bridge_local). The sleeper axis here is GLOBAL
+    % (0..Calc.Profile.L) and under redux = 0 the deck really starts at
+    % num_app*spacing = L_Approach + max_TL (123.0 m for L60) - NOT at
+    % L_Approach, as a stale comment here used to claim. The global axis is
+    % shifted into the local frame before any selection, so every descriptor
+    % lands relative to the REAL deck. Descriptors WITHOUT .x_bridge_local
+    % (legacy datasets) are read as global coordinates, exactly as before.
+    % Fields (optional):
     %   .ballast_patches : rows [x_start, x_end, eta_k, eta_c] — fouling /
     %                      degradation patch (stiffness+damping multipliers)
     %   .hanging_groups  : rows [x_start, n_consec] — unsupported-sleeper
@@ -302,12 +313,25 @@ function [V] = local_track_vectors(Track,Model,Calc,Damage)
     %   .pad_stiff_mult  : scalar chi_pad (global pad aging multiplier)
     %   .pad_damp_mult   : scalar beta_pad
     %   .pad_failures    : vector of x-positions of failed pads (k -> ~0)
+    %   .x_bridge_local  : deck-start position in the descriptor frame [m]
     % Healthy (no Damage.track) -> uniform vectors; the assembled matrices
     % are numerically identical to the legacy scalar path.
     % Mirror of TTBI_2D/b54_model_matrices.py::_track_vectors.
+    % Dbg = resolved GLOBAL positions of modified entries (smoke-test hook).
 
     n = Track.Sleeper.Tnum;
     x = Model.Mesh.XLoc.sleepers;            % [1 x n] sleeper positions [m]
+    % First/last on-beam sleeper in the GLOBAL sleeper-axis frame:
+    x_deck0 = Track.Sleeper.num_app * Track.Sleeper.spacing;
+    x_deck1 = (Track.Sleeper.num_app + Track.Sleeper.num_onbeam - 1) * ...
+        Track.Sleeper.spacing;
+    off = 0;                                 % global -> descriptor-frame shift
+    if isfield(Damage,'track') && ~isempty(Damage.track) && ...
+            isfield(Damage.track,'x_bridge_local') && ...
+            ~isempty(Damage.track.x_bridge_local)
+        off = x_deck0 - Damage.track.x_bridge_local;
+    end
+    x = x - off;                             % sleeper axis in descriptor frame
     mult_bal_k = ones(1,n); mult_bal_c = ones(1,n);
     mult_pad_k = ones(1,n); mult_pad_c = ones(1,n);
     KILL = 1e-6;    % "removed" support: not exactly 0 to keep Kg well-posed
@@ -351,6 +375,15 @@ function [V] = local_track_vectors(Track,Model,Calc,Damage)
     i_on  = Track.Sleeper.num_app + (1:Track.Sleeper.num_onbeam);
     i_aft = Track.Sleeper.num_app + Track.Sleeper.num_onbeam + ...
         (1:Track.Sleeper.num_aft);
+
+    % ---- Placement diagnostics (GLOBAL coordinates; smoke-test hook) ----
+    x_glob = x + off;
+    Dbg = struct();
+    Dbg.frame_offset     = off;                    % global - descriptor frame
+    Dbg.x_deck_global    = [x_deck0, x_deck1];     % first/last on-beam sleeper
+    Dbg.bal_x_global     = x_glob(mult_bal_k ~= 1 & mult_bal_k ~= KILL);
+    Dbg.hang_x_global    = x_glob(mult_bal_k == KILL);
+    Dbg.padfail_x_global = x_glob(mult_pad_k == KILL | mult_pad_c == KILL);
 
     V.pad_k  = Track.Pad.Prop.k          * mult_pad_k;         % full track
     V.pad_c  = Track.Pad.Prop.c          * mult_pad_c;

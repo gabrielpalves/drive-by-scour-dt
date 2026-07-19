@@ -64,9 +64,10 @@ def b00_calculations(Calc, Train, Track, Beam, Damage):
     Beam.Prop.E_n[Beam.Prop.n_mod] = Beam.Prop.E * Beam.Prop.E_mod
 
     # ---- Crack damage (bridge only) ----
-    # Local EI reduction (Sinha et al.) at one or more deck locations, applied
-    # here so it only affects the bridge beam (not the rail, which is re-meshed
-    # via b01 below). See damage_config.apply_cracks.
+    # Damaged-element EI reduction (uniform block, cf. Fernandes 2025; NOT the
+    # Sinha tapered model) at one or more deck locations, applied here so it
+    # only affects the bridge beam (not the rail, which is re-meshed via b01
+    # below). See damage_config.apply_cracks.
     Beam = apply_cracks(Beam, Damage)
 
     # Boundary conditions

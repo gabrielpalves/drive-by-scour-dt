@@ -41,7 +41,14 @@ switch Profile_cfg.mode
         Calc.Profile.PSD_Y_fun = @(spaf,inputs) (inputs(1)*inputs(2)*inputs(3)^2)./((spaf.^2).*(spaf.^2+inputs(3)^2))*inputs(4);
         Calc.Profile.inputs(1) = 0.25;                                  % k = Some constant
         Calc.Profile.inputs(2) = A_v_classes(Profile_cfg.fra_class);    % A_v [cm^2 rad/m]
-        Calc.Profile.inputs(3) = 0.8245;                                % Omega_c [rad/m]
+        % AUDIT FIX 2026-07-17: B19's spatial-frequency axis is in CYCLES/m
+        % (PSD_X = k/(N*dx)), so the FRA corner frequency Omega_c = 0.8245
+        % rad/m must be converted to n_c = Omega_c/(2*pi) cycles/m before it
+        % enters the formula. inputs(4) already performed the matching A_v
+        % conversion (cm^2*rad/m -> m^2*cycle/m); feeding the corner in rad/m
+        % tilted the spectrum up toward short wavelengths (~16x too much PSD
+        % at the 1.524 m cutoff; acceleration-weighted variance ~8.5x high).
+        Calc.Profile.inputs(3) = 0.8245/(2*pi);                         % n_c [cycles/m] (= Omega_c 0.8245 rad/m)
         Calc.Profile.inputs(4) = 1e-4/(2*pi);   % Unit conversion [cm^2 = 10^(-4) m^2] and [rad = 1/(2*pi) cycles]
         Calc.Profile.min_WaveLength = 1.524;    % [m]
         Calc.Profile.max_WaveLength = 304.8;    % [m]

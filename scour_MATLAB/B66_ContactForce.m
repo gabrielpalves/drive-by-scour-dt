@@ -61,14 +61,31 @@ if Calc.Options.VBI == 1
         Sol.Veh(veh_num).F_onBeam_max = max(Sol.Veh(veh_num).F_onBeam(:));
         Sol.Veh(veh_num).F_onBeam_min = min(Sol.Veh(veh_num).F_onBeam(:));
 
-        % Checking contact (while on the bridge)
-        L1 = Calc.Profile.L_Approach + Calc.Position.x_0*Calc.Options.redux_factor;
-        L2 = Calc.Profile.L_Approach + Calc.Profile.L_bridge + Calc.Position.x_0*Calc.Options.redux_factor;
+        % Checking contact (while on the bridge). AUDIT R3 2026-07-17: the deck
+        % start is L_Aw = L_Approach + max_TL*redux_factor (= 123 m for L60),
+        % which is where B54 places the on-beam sleepers. The old expression
+        % L_Approach + Position.x_0 used x_0 = max_TL + extra_L2, landing 6 m too
+        % late (129 m) — so the bridge column of contact_log was mis-windowed.
+        L1 = Calc.Profile.L_Aw;
+        L2 = Calc.Profile.L_Aw + Calc.Profile.L_bridge;
         ind = and(Calc.Veh(veh_num).x_path>=L1,Calc.Veh(veh_num).x_path<=L2);
         Sol.Veh(veh_num).F_onBridge_max = max(max(Sol.Veh(veh_num).F_onBeam(ind)));
         Sol.Veh(veh_num).F_onBridge_min = min(min(Sol.Veh(veh_num).F_onBeam(ind)));
         Sol.Veh(veh_num).contactLost = Sol.Veh(veh_num).F_onBridge_max>0;
-        
+
+        % Checking contact over the WHOLE on-track path (audit 2026-07-17).
+        % Sign convention: grav = -9.81 so compression is NEGATIVE and
+        % F_onBeam > 0 is TENSION - a separation the bilateral solver cannot
+        % represent. The old bridge-only window missed approach/exit uplift
+        % (flat and void impacts mostly occur over plain track). These fields
+        % are persisted per passage by A00 (data2save.contact_log) and
+        % asserted on by the smoke tests.
+        ind0 = (Calc.Veh(veh_num).x_path >= 0);
+        Sol.Veh(veh_num).F_onTrack_max     = max(Sol.Veh(veh_num).F_onBeam(ind0));
+        Sol.Veh(veh_num).contactLost_track = Sol.Veh(veh_num).F_onTrack_max > 0;
+        Sol.Veh(veh_num).tension_frac      = ...
+            sum(Sol.Veh(veh_num).F_onBeam(:) > 0 & ind0(:)) / max(sum(ind0(:)),1);
+
 %         %-- Graphical Check --
 %         if veh_num == 1
 %             figure;
@@ -107,23 +124,43 @@ elseif Calc.Options.VBI == 0
         Sol.Veh(veh_num).F_onBeam_max = max(Sol.Veh(veh_num).F_onBeam(:));
         Sol.Veh(veh_num).F_onBeam_min = min(Sol.Veh(veh_num).F_onBeam(:));
 
-        % Checking contact (while on the bridge)
-        L1 = Calc.Profile.L_Approach;
-        L2 = Calc.Profile.L_Approach + Calc.Profile.L_bridge;
+        % Checking contact (while on the bridge). AUDIT R4 2026-07-17: use
+        % L_Aw (= L_Approach + max_TL*redux_factor) as the deck start, matching
+        % the VBI==1 branch (this branch is unused by the campaign, fixed for
+        % consistency so the bridge window is never 6 m off).
+        L1 = Calc.Profile.L_Aw;
+        L2 = Calc.Profile.L_Aw + Calc.Profile.L_bridge;
         ind = and(Calc.Veh(veh_num).x_path>=L1,Calc.Veh(veh_num).x_path<=L2);
         Sol.Veh(veh_num).contactLost = max(max(Sol.Veh(veh_num).F_onBeam.*ind))>0;
+
+        % Whole on-track path (audit 2026-07-17; see the VBI==1 branch)
+        ind0 = (Calc.Veh(veh_num).x_path >= 0);
+        Sol.Veh(veh_num).F_onTrack_max     = max(Sol.Veh(veh_num).F_onBeam(ind0));
+        Sol.Veh(veh_num).contactLost_track = Sol.Veh(veh_num).F_onTrack_max > 0;
+        Sol.Veh(veh_num).tension_frac      = ...
+            sum(Sol.Veh(veh_num).F_onBeam(:) > 0 & ind0(:)) / max(sum(ind0(:)),1);
 
     end % for veh_num = 1:Train.Veh(1).Tnum
 
 end % if Calc.Options.VBI == 1
 
 % ---- Checking contact ----
+% Aggregates (audit 2026-07-17): bridge-window flag kept for backward
+% compatibility; the *_track fields cover the whole on-track path. A00
+% persists all of them per passage (data2save.contact_log) so invalid
+% passages can be filtered at load time and the smoke tests can assert.
+Sol.contactLost_track = double(max([Sol.Veh(:).contactLost_track]) > 0);
+Sol.F_tension_max     = max([Sol.Veh(:).F_onTrack_max]);   % >0 = worst tension [N]
+Sol.tension_frac_max  = max([Sol.Veh(:).tension_frac]);    % worst per-vehicle fraction
 if max([Sol.Veh(:).contactLost]) > 0
     Sol.contactLost = 1;
     disp('There is no permanent contact between wheels and rail');
 else
     Sol.contactLost = 0;
 end % if max([Sol.Veh(:).contactLost]) > 0
+if Sol.contactLost_track > 0 && ~Sol.contactLost
+    disp('Contact lost over the approach/exit track (outside the bridge window)');
+end
 
 % % -- Graphical check of components --
 % veh_num = 1;

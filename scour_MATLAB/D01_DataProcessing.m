@@ -45,14 +45,21 @@ data.Posicao{i,j}    = Train.vel*(Calc.Solver.num_t/1000);   % distance travelle
 % per passage), exactly as the legacy code did it:
 %     xx = linspace(1, DimSpace, DimAcel);  xi = 1:DimSpace;  interp1(xx, y, xi)
 % Crop window = 10 m approach skip + bridge span + 18.31 m crossing/after.
-% NOTE: with profile_mode='fixed' (Type 2) B19 replaces Calc.Profile wholesale and
-% L_bridge reverts to the stored 39.9 m — the documented legacy 40 m window. It is
-% recorded per passage below so the crop is always self-describing.
+% Calc.Profile.L_bridge is the LIVE bridge length for every mode (60 / 99.6),
+% so the crop spans the whole deck. (Until the 2026-07-17 audit, profile_mode=
+% 'fixed' let B19 overwrite Calc.Profile wholesale and L_bridge reverted to the
+% stored 39.9 m — a ~40 m crop on a 60/99.6 m bridge; B19 now preserves the live
+% geometry.) L_bridge_eff is still recorded per passage so the crop is
+% self-describing. NOTE: the RAW full-length signal is saved, so a wrong crop
+% could always be repaired in Python without regenerating.
 DimAcel  = size(Sol.Veh(1).A, 2);
 DimSpace = round(data.Posicao{i,j}*100);
 
 crop_start  = 1001;                                   % ~10 m approach skip
-bridge_samp = round(Calc.Profile.L_bridge) * 100;     % bridge span [samples]
+% AUDIT R3 2026-07-17: round AFTER scaling by 100 samples/m. round(L)*100 gave
+% round(99.6)*100 = 10000 (a 0.4 m / 40-sample over-crop at L99.6); the correct
+% span is round(100*99.6) = 9960 samples. Identical at L60 (both 6000).
+bridge_samp = round(100 * Calc.Profile.L_bridge);     % bridge span [samples]
 crop_end    = min(crop_start - 1 + bridge_samp + 1831, DimSpace);
 
 data.DimAcel(i,j)      = DimAcel;

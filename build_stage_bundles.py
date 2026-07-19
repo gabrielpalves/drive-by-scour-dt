@@ -24,14 +24,27 @@ STAGES = {
     "s13_bearcrack":  ("all_mult", "+ bearing + crack = all BRIDGE damages"),
     "s14_prof":       ("all_mult", "+ rail profile FRA-4 per-state = the ROUGHNESS rung"),
     "s15_track":      ("all_mult", "+ track-layer damage (ballast/hanging sleepers/pads)"),
-    "s16_all":        ("all_mult", "+ wheel OOR/flats = ALL damages"),
+    "s16_all":        ("all_mult", "+ wheel OOR (polygonization; flats disabled) = ALL damages"),
     "s21_scour4":     ("all_mult", "4-span L99.6, scour only"),
     "s22_bearcrack4": ("all_mult", "4-span, + bearing + crack = all BRIDGE damages"),
     "s23_all4":       ("all_mult", "4-span, all damages"),
 }
 # Extra files that post-date the source bundle's manifest.
 EXTRA_FILES = ["scour_MATLAB/smoke_raw_parity.m", "check_raw_parity.py",
-               "README_CAMPAIGN.md"]
+               "README_CAMPAIGN.md",
+               # 2026-07-17 audit test layer - ship with every bundle:
+               "scour_MATLAB/smoke_audit.m", "scour_MATLAB/smoke_stage3.m",
+               "scour_MATLAB/smoke_geometry.m", "check_split_grouping.py",
+               "check_loader_provenance.py", "scour_MATLAB/save_progress.m",
+               # 2026-07-18/19 audit layer: cache-provenance test + the unified
+               # protocol-hash module (the driver IMPORTS core/protocol.py — a
+               # bundle without it cannot even start) and its adversarial test.
+               "check_cache_provenance.py",
+               "core/protocol.py", "check_protocol_hash.py",
+               # Feature A MATLAB<->Python family-table contract smoke (run the
+               # .m in MATLAB first, then the Python side).
+               "scour_MATLAB/smoke_familytable.m",
+               "check_familytable_roundtrip.py"]
 
 def set_a00_stage(t, stage):
     t2, n = re.subn(r"^STAGE = '[^']*';", f"STAGE = '{stage}';", t, count=1, flags=re.M)
@@ -54,6 +67,23 @@ def readme(stage, mode, adds):
         f"# Bundle: {stage}  —  {adds}", "",
         "Self-contained: MATLAB generator + Python ablation, both PRESET for this",
         "stage. Extract into the repo root on the Lab PC. No editing needed.", "",
+        "## 0. AUDIT 2026-07-17 — read first",
+        "- Extract into a FRESH working copy; do NOT extract over an old run. A00",
+        "  writes a gen_schema and ABORTS if you resume a folder from other code.",
+        "- One-time sanity (MATLAB): `smoke_audit`, `smoke_stage3`, `smoke_geometry`;",
+        "  (Python): `python check_split_grouping.py`, `python check_loader_provenance.py`,",
+        "  `python check_cache_provenance.py`, `python check_protocol_hash.py`.",
+        "  All must print ALL PASS.",
+        "- Run STAGE s0_scour FIRST: it selects the architecture and writes",
+        "  results/_champion_arch_<schema>_ph-<hash>.json; every later rung reads it",
+        "  and errors if it is missing (no hardcoded champion anymore). On a DIFFERENT",
+        "  PC, copy that JSON here (or set CHAMPION_MANIFEST / CHAMPION_ARCH_OVERRIDE).",
+        "- PROTOCOL HASH (2026-07-19): every study/summary/manifest name carries a",
+        "  SHA-256 of the full protocol (dataset fingerprint, split, seeds, trials,",
+        "  pruner, search space, noise, targets). If ANY of those change, names",
+        "  change and old studies are orphaned — never resumed. The exact hashed",
+        "  descriptor is written to the summary dir as protocol_descriptor.json.",
+        "- Study/DB/cache dirs are STAGE-prefixed, so rungs never cross-contaminate.", "",
         "## 1. MATLAB — generate the data (noise-free, RAW format)",
         f"Open `scour_MATLAB/A00_Run.m` and RUN it. `STAGE` is already `{stage}` and",
         "`use_signal_noise = false` — measurement noise is added later, at LOAD time.",
@@ -71,7 +101,8 @@ def readme(stage, mode, adds):
         "`python comprehensive_ablation_multidamage.py` (STAGE + SENSOR_NOISE preset).",
         f"Noise: `{mode}` = uniform 5% multiplicative on EVERY channel, injected at load",
         "time onto the noise-free data. 100 trials x 3 seeds + the mixed pair [1,3];",
-        f"summary -> `results/{stage}_summary/` (+ `leaderboard_median.csv`).", "",
+        f"summary -> `results/{stage}_summary_ph-<hash>/` (+ leaderboards +",
+        "`protocol_descriptor.json`).", "",
         "## Heads vs nuisances",
         "HEADS = scour (per pier) + bearing (per abutment) ONLY. Crack, rail profile,",
         "track-layer and wheel damage are NUISANCES: randomized, logged, never",

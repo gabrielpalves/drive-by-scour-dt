@@ -1,4 +1,4 @@
-function [Sol, Calc, Train, Beam, Track] = B00_Calculations(Calc, Train, Track, Beam, Damage)
+function [Sol, Calc, Train, Beam, Track, Model] = B00_Calculations(Calc, Train, Track, Beam, Damage)
 % Core calculations of TTB-2D simulation.
 % Basically this script does the following:
 %   - Inputs processing and auxiliary variables generation
@@ -33,7 +33,11 @@ if isfield(Beam.Prop,'n_mod') && isfield(Beam.Prop,'E_mod')
     Beam.Prop.E_n(Beam.Prop.n_mod) = Beam.Prop.E*Beam.Prop.E_mod;
 end
 
-% Crack damage on the BRIDGE beam only: local EI reduction (Sinha et al.).
+% Crack damage on the BRIDGE beam only: DAMAGED-ELEMENT EI reduction (uniform
+% I drop over the affected element(s), cf. Fernandes et al. 2025). NOT the
+% Sinha/Friswell/Edwards (2002) model - that one tapers EI linearly over an
+% effective length around the crack and is parametrized by crack DEPTH
+% (mis-citation corrected in the 2026-07-17 audit).
 % Exact mirror of TTBI_2D/damage_config.py::apply_cracks. No-op when the
 % Damage struct carries no cracks.
 [Beam] = local_apply_cracks(Beam,Damage);
@@ -137,11 +141,15 @@ disp('All calculations finished sucessfully');
 
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 function [Beam] = local_apply_cracks(Beam,Damage)
-% Crack = local EI reduction (Sinha et al.): every BRIDGE element whose
-% midpoint lies within [loc-lc, loc+lc] has its second moment of area I_n
-% scaled by (1 - intensity). With lc <= 0 only the single element containing
-% `loc` is affected. Fernandes et al. (2025): intensities 0.14/0.22 on a
-% ~30 cm element. Exact mirror of TTBI_2D/damage_config.py::apply_cracks.
+% Crack = DAMAGED-ELEMENT EI reduction: every BRIDGE element whose midpoint
+% lies within [loc-lc, loc+lc] has its second moment of area I_n scaled by
+% the SAME (1 - intensity) - a uniform block, with lc <= 0 affecting only
+% the single element containing `loc`. This is the classical damaged-element
+% benchmark used by Fernandes et al. (2025) (intensities 0.14/0.22 on a
+% ~30 cm element). It is NOT the Sinha/Friswell/Edwards (2002) model, which
+% tapers EI piecewise-linearly over ~1.5x beam depth each side of the crack
+% and is parametrized by crack depth (audit 2026-07-17: former mis-citation).
+% Exact mirror of TTBI_2D/damage_config.py::apply_cracks.
 
 if ~isfield(Damage,'crack_locs') || isempty(Damage.crack_locs)
     return

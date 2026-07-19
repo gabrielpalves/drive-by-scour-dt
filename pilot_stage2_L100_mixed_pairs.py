@@ -80,11 +80,11 @@ import os
 import numpy as np
 import optuna
 import torch
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from core            import task
-from core.dataset    import get_or_create_cache, MemmapDataset
+from core.dataset    import (get_or_create_cache, MemmapDataset,
+                             canonical_train_val_split)
 from core.models     import build_model
 from core.utils      import (set_global_seed, define_save_locations,
                              IDX_TO_DOF_NAME)
@@ -337,9 +337,12 @@ def phase_2_pair(pair: list[int]) -> None:
 #  Results summary - the actual Stage-0 answer
 # =============================================================================
 def _val_loader(config: dict, cache_dir: str):
-    """Canonical (seed-42) validation loader + processed shape for one config."""
-    X, y, _ = get_or_create_cache(config, DATASET, cache_dir)
-    _, val_idx = train_test_split(np.arange(len(y)), test_size=0.20, random_state=42)
+    """Canonical (seed-42, state-grouped) validation loader + processed shape.
+    NOTE: the L100 pilot dataset predates Feature A (no state-family table) —
+    re-running this deprecated script on it will now fail loudly at the split,
+    which is correct: its data is invalid (pre-mass-fix) anyway."""
+    X, y, _, groups = get_or_create_cache(config, DATASET, cache_dir)
+    _, val_idx = canonical_train_val_split(len(y), groups, dataset_name=DATASET)
     loader = DataLoader(
         MemmapDataset(X, y, val_idx, label_dtype=task.label_dtype(config)),
         batch_size=64, shuffle=False,

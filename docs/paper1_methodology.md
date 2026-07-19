@@ -107,7 +107,20 @@ approach/exit for free vibration), cropped to a fixed spatial window and âš  
 ## 4.5 Signal preprocessing
 
 Each channel is standardised (zero mean, unit variance) using statistics fitted **only on
-the training partition** (fixed 80/20 split, seed 42) to prevent information leakage, then
+the training partition**. The partition is a fixed, deterministic **3-way split (60%
+train / 20% inner-validation / 20% outer-test), grouped by damage state** — a state's
+passages never straddle partitions, since on the EOV rungs each state carries a persistent
+crack/profile/track-defect realization the network could otherwise recognise; validation
+therefore measures generalisation to unseen states. Since Feature A (2026-07-19) the split
+is additionally **stratified by generator-assigned state family** (`target_healthy` ×12,
+per-pier `scour_only` and per-abutment `bearing_only` anchors at 4 severities × 2
+replicas, `nuisance_only` crack-carrying zero-label anchors, and the joint LHS block
+stratified by crack flag × severity tercile), so every family — and every single-damage
+anchor stratum — is guaranteed present in train, inner-validation AND outer-test; the
+realized assignment is persisted and verified as a fingerprinted `split_manifest.json`.
+Inner-validation drives HPO and all model selection; the outer test set is touched exactly
+once, for the frozen winner and pre-registered comparators. This prevents
+information leakage, then
 compressed by **Piecewise Aggregate Approximation (PAA)** to a fixed length of 512 segments:
 the sequence is partitioned into equal windows and each is replaced by its mean. PAA acts as
 a structural low-pass filter â€” it smooths the high-frequency, high-energy rail-corrugation
@@ -266,12 +279,19 @@ indefensible, and the direct cause of its sprung-channel collapse.
 
 **Rail profile.** FRA **class 4** — the roughest geometry permissible at 70–90 km/h; classes
 5–6 are premium track, unrealistically smooth for a scour-prone regional line. One PSD
-realisation (phases seeded) per state, plus 0.5 mm additive per-passage jitter.
+realisation (phases seeded) per state. *(2026-07-17 audit: the earlier 0.5 mm per-passage
+physical jitter is REMOVED — EN 13848-2's 0.5 mm is measuring-system repeatability, not
+physical track change, and white noise on a 1.524 m-band-limited profile injects purely
+fictitious short-wavelength excitation. Measurement noise lives in the load-time observation
+model instead. The PSD corner-frequency unit bug — rad/m corner on a cycles/m axis, ~16×
+excess short-λ power — was fixed the same day.)*
 
-**Crack.** Prevalence **0.25** — spans carrying a *macroscopic* EI loss in our Sinha 5–30%
+**Crack.** Prevalence **0.25** — spans carrying a *macroscopic* EI loss in our 5–30% EI-loss
 band are ~20–30% of an aged concrete/composite inventory (marginal non-structural cracks
 reach 70–80% but produce no modelled EI drop). Severity U(0.05, 0.30) EI loss. Location:
-**hogging-weighted** (§A.5).
+**hogging-weighted** (§A.5). Model = **damaged-element** (uniform-block) EI reduction on a
+~0.3 m element, cf. Fernandes et al. 2025 — *not* Sinha's tapered model (mis-citation
+corrected 2026-07-17).
 
 **Track layer (anchored 2026-07-15; full record in `docs/track_eov_sampling_spec.md`).** The
 key result is the resolution of a **prevalence paradox**: field data report *~50% of concrete

@@ -35,10 +35,10 @@ import numpy as np
 import seaborn as sns
 import torch
 from sklearn.metrics import confusion_matrix
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
-from core.dataset import MemmapDataset, get_or_create_cache
+from core.dataset import (MemmapDataset, get_or_create_cache,
+                          canonical_train_val_split)
 from core.models  import build_model
 from training.trainer import DEVICE
 
@@ -88,9 +88,12 @@ def plot_cached_confusion_matrix(
     print(f"\n--> Confusion matrix: {config['name']}")
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    X, y, _ = get_or_create_cache(config, dataset_name, cache_dir)
-    all_idx  = np.arange(len(y))
-    _, val_idx = train_test_split(all_idx, test_size=0.20, random_state=42)
+    # Canonical split (grouped by damage state when groups exist - audit fix
+    # 2026-07-17; family-stratified via dataset_name since Feature A 2026-07-19);
+    # must match the trainer's partition exactly.
+    X, y, _, groups = get_or_create_cache(config, dataset_name, cache_dir)
+    _, val_idx = canonical_train_val_split(len(y), groups,
+                                           dataset_name=dataset_name)
 
     val_loader = DataLoader(
         MemmapDataset(X, y, val_idx),

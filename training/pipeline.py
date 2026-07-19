@@ -33,6 +33,7 @@ import torch
 
 from core          import task
 from core.dataset  import get_or_create_cache, _cache_stem
+from core.protocol import OPTUNA_PROTOCOL
 from core.utils    import set_global_seed, DOF_NAME_TO_IDX
 from plotting.confusion        import plot_cached_confusion_matrix
 from plotting.robustness_plots import generate_optuna_robustness_plots, plot_stochastic_summary
@@ -132,20 +133,60 @@ def execute_ablation_pipeline(
             use_pruner=use_pruner,
         )
 
-        remaining = n_trials - len(study.trials)
-        if remaining > 0:
+        # Budget = terminal-USEFUL trials (COMPLETE + PRUNED). FAILed trials are
+        # RETRIED automatically (audit R7.1 P2): re-evaluate the budget AFTER each
+        # optimize() and keep going until the useful budget is met, so a burst of
+        # FAILs inside one run does not leave the study short until the whole script
+        # is re-run. A deterministically-broken config would retry forever, so cap
+        # total trials at n_trials + MAX_FAIL_SLACK; it then stops short of the
+        # useful budget and is flagged INCOMPLETE by _study_is_finished (never
+        # silently selected). The trainer raises TrialPruned for the pruner but lets
+        # deterministic bugs propagate as FAILs, which the cap bounds.
+        # PROTOCOL (2026-07-19): the slack value lives in OPTUNA_PROTOCOL so it
+        # is part of the unified protocol hash.
+        MAX_FAIL_SLACK = OPTUNA_PROTOCOL["max_fail_slack"]
+        objective = Objective(
+            config=step, dataset_name=dataset, n_epochs=epochs,
+            cache_dir=cache_dir_name, output_dir=output_dir,
+        )
+        # RECOVERABLE trial failures (transient GPU/CPU OOM) are CAUGHT -> marked
+        # FAILED -> the loop retries them to the useful budget. EVERY OTHER
+        # exception propagates and FAILS FAST (audit R7.1 P2): a deterministic bug
+        # must crash immediately, not be silently retried 20 times.
+        import optuna.exceptions as _oe                           # noqa: F401
+        _oom = tuple(e for e in (getattr(torch.cuda, "OutOfMemoryError", None),
+                                 getattr(torch, "OutOfMemoryError", None)) if e)
+        TS = optuna.trial.TrialState
+        while True:
+            states = [t.state for t in study.trials]
+            n_useful = sum(s in (TS.COMPLETE, TS.PRUNED) for s in states)
+            remaining = min(n_trials - n_useful,
+                            (n_trials + MAX_FAIL_SLACK) - len(study.trials))
+            if remaining <= 0:
+                break
             study.optimize(
-                Objective(
-                    config=step,
-                    dataset_name=dataset,
-                    n_epochs=epochs,
-                    cache_dir=cache_dir_name,
-                    output_dir=output_dir,
-                ),
+                objective,
                 n_trials=remaining,
+                catch=_oom,                    # retry only transient OOM
                 callbacks=[print_best_callback],
                 show_progress_bar=True,
             )
+
+        # ── FATAL GATE before ANY export / report (audit R7.1 P1/P2) ──────────
+        # The study must be FINISHED: useful budget met, >=1 COMPLETE, no in-flight
+        # trials. Otherwise refuse to compute best_value / export weights / run
+        # robustness on an incomplete study (which selection would reject anyway,
+        # but only AFTER the weights were exported).
+        states = [t.state for t in study.trials]
+        n_complete = sum(s == TS.COMPLETE for s in states)
+        n_useful   = sum(s in (TS.COMPLETE, TS.PRUNED) for s in states)
+        n_inflight = sum(s in (TS.RUNNING, TS.WAITING) for s in states)
+        if n_inflight or n_useful < n_trials or n_complete < 1:
+            raise RuntimeError(
+                f"{step['name']}: study NOT finished (COMPLETE={n_complete}, "
+                f"useful={n_useful}/{n_trials}, in-flight={n_inflight}) — refusing "
+                f"to export weights / report. Investigate the FAILs (or delete the "
+                f"study to re-run); an incomplete study must not be published.")
 
         print(f"  Best MSE: {study.best_value:.4f}  (trial {study.best_trial.number})")
 
@@ -253,6 +294,10 @@ def export_digital_twin_package(
         'task':            config.get('task', 'classification'),
         'target_supports': config.get('target_supports'),
         'bearing_targets': config.get('bearing_targets'),
+        # Unified protocol hash (2026-07-19): stamps the exported weights with
+        # the exact protocol that produced them (None for legacy callers that
+        # predate the hash, e.g. the single-scour classification scripts).
+        'protocol_hash':   config.get('protocol_hash'),
     }
     with open(os.path.join(output_dir, 'DT_metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=4)
@@ -321,26 +366,34 @@ def _create_or_resume_study(
     """
     _ensure_sqlite_parent_dir(storage)
 
-    n_startup = max(10, n_trials // 4)
+    # PROTOCOL (2026-07-19): every sampler/pruner value below is read from
+    # OPTUNA_PROTOCOL (core/protocol.py), which the unified protocol hash
+    # covers — the running configuration and the hashed configuration are the
+    # same object, so they cannot drift apart.
+    sp = OPTUNA_PROTOCOL["sampler"]
+    pp = OPTUNA_PROTOCOL["pruner"]
+    assert sp["class"] == "TPESampler" and pp["class"] == "SuccessiveHalvingPruner", \
+        "OPTUNA_PROTOCOL names a sampler/pruner class this code does not build"
+    n_startup = max(10, n_trials // 4)   # == OPTUNA_PROTOCOL sampler n_startup_rule
     sampler   = optuna.samplers.TPESampler(
         seed=sampler_seed,
         n_startup_trials=n_startup,
-        multivariate=True,
-        constant_liar=True,
+        multivariate=sp["multivariate"],
+        constant_liar=sp["constant_liar"],
         warn_independent_sampling=False,
     )
     pruner = (
         optuna.pruners.SuccessiveHalvingPruner(
-            min_resource=4,           # at least 4 epochs before any pruning
-            reduction_factor=3,       # keep top 1/3 at each rung
-            min_early_stopping_rate=0,
+            min_resource=pp["min_resource"],               # epochs before pruning
+            reduction_factor=pp["reduction_factor"],       # keep top 1/N per rung
+            min_early_stopping_rate=pp["min_early_stopping_rate"],
         )
         if use_pruner else None
     )
     return optuna.create_study(
         study_name=study_name,
         storage=storage,
-        direction='minimize',
+        direction=OPTUNA_PROTOCOL["direction"],
         load_if_exists=True,
         sampler=sampler,
         pruner=pruner,
