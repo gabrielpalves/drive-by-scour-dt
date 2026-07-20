@@ -44,7 +44,10 @@ EXTRA_FILES = ["scour_MATLAB/smoke_raw_parity.m", "check_raw_parity.py",
                # Feature A MATLAB<->Python family-table contract smoke (run the
                # .m in MATLAB first, then the Python side).
                "scour_MATLAB/smoke_familytable.m",
-               "check_familytable_roundtrip.py"]
+               "check_familytable_roundtrip.py",
+               # Micro end-to-end smoke builder (generation+parity+resume+dry-run
+               # at toy scale, ~30 min — run BEFORE committing to a multi-day gen).
+               "make_micro_smoke.py"]
 
 def set_a00_stage(t, stage):
     t2, n = re.subn(r"^STAGE = '[^']*';", f"STAGE = '{stage}';", t, count=1, flags=re.M)
