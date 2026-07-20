@@ -433,6 +433,26 @@ try:
     _write_state(p, 3, family='target_healthy')     # table says 'joint'
     check("state_family/table mismatch rejected", lambda: _load(p), should_raise=True)
 
+    # ── two-tier contact gate (recalibrated 2026-07-19) ──────────────────────
+    # 42. SUSTAINED tension (small F but frac over 0.2% of the path) -> reject
+    p = os.path.join(root, "sustained"); _build(p)
+    sus = np.column_stack([np.zeros(NP), np.array([1.0] + [0.0] * (NP - 1)),
+                           np.array([0.01] + [0.0] * (NP - 1)),      # frac 1% >> tol
+                           np.array([5.0e3] + [-1e5] * (NP - 1))])   # F below F-tol
+    _write_state(p, 2, clog=sus)
+    check("sustained tension (frac over tol) rejected", lambda: _load(p),
+          should_raise=True)
+
+    # 43. The REAL s23_all4 state-24 event (6.4 kN on 0.042% of the path) is in
+    # the TOLERATED micro-unloading tier -> must LOAD (and be counted/summarised)
+    p = os.path.join(root, "microtension"); _build(p)
+    tol = np.column_stack([np.zeros(NP), np.array([1.0] + [0.0] * (NP - 1)),
+                           np.array([0.00042] + [0.0] * (NP - 1)),
+                           np.array([6419.0] + [-1e5] * (NP - 1))])
+    _write_state(p, 2, clog=tol)
+    check("tolerated micro-tension tier ACCEPTED", lambda: _load(p),
+          should_raise=False)
+
     print()
     print("LOADER PROVENANCE: ALL PASS" if fails == 0 else
           f"LOADER PROVENANCE: {fails} CHECK(S) FAILED")

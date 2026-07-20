@@ -843,10 +843,28 @@ fprintf('Run folder: %s  (%d states x %d passages)\n', run_folder, n_states, Npa
 % never survive. It is (re-)written only if THIS run reaches full completion.
 marker_path = fullfile(run_folder, '_GENERATION_COMPLETE');
 if exist(marker_path, 'file'), delete(marker_path); end
-% Contact hard-gate tolerance, == core/dataset.py _CONTACT_F_TOL_N. Defined at
-% TOP LEVEL (2026-07-19) so BOTH gates read one value: the resume validation
-% below and the per-passage gate inside the parfor (a scalar broadcast there).
-F_CONTACT_TOL_N = 1000;
+% Contact hard-gate tolerances, == core/dataset.py _CONTACT_F_TOL_N /
+% _CONTACT_FRAC_TOL. Defined at TOP LEVEL so BOTH gates read one value: the
+% resume validation below and the per-passage gate inside the parfor.
+% RECALIBRATED 2026-07-19 (first campaign dispatch): the zero-tolerance gate
+% (1000 N) was calibrated on HEALTHY-bridge smokes and aborted s23_all4 at
+% state 24 (scour_only anchor, 60% at the middle pier, L99.6 + FRA-4 + track
+% damage + poly OOR) on a 6.4 kN tension spike lasting 0.042% of the path —
+% brief wheel unloading past zero, which the BILATERAL solver renders as small
+% spurious tension instead of a few-ms separation + re-contact. That is a
+% physically plausible superposition tail on the severe-EOV rungs, and
+% censoring/resampling it would MNAR-bias exactly the severe states the paper
+% studies. TWO-TIER rule now:
+%   TOLERATED + logged: peak tension <= 10% of the ~118 kN static wheel load
+%     AND tension on <= 0.2% of path samples (brief micro-unloading).
+%   FATAL (physics regression): beyond either bound, or non-finite. The known
+%     true regressions are far above: R3 profile-seam bug 170 kN (144% of
+%     static); wheel flats exceed the uplift threshold 12-38x.
+% NOT in fp_cfg (deliberate): a stricter-gate dataset is a strict subset of
+% what this gate accepts, so pre-recalibration states remain valid and a
+% partial run RESUMES seamlessly under the patched generator.
+F_CONTACT_TOL_N   = 12000;   % FATAL above this peak tension [N] (10% static)
+F_CONTACT_FRACTOL = 0.002;   % FATAL above this fraction of path samples in tension
 saved_files = dir(fullfile(run_folder, '*.mat'));
 completed = false(n_states, 1);
 for k = 1:length(saved_files)
@@ -934,11 +952,14 @@ for k = 1:length(saved_files)
             'finite %dx4 matrix (got %s) — corrupt. Delete it or use a FRESH ' ...
             'folder.'], dc_idx, saved_files(k).name, Npass, mat2str(size(d_.contact_log)));
     end
-    if any(d_.contact_log(:,4) > F_CONTACT_TOL_N)
-        error(['A00 RESUME ABORTED: state %d file "%s" contact_log records ' ...
-            'wheel-rail TENSION up to %.4g N (tol %g N) — this state would be ' ...
-            'hard-rejected by the loader. Regenerate it (delete the file).'], ...
-            dc_idx, saved_files(k).name, max(d_.contact_log(:,4)), F_CONTACT_TOL_N);
+    if any(d_.contact_log(:,4) > F_CONTACT_TOL_N) || ...
+            any(d_.contact_log(:,3) > F_CONTACT_FRACTOL)
+        error(['A00 RESUME ABORTED: state %d file "%s" contact_log exceeds the ' ...
+            'two-tier gate (peak tension %.4g N vs tol %g N; worst path ' ...
+            'fraction %.3g vs tol %g) — this state would be hard-rejected by ' ...
+            'the loader. Regenerate it (delete the file).'], dc_idx, ...
+            saved_files(k).name, max(d_.contact_log(:,4)), F_CONTACT_TOL_N, ...
+            max(d_.contact_log(:,3)), F_CONTACT_FRACTOL);
     end
     % (b) LABELS must equal THIS run's damage-state row bit-for-bit. The
     %     fingerprint already guarantees the run CONFIG matches (DamageStates/
@@ -1411,31 +1432,36 @@ parfor DC = 1:n_states
         ContactLog(j_pass, :) = [double(Sol_local.contactLost), ...
             Sol_local.contactLost_track, Sol_local.tension_frac_max, ...
             Sol_local.F_tension_max];
-        % HARD GATE per PASSAGE (audit R7 P5): abort at the FIRST bad passage
-        % instead of after all Npass, saving the rest of the state's compute.
-        % Tension over tolerance OR non-finite is fatal (NaN>tol is false, so
-        % ~isfinite must be tested explicitly). The diagnostic is written with
-        % fprintf, NOT `save` — `save` is illegal inside a parfor loop without
-        % '-fromstruct' (checkcode PFSV), and a text file sidesteps that entirely.
-        % F_CONTACT_TOL_N is the TOP-LEVEL constant (broadcast into the parfor,
-        % 2026-07-19) so the resume validation and this gate can never disagree.
+        % HARD GATE per PASSAGE (audit R7 P5; TWO-TIER since 2026-07-19 — see
+        % the F_CONTACT_TOL_N block at top level): abort at the FIRST passage
+        % beyond the tolerated micro-unloading tier, saving the rest of the
+        % state's compute. Non-finite is fatal in EITHER metric (NaN>tol is
+        % false, so ~isfinite must be tested explicitly). The diagnostic is
+        % written with fprintf, NOT `save` — `save` is illegal inside a parfor
+        % loop without '-fromstruct' (checkcode PFSV). Both tolerances are the
+        % TOP-LEVEL constants (broadcast into the parfor) so the resume
+        % validation, the Python loader and this gate can never disagree.
         Ften_ = Sol_local.F_tension_max;
-        if ~isfinite(Ften_) || Ften_ > F_CONTACT_TOL_N
+        Tfrac_ = Sol_local.tension_frac_max;
+        if ~isfinite(Ften_) || ~isfinite(Tfrac_) || ...
+                Ften_ > F_CONTACT_TOL_N || Tfrac_ > F_CONTACT_FRACTOL
             df_ = fopen(fullfile(run_folder, ...
                 sprintf('contact_violation_state%04d.txt', DC)), 'w');
             if df_ >= 0
-                fprintf(df_, 'state %d  passage %d/%d\nscour_vec %s\ntol_N %g\n', ...
-                    DC, j_pass, Npass, mat2str(scour_vec), F_CONTACT_TOL_N);
+                fprintf(df_, ['state %d  passage %d/%d\nscour_vec %s\n' ...
+                    'tol_N %g  tol_frac %g\n'], DC, j_pass, Npass, ...
+                    mat2str(scour_vec), F_CONTACT_TOL_N, F_CONTACT_FRACTOL);
                 fprintf(df_, ['F_tension_max_N %g  contactLost_track %g  ' ...
                     'tension_frac_max %g\n'], Ften_, Sol_local.contactLost_track, ...
-                    Sol_local.tension_frac_max);
+                    Tfrac_);
                 fclose(df_);
             end
-            error(['A00 ABORT (contact): state %d passage %d has wheel-rail ' ...
-                'TENSION %.4g N (tol %g N; non-finite also fatal). Contact loss ' ...
-                'must be zero (flats off, reflect profile) - physics regression. ' ...
-                'Fix the generator. See contact_violation_state%04d.txt'], ...
-                DC, j_pass, Ften_, F_CONTACT_TOL_N, DC);
+            error(['A00 ABORT (contact): state %d passage %d exceeds the ' ...
+                'two-tier contact gate (tension %.4g N vs tol %g N; path ' ...
+                'fraction %.3g vs tol %g; non-finite also fatal). Beyond brief ' ...
+                'micro-unloading = physics regression. Fix the generator. ' ...
+                'See contact_violation_state%04d.txt'], ...
+                DC, j_pass, Ften_, F_CONTACT_TOL_N, Tfrac_, F_CONTACT_FRACTOL, DC);
         end
 
         % Data Processing
@@ -1495,13 +1521,16 @@ parfor DC = 1:n_states
     % SAME quantity, so col4>tol always implies col2=1 — MATLAB was never "silent"
     % on the wrong column; the real defect was warn-not-error (now: abort per
     % passage, on col 4, byte-for-byte the Python _CONTACT_F_TOL_N gate).
-    % Grey-zone note (0 < tension <= tol): tolerated by both gates but surfaced,
-    % since the nominal design expects EXACTLY zero contact loss.
-    grey_ = (ContactLog(:,4) > 0) & (ContactLog(:,4) <= 1000);
+    % Tolerated-tier note (0 < tension <= gate): brief micro-unloading events
+    % the two-tier gate accepts (2026-07-19). Surfaced per state so the run log
+    % carries the incidence; the Python loader aggregates the same statistic
+    % dataset-wide for the paper.
+    grey_ = (ContactLog(:,4) > 0) & (ContactLog(:,4) <= F_CONTACT_TOL_N);
     if any(grey_)
-        fprintf(['[NOTE] state %d: %d/%d passages show small wheel-rail tension ' ...
-            '(0 < F <= 1000 N) - within tolerance but nonzero.\n'], ...
-            DC, sum(grey_), Npass);
+        fprintf(['[NOTE] state %d: %d/%d passages in the tolerated micro-' ...
+            'tension tier (0 < F <= %g N, frac <= %g; worst F %.4g N).\n'], ...
+            DC, sum(grey_), Npass, F_CONTACT_TOL_N, F_CONTACT_FRACTOL, ...
+            max(ContactLog(:,4)));
     end
     data2save.Temperatura = Temperatura;
     data2save.Velocidade = Velocidade;

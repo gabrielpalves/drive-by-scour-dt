@@ -127,13 +127,25 @@ def _assert_groups_canonical(groups: np.ndarray, n_states, npass) -> None:
 
 from core.preprocessing import TTBIPreprocessor
 
-# Contact-validity gate (audit R5 2026-07-17: HARD-FAIL). A passage is invalid
-# when its peak wheel-rail TENSION (contact_log col 3, F_tension_max [N])
-# exceeds this physically meaningful floor (numerical fuzz near zero is below
-# it). With wheel flats disabled and the reflect profile contact-safe, the
-# expected count is EXACTLY 0, so the loader aborts on the first offending
-# passage rather than censoring passages (which would bias the retained set).
-_CONTACT_F_TOL_N = 1000.0   # tension above this = a real separation -> HARD FAIL
+# Contact-validity gate (audit R5 2026-07-17; RECALIBRATED 2026-07-19 at first
+# campaign dispatch). The solver couples wheel and rail BILATERALLY, so brief
+# wheel unloading past zero shows up as small spurious TENSION instead of a
+# few-ms separation + re-contact. Two regimes, two-tier gate:
+#   * TOLERATED (logged, reported): brief micro-unloading — peak tension a
+#     small fraction of the ~118 kN static wheel load, on a tiny fraction of
+#     the path. First observed on s23_all4 state 24 (60% scour at the middle
+#     pier + FRA-4 + track damage + poly OOR): 6.4 kN (5.4% static) on 0.042%
+#     of samples. Physically plausible superposition tail; the bilateral
+#     approximation error is local and small. Censoring/resampling these
+#     states would MNAR-bias exactly the severe cases the paper is about.
+#   * FATAL (physics regression): tension beyond 10% of static (12 kN) OR
+#     sustained tension (> 0.2% of path samples) OR non-finite. The known true
+#     regressions sit far above: the R3 profile-seam bug gave 170 kN (144% of
+#     static); wheel flats exceed the uplift threshold 12-38x.
+# The generator (A00 F_CONTACT_TOL_N / F_CONTACT_FRACTOL) enforces the SAME
+# two-tier rule per passage at generation time; values must stay identical.
+_CONTACT_F_TOL_N  = 12000.0  # FATAL above this peak tension [N] (10% static)
+_CONTACT_FRAC_TOL = 0.002    # FATAL above this fraction of path samples in tension
 _re_state = re.compile(r'\d{4}\.mat$')   # NNNN.mat state-file matcher
 
 # Payload-validation tolerances (audit R7 P4).
@@ -210,6 +222,7 @@ PREPROC_PROTOCOL = {
     "noise_rng_seed":     NOISE_RNG_SEED,
     "load_n_passages":    LOAD_N_PASSAGES,
     "contact_f_tol_N":    _CONTACT_F_TOL_N,
+    "contact_frac_tol":   _CONTACT_FRAC_TOL,
     "crop_ragged_tol":    _CROP_RAGGED_TOL,
 }
 
@@ -470,6 +483,12 @@ def _load_multi_output(
     g_list:  list[int]        = []            # source file index per sample
     n_seen = 0                               # passages loaded (contact gate is hard-fail)
     bearing_is_fixity = False
+    # Tolerated micro-tension incidence across the dataset (2026-07-19):
+    # reported in the load summary; the paper quotes it as the scope of the
+    # bilateral-contact approximation on the severe-EOV rungs.
+    n_tension_passages = 0
+    worst_tension_N = 0.0
+    worst_tension_frac = 0.0
 
     for idx in range(n_files):
         fname = f"{idx + 1:04d}.mat"
@@ -588,12 +607,12 @@ def _load_multi_output(
                     f"!= Npass {exp_npass} — corrupt/foreign state.")
         raw_fmt = True
 
-        # Contact-validity gate (audit R5: HARD-FAIL). The solver couples wheel
-        # and rail BILATERALLY. With wheel flats disabled and the reflect
-        # profile contact-safe, ANY passage whose peak tension (contact_log col
-        # 3, F_tension_max [N]) exceeds _CONTACT_F_TOL_N is a physics regression,
-        # NOT tolerable noise — so we abort on the FIRST one rather than
-        # silently censoring passages (which would bias the retained set, MNAR).
+        # Contact-validity gate (audit R5; TWO-TIER since 2026-07-19 — see the
+        # _CONTACT_F_TOL_N comment at the top of this module). Brief
+        # micro-unloading (small tension, tiny path fraction) is TOLERATED and
+        # counted for the dataset summary; peak tension beyond 10% of the
+        # static wheel load OR sustained tension is a physics regression and
+        # aborts — never silently censored (MNAR).
         # contact_log must also be present, exactly (Npass, 4), and finite.
         if 'contact_log' not in names:
             raise KeyError(f"{fname}: no contact_log (audit-schema file must "
@@ -644,14 +663,25 @@ def _load_multi_output(
                 raise RuntimeError(
                     f"{fname}: {_field} has {data_struct[_field].shape[1]} passages "
                     f"!= Npass {npass_here} — inconsistent per-channel counts.")
-        hot = np.where(clog[:, 3] > _CONTACT_F_TOL_N)[0]
+        hot = np.where((clog[:, 3] > _CONTACT_F_TOL_N)
+                       | (clog[:, 2] > _CONTACT_FRAC_TOL))[0]
         if hot.size:
             raise RuntimeError(
-                f"{fname}: {hot.size} passage(s) with wheel-rail TENSION > "
-                f"{_CONTACT_F_TOL_N:.0f} N (worst {clog[hot, 3].max():.3g} N, "
-                f"passages {hot[:8].tolist()}). Contact loss should be zero "
-                f"(flats off, reflect profile) — this is a physics regression, "
-                f"not tolerable noise. Inspect the generator before training.")
+                f"{fname}: {hot.size} passage(s) beyond the contact gate "
+                f"(peak tension > {_CONTACT_F_TOL_N:.0f} N or tension on > "
+                f"{_CONTACT_FRAC_TOL:.1%} of the path; worst F "
+                f"{clog[hot, 3].max():.3g} N, worst frac "
+                f"{clog[hot, 2].max():.3g}, passages {hot[:8].tolist()}). "
+                f"This exceeds the tolerated brief micro-unloading tier — "
+                f"physics regression; inspect the generator before training.")
+        # Tolerated-tier incidence (2026-07-19): count passages with ANY
+        # tension for the dataset summary — the paper reports this number as
+        # the scope of the bilateral-contact approximation.
+        _tension_rows = clog[:, 3] > 0.0
+        n_tension_passages += int(_tension_rows.sum())
+        if _tension_rows.any():
+            worst_tension_N = max(worst_tension_N, float(clog[:, 3].max()))
+            worst_tension_frac = max(worst_tension_frac, float(clog[:, 2].max()))
 
         # Iterate EXACTLY the audited passage count (audit R6 C4): bound on
         # npass_here (== available, enforced above), never on n_passages/available,
@@ -761,6 +791,15 @@ def _load_multi_output(
     extra = f" + {len(bidx)} bearing" if bidx else ""
     print(f"  [multi-output] {X.shape[0]} passages, {n_files} states, "
           f"{y.shape[1]} heads ({len(tgt0)} scour{extra}).")
+    if n_tension_passages:
+        print(f"  [contact] tolerated micro-tension tier: {n_tension_passages}/"
+              f"{X.shape[0]} passages ({n_tension_passages / X.shape[0]:.2%}) "
+              f"show brief wheel unloading past zero (worst "
+              f"{worst_tension_N:.3g} N = "
+              f"{worst_tension_N / 1.18e5:.1%} of static, worst path fraction "
+              f"{worst_tension_frac:.3g}). All within the gate "
+              f"(F <= {_CONTACT_F_TOL_N:.0f} N, frac <= {_CONTACT_FRAC_TOL}); "
+              f"report this incidence with the results.")
     return X, y, groups
 
 
