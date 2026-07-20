@@ -307,8 +307,8 @@ accommodated by rail/fastener elasticity; **1.0–2.5 mm** is the *dynamic-impac
 |---|---|---|
 | unsupported-sleeper groups | **Poisson λ = 3.0 /100 m** | INFERENCE: 5–10% impactful ÷ ~3 sleepers per group |
 | group size | DU(1, 5) consecutive | cited (1–4 m of contiguous settlement at 0.6 m spacing) |
-| ballast fouled patches | **Poisson λ = 1.2 /100 m** | INFERENCE: GPR ⇒ FI>30 on **10–20%** of route length; 15% ÷ 12.5 m mean patch |
-| patch length | U(5, 20) m | cited |
+| ballast fouled patches | **Poisson λ = 1.2 /100 m** | INFERENCE (re-anchored 2026-07-19): no citable network-wide % exists; envelope = ~9.4% (Norway defect-rate proxy, Husøy et al. 2024) → 66% at FI≥20 / **12% highly fouled FI≥40** (regional GPR, Sadeghi et al. 2018). Our 15% ÷ 12.5 m sits inside it; patches = ballast at the FI≈30 drainage-loss limit (Zetica/FRA "highly fouled"; Selig's own boundary is 40). Sensitivity sweep λ∈{0.6, 1.2, 2.4} spans 7.5–30% of length |
+| patch length | U(5, 20) m | CITED: FRA empirical fouled-section lengths 1.5–33.5 m (DOT/FRA/ORD-22/01); GPR 2.4 m minimum feature (Guo et al. 2023) |
 | failed pads | **p = 0.02 /pad** (≈3–4 per 100 m) | INFERENCE: 0.5%/yr **incidence** × 3–5 yr renewal ⇒ 1.5–3.0% standing prevalence |
 | fouling ↔ voiding | **coupled: ×3** hanging density inside a fouled patch | cited mechanism (mud pumping → loss of support; bidirectional) |
 | ballast near abutment | **×3** within 20 m | cited: corrective work 4–8× more frequent; settlement rate 3–4× |

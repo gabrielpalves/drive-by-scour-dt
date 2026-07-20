@@ -299,18 +299,34 @@ track_L_after     = 30;          % window margin AFTER the deck [m] (local frame
 % => IMPACTFULLY unsupported = 5-10% of sleepers (mid 7.5%).
 % Derived counts PER 100 m: 0.075*167 = 12.5 sleepers / ~3 per group = 4.2
 % groups; post-tamping (3-5%) = 1.6-2.7 => the report recommends POISSON with
-% lambda ~ 2.0-3.0 for the intermediate degradation cycle. Ballast: GPR surveys
-% put FI>30 ("highly fouled") at 10-20% of route length; 15% / 12.5 m mean patch
-% = 1.2 patches per 100 m.
+% lambda ~ 2.0-3.0 for the intermediate degradation cycle.
+% Ballast rate RE-ANCHORED 2026-07-19 (NotebookLM verification pass; full
+% record in docs/research_brief_gpr_fouling.md): the old "FI>30 on 10-20% of
+% route" was Slideshare-only and does NOT exist as a citable network constant.
+% Citable envelope instead: Norway national defect-rate proxy ~9.4%
+% (Husoy et al. 2024, Civil-Comp, DOI 10.4203/ccc.7.24.3); the only continuous
+% regional-line GPR survey shows 66% at Selig FI>=20 and 12% HIGHLY fouled
+% FI>=40 (Sadeghi et al. 2018, J. Appl. Geophys., DOI
+% 10.1016/j.jappgeo.2018.02.020); US heavy-haul "majority fouled" (FRA 2017
+% slide deck, flagged non-peer-reviewed). Our 15% of length / 12.5 m mean
+% patch = 1.2 patches per 100 m sits INSIDE that envelope, close to the 12%
+% highly-fouled fraction of the regional survey. Threshold semantics: patches
+% represent ballast at/beyond the FI~30 functional DRAINAGE-LOSS limit =
+% "highly fouled" in the Zetica/FRA GPR schema (FRA DOT/FRA/ORD-22/01 Table 5);
+% Selig's own "highly fouled" boundary is FI>=40 (fouled = 20-40). Value KEPT
+% at 1.2 (protocol unchanged); the sensitivity sweep lambda in {0.6, 1.2, 2.4}
+% (= 7.5-30% of length) spans the citable envelope's plausible regional band.
 % RATES are per 100 m and are SCALED BY THE MODELLED WINDOW below (our track is
 % 120 m at L60 / 159.6 m at L99.6 - drawing a fixed count regardless of length
 % was itself an error).
 % ⚠ Report-internal inconsistency, resolved in our favour of its own derivation:
 % its summary table claims P(no hanging group)~0.25 while its text recommends
 % lambda 2-3 (which gives P(0)=0.05-0.14). We follow the DERIVATION (lambda=2.5).
-% ⚠ VERIFY: the pivotal "FI>30 on 10-20% of length" cites a Slideshare deck -
-% re-check against the peer-reviewed GPR sources in the same report before the
-% paper (Tandfonline 2022 / MDPI Sensors GPR condition-index papers).
+% ✅ VERIFIED 2026-07-19: the "FI>30 on 10-20%" Slideshare anchor was replaced
+% by the citable envelope above (see docs/research_brief_gpr_fouling.md).
+% Patch length U(5,20) m also now CITED: FRA empirical fouled-section lengths
+% 1.5-33.5 m (DOT/FRA/ORD-22/01) + 2.4 m GPR minimum feature (Guo et al. 2023,
+% Int. J. Rail Transp., DOI 10.1080/23248378.2022.2064346).
 % lambda = 3.0 RECONCILES the report's two self-inconsistent statements: it
 % recommends Poisson lambda 2.0-3.0 ("intermediate degradation cycle"), but its
 % own table demands 5-10% of sleepers impactfully unsupported. lambda*3 sleepers

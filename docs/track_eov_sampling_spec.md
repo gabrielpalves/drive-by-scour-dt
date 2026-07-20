@@ -29,11 +29,36 @@
 > claims P(no hanging group) ≈ 0.25, which contradicts its own λ (0.05–0.14) — we followed the
 > derivation, not the table.
 >
-> ⚠ **VERIFY BEFORE THE PAPER**: the pivotal "FI>30 on 10–20% of route length" cites a
-> **Slideshare deck** — re-check against the peer-reviewed GPR sources in the same report
-> (Tandfonline 2022 GPR fouling; MDPI *Sensors* GPR condition-index). Everything in the
-> report's own spec table is flagged INFERENCE (derived), though each derivation rests on a
-> cited anchor — an honest improvement over pure assumption, but say so in the paper.
+> ✅ **VERIFIED 2026-07-19** (NotebookLM pass over the deep-research corpus; full Q&A +
+> decision record in `docs/research_brief_gpr_fouling.md`). Outcome: the "FI>30 on 10–20%
+> of route length" **does not exist as a citable network constant** — the Slideshare anchor
+> is retired. Replacement anchoring (λ = 1.2 KEPT, no protocol change):
+> * **Citable extent envelope**: Norway national defect-rate proxy **~9.4%** (3,400 defects
+>   / 36,100 inspections 2014–2024; Husøy, Lau, Løhren & Hoff 2024, Civil-Comp, DOI
+>   10.4203/ccc.7.24.3 — a defect *rate*, order-of-magnitude proxy only, not % length) →
+>   the only continuous regional-line GPR survey: **66% fouled-or-worse at Selig FI≥20,
+>   12% highly fouled FI≥40** over 17 km (Sadeghi et al. 2018, *J. Applied Geophysics* 151,
+>   DOI 10.1016/j.jappgeo.2018.02.020) → US heavy-haul "majority fouled" (FRA 2017 RIVIT
+>   deck — non-peer-reviewed, cite only as corroboration). Our **15% of length** sits inside
+>   this envelope, close to the regional survey's 12% highly-fouled fraction.
+> * **Threshold semantics corrected**: Selig's own classes are fouled 20≤FI<40, highly
+>   fouled ≥40; "FI>30 = highly fouled" is the **Zetica/FRA GPR (BFI) schema** (FRA
+>   DOT/FRA/ORD-22/01, Table 5) and FI≈30 is the **functional drainage-loss / end-of-life
+>   limit** (Chrismer & Hyslip 2018, AREMA — industry paper). Paper wording: our patches
+>   represent ballast *at or beyond the FI≈30 drainage-loss limit* — between Selig "fouled"
+>   and "highly fouled".
+> * **Patch length U(5,20) m now CITED**: FRA empirical fouled-section lengths 1.5–33.5 m
+>   (DOT/FRA/ORD-22/01 §5.1.2); 2.4 m GPR minimum feature (Guo et al. 2023, *Int. J. Rail
+>   Transportation*, DOI 10.1080/23248378.2022.2064346).
+> * **Secondary-line vulnerability now citable**: ballast design life 25 yr (main) vs up to
+>   50 yr (secondary rural) — Musgrave 2024 (Network Rail perspective, DOI
+>   10.17265/2328-2142/2024.05.004).
+> * **Honesty mechanism**: λ ∈ {0.6, 1.2, 2.4} sensitivity sweep (= 7.5–30% of length)
+>   spans the plausible regional band of the envelope; report λ=1.2 as a
+>   conservative-representative choice, not a measured constant.
+> Everything in the report's own spec table remains flagged INFERENCE (derived), though
+> each derivation rests on a cited anchor — an honest improvement over pure assumption,
+> but say so in the paper.
 >
 > **Crack (secondary question) — prevalence CONFIRMED, location CORRECTED.** P(crack)=0.25
 > validated (spans with a macroscopic EI loss in the Sinha 5–30% band ≈ **20–30%** of an aged
