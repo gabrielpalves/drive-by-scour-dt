@@ -10,9 +10,10 @@ STAGE='stage0_multiscour' (damage_mode='multi_scour').
 TURNKEY: run once, no manual editing. The script
     1. Phase 1 - single-DOF sweep (8 sensors) x the active architectures
        x SEEDS independent Optuna runs.
-    2. Auto-selects the two best single sensors (lowest CHAMPION_ARCH agg MSE,
-       MEDIAN across seeds).
-    3. Phase 2 - the best pair (+ any EXTRA_PAIRS) x the active architectures.
+    2. Auto-selects the two best single sensors (lowest CHAMPION_ARCH
+       objective = SCOUR-primary MSE since audit r3, MEDIAN across seeds).
+    3. Phase 2 - the best pair (+ any EXTRA_PAIRS) x the active architectures,
+       plus the CONTROL_SETS sensor-budget controls (full 8-DOF, non-selectable).
     4. Writes a results summary (leaderboard CSV with one row per seed +
        a seed-aggregated median/IQR leaderboard + per-head MSE + localisation
        accuracy + a predicted-vs-true parity plot).
@@ -26,7 +27,9 @@ Reduced grid (see paper-strategy): SEEDS independent Optuna seeds per config
 (default 3 - architecture-consistency across seeds, reported as median + IQR;
 the train/val split stays FIXED at random_state=42 in trainer.py, so seed
 variance = init/HPO variance only). Still no 30-seed per-trial Monte-Carlo
-(run_robustness=False), NO leave-one-out, NO full-8DOF.
+(run_robustness=False), NO leave-one-out. The full 8-DOF array DOES run —
+as a non-selectable sensor-budget CONTROL (CONTROL_SETS, audit r3
+2026-07-22), so the 2-vs-8 economy claim is measured at every rung.
 
 Architectures (cost-aware):
     1. PAA + N-HiTS               - the single-scour champion backbone.
@@ -149,6 +152,13 @@ PAIR_DOFS = None
 # must sit LOW in the suspension chain. Keep the mixed pair in every stage
 # for chain-wide comparability.
 EXTRA_PAIRS: list[list[int]] = [[1, 3]]   # FrontBogie_Vert + Wheel1_Vert
+
+# Sensor-BUDGET control (audit r3 2026-07-22): the full 8-DOF array runs at
+# every rung as a NON-SELECTABLE comparator — summarize() only ever selects
+# among n_sensors == 2 rows, and the champion-publish gate refuses non-pairs —
+# so the paper's sensor-economy claim ("what does the 2-sensor budget cost vs
+# the full array?") is MEASURED per rung instead of imported from Part I.
+CONTROL_SETS: list[list[int]] = [ALL_DOFS]
 
 # ── Pair search vs FROZEN pair across the ladder (audit R6 C8B/C9) ───────────
 # WHICH rungs run the full C(8,2)=28-pair exhaustive search (to find the best
@@ -305,6 +315,15 @@ ALL_ARCHITECTURES = [
     {"name_short": "PAA_LSTM_NHiTS", "method": "PAA",
      "use_space2vec": False, "use_lstm": True, "use_nhits": True,
      "model_type": "1D_MODULAR"},
+    # POOLING-ABLATION CONTROL (audit r3 2026-07-22): identical CNN with
+    # use_nhits=False -> plain global-average-pool head (models.py native
+    # path). Every prior arm (Part I included) carried the multi-rate module,
+    # so "multi-rate pooling matches the two-timescale physics" had never
+    # been tested against a no-pooling control. Also the honest-naming arm:
+    # the module is MultiRatePooling1D (N-HiTS-inspired), not full N-HiTS.
+    {"name_short": "PAA_CNN", "method": "PAA",
+     "use_space2vec": False, "use_lstm": False, "use_nhits": False,
+     "model_type": "1D_MODULAR"},
 ]
 
 # Architecture policy (audit 2026-07-17 — replaces the old hardcoded champion).
@@ -360,6 +379,7 @@ PROTOCOL_CORE_DESC, PROTOCOL_FULL_DESC = build_protocol_descriptors(
     sensor_noise         = SENSOR_NOISE,
     architectures        = ALL_ARCHITECTURES,
     extra_pairs          = EXTRA_PAIRS,
+    control_sets         = CONTROL_SETS,
     pair_search_stages   = PAIR_SEARCH_STAGES,
     arch_selection_stages = ARCH_SELECTION_STAGES,
     deployment_selection_stages = DEPLOYMENT_SELECTION_STAGES,   # Feature B
@@ -376,7 +396,11 @@ PROTOCOL_HASH_SHORT = short_hash(PROTOCOL_HASH)
 # Where the leaderboard + parity/leakage plots are written. Stage- AND
 # protocol-tagged: a protocol change writes a NEW summary dir, never over an
 # old one (the old dir remains as the auditable record of the old protocol).
-SUMMARY_DIR = os.path.join("results", f"{STAGE}_summary_ph-{PROTOCOL_HASH_SHORT}")
+# RUN_TAG joins the summary dir too (audit r3 2026-07-22): tagged re-runs used
+# to share the untagged run's summary folder and could overwrite its outputs.
+SUMMARY_DIR = os.path.join(
+    "results", f"{STAGE}_summary_ph-{PROTOCOL_HASH_SHORT}"
+               + (f"_{RUN_TAG}" if RUN_TAG else ""))
 
 
 def _write_protocol_record() -> None:
@@ -1021,6 +1045,9 @@ def summarize() -> list[int] | None:
     for xp in EXTRA_PAIRS:                   # physics-motivated cross-check,
         comparators.add((RANK_ARCH or win["architecture"],   # on the carried arm
                          tuple(sorted(int(d) for d in xp))))
+    for cs in CONTROL_SETS:                  # sensor-budget control (full array,
+        comparators.add((RANK_ARCH or win["architecture"],   # audit r3): report
+                         tuple(sorted(int(d) for d in cs)))) # its test row too
 
     def _ckey_str(c):                        # ('ARCH', (d0, d1)) -> readable
         return f"{c[0]} on " + "+".join(IDX_TO_DOF_NAME[d] for d in c[1])
@@ -1033,7 +1060,7 @@ def summarize() -> list[int] | None:
         {"stage": STAGE, "architecture": win["architecture"], "dofs": win["dofs"],
          "selected_pair": selected_pair,
          "inner_val_mse": win.get("inner_val_mse"),
-         "selection_metric": "median_inner_val_mse",
+         "selection_metric": "median_inner_val_mse (scour-primary objective)",
          "deployment_selection": STAGE in DEPLOYMENT_SELECTION_STAGES,
          # Unified protocol hash (2026-07-19): binds this frozen selection to
          # the exact protocol (and dataset fingerprint) it was made under.
@@ -1472,6 +1499,8 @@ if __name__ == "__main__":
               f"{len(SEEDS)} seeds (best combo chosen on INNER-VAL)")
         for pr in all_pairs:
             phase_2_pair(pr)
+        for cs in CONTROL_SETS:      # sensor-budget control (non-selectable)
+            phase_2_pair(sorted(int(d) for d in cs))
     else:
         # Frozen pair carried across the ladder for one-factor-at-a-time (C8B): the
         # only thing that changes vs the previous rung is this rung's nuisance.
@@ -1484,6 +1513,8 @@ if __name__ == "__main__":
                 print(f"[extra-pair] {xp} is the frozen pair - skipped.")
                 continue
             phase_2_pair(xp)
+        for cs in CONTROL_SETS:      # sensor-budget control (non-selectable)
+            phase_2_pair(sorted(int(d) for d in cs))
 
     selected_pair = summarize()
     # Publish the champion (arch + FROZEN pair from summarize's inner-val choice)

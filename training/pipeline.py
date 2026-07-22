@@ -314,10 +314,15 @@ def export_digital_twin_package(
         print(f"      Champion weights -> {champion_path}")
         _delete_trial_weights(output_dir, config['name'])
     else:
-        print(
-            f"      [WARNING] Per-trial weights not found at {trial_weight_path}.\n"
-            f"      DT_champion_weights.pth was NOT written."
-        )
+        # FATAL (audit r3, 2026-07-22 — was a WARNING): a study whose best
+        # trial has no weights cannot be tested or deployed; letting it
+        # "complete" here only defers the failure to summarize() with a less
+        # specific error, and leaves a weightless study that looks finished.
+        raise RuntimeError(
+            f"Per-trial weights not found at {trial_weight_path} — the best "
+            f"trial ({best_trial_num}) of study '{config['name']}' has no "
+            f"saved weights. Refusing to finish the study; investigate "
+            f"(disk full / weight-save path / interrupted trial) and re-run.")
 
     # ── Scaler ────────────────────────────────────────────────────────────────
     _copy_scaler(config, dataset_name, cache_dir, output_dir)

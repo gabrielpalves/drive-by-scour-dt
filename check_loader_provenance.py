@@ -453,6 +453,27 @@ try:
     check("tolerated micro-tension tier ACCEPTED", lambda: _load(p),
           should_raise=False)
 
+    # 44. The REAL s15_track state-244 event (13.4 kN for ONE sample = 0.063%
+    # of the path, off-bridge) — the event that drove the 2026-07-22 F-tier
+    # recalibration (12 -> 24 kN) -> now in the TOLERATED tier, must LOAD.
+    p = os.path.join(root, "microtension2"); _build(p)
+    tol2 = np.column_stack([np.zeros(NP), np.array([1.0] + [0.0] * (NP - 1)),
+                            np.array([0.000633] + [0.0] * (NP - 1)),
+                            np.array([13419.2] + [-1e5] * (NP - 1))])
+    _write_state(p, 2, clog=tol2)
+    check("s15 state-244 event (13.4 kN, 1 sample) ACCEPTED post-recal",
+          lambda: _load(p), should_raise=False)
+
+    # 45. Brief but ABOVE the recalibrated 24 kN cap -> still hard-fails
+    # (the F-tier exists; only its level moved).
+    p = os.path.join(root, "overcap"); _build(p)
+    ovr = np.column_stack([np.zeros(NP), np.array([1.0] + [0.0] * (NP - 1)),
+                           np.array([0.0005] + [0.0] * (NP - 1)),
+                           np.array([25000.0] + [-1e5] * (NP - 1))])
+    _write_state(p, 2, clog=ovr)
+    check("brief tension above 24 kN cap rejected", lambda: _load(p),
+          should_raise=True)
+
     print()
     print("LOADER PROVENANCE: ALL PASS" if fails == 0 else
           f"LOADER PROVENANCE: {fails} CHECK(S) FAILED")

@@ -18,7 +18,6 @@ import pickle
 import numpy as np
 import pywt
 from joblib import Parallel, delayed
-from scipy.interpolate import interp1d
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 
@@ -69,19 +68,49 @@ class TTBIPreprocessor:
 
     def _apply_paa(self, X: np.ndarray) -> np.ndarray:
         """
-        Downsample the sequence axis to n_segments via linear interpolation.
+        True Piecewise Aggregate Approximation (Keogh et al. 2001): split the
+        sequence axis into n_segments equal-width windows and AVERAGE each
+        window. Non-divisible lengths use exact fractional windows (every raw
+        sample contributes to each window in proportion to its overlap),
+        computed from the cumulative integral of the sample-and-hold signal —
+        so the global mean is preserved exactly and every sample carries equal
+        total weight.
+
+        FIX 2026-07-22 (external audit r3, verified): the pre-fix version was
+        a LINEAR-INTERPOLATION RESAMPLER (point subsampling, no averaging /
+        anti-aliasing) — e.g. [0,0,0,4] -> 2 segments gave [0,4]; true PAA
+        gives [0,2]. That contradicted the PAA definition cited in the
+        methodology (Keogh; Fernandes 2025) and under-filtered exactly the
+        high-frequency channels (wheels). Any change here is covered by the
+        cache schema tag (gs6) + protocol hash ("paa_impl").
 
         Args:
             X: (Samples, Channels, Length)
         Returns:
             (Samples, Channels, n_segments)  float32
         """
-        _, _, length = X.shape
-        if length == self.n_segments:
-            return X
-        x_old = np.linspace(0, 1, length)
-        x_new = np.linspace(0, 1, self.n_segments)
-        return interp1d(x_old, X, axis=2, kind='linear')(x_new).astype(np.float32)
+        n_samp, n_chan, length = X.shape
+        n = self.n_segments
+        if length == n:
+            return np.asarray(X, dtype=np.float32)
+        # Window edges in sample coordinates; I(t) = integral of the
+        # sample-and-hold signal is piecewise-linear between integer t, so
+        # each window mean is (I(hi) - I(lo)) / (hi - lo), exact for
+        # fractional edges. float64 accumulation; chunked over samples to
+        # bound the transient cumsum memory.
+        edges = np.linspace(0.0, float(length), n + 1)
+        idx   = np.minimum(edges.astype(np.int64), length - 1)
+        frac  = (edges - idx)[None, None, :]
+        seg_w = float(length) / n
+        out = np.empty((n_samp, n_chan, n), dtype=np.float32)
+        for s0 in range(0, n_samp, 512):
+            blk  = X[s0:s0 + 512]
+            csum = np.concatenate(
+                [np.zeros(blk.shape[:2] + (1,), dtype=np.float64),
+                 np.cumsum(blk, axis=2, dtype=np.float64)], axis=2)
+            integ = csum[..., idx] + frac * (csum[..., idx + 1] - csum[..., idx])
+            out[s0:s0 + 512] = ((integ[..., 1:] - integ[..., :-1]) / seg_w)
+        return out
 
     def _apply_fft(self, X: np.ndarray) -> np.ndarray:
         """

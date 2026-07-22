@@ -61,7 +61,15 @@ TRAIN_PROTOCOL = {
     "patience":    5,        # early-stop after this many non-improving epochs
     "optimizer":   "Adam(lr, weight_decay)",
     "scheduler":   "CosineAnnealingLR(T_max=n_epochs)",
-    "objective":   "best epoch-wise inner-val aggregate MSE (task.objective_value)",
+    # Audit r3 (2026-07-22): SCOUR is the pre-registered primary estimand —
+    # selection never sees the bearing heads; they are trained (to explain
+    # away their share of the response) and reported, not selected on.
+    "objective":   ("best epoch-wise inner-val SCOUR-head MSE; aggregate MSE "
+                    "where no bearing heads exist (task.objective_value)"),
+    "loss":        ("regression: range-normalized multi-task MSE, w_h = "
+                    "1/range_h^2 normalized to mean 1 (scour 60 %, bearing "
+                    "95 %; task.WeightedHeadMSE); plain MSE without bearing "
+                    "heads; classification: cross-entropy"),
     "trial_seed":  "config['seed'] (independent init/shuffle per config seed)",
 }
 

@@ -36,8 +36,11 @@ Stage-2 pilot are **superseded** (kept only as a historical record under `result
 >   rung reads it and **errors if it is missing** (the old PAA_NHiTS default is
 >   gone). Its Python ablation must finish before s11+ ablations start.
 > - Optuna studies carry a `SCHEMA_TAG`, so a re-run on a reused results/DB dir
->   cannot resume pre-audit studies. Load-time contact gate drops any passage
->   with peak wheel-rail tension > 1000 N and aborts if any state loses >20%.
+>   cannot resume pre-audit studies. Contact gate (recalibrated twice; final
+>   2026-07-22): TWO-TIER on both the generator and the loader — brief
+>   micro-unloading is tolerated + logged (peak tension ≤ 24 kN ≈ 20% of the
+>   static wheel load AND ≤ 0.2% of path samples); beyond either bound, or
+>   non-finite, is FATAL (physics regression).
 >
 > ### Round-3 audit (2026-07-17) — multi-PC workflow
 > - **Study/DB isolation:** every rung's Optuna DB, output and cache dir are now
@@ -49,7 +52,8 @@ Stage-2 pilot are **superseded** (kept only as a historical record under `result
 >   has no champion.
 > - **Provenance:** A00 writes a `gen_fingerprint` (Npass/seeds/severities/…) and
 >   aborts resume if it differs; the Python loader requires `gen_schema` +
->   `contact_log` in every `.mat`. Caches are tagged `_gs2` (old `_gs1` orphaned).
+>   `contact_log` in every `.mat`. Caches are tagged `_gs6` (all older tags
+>   orphaned; gs6 = true Keogh PAA + per-DOF-paired noise, audit r3 2026-07-22).
 > - **Profile fix (my R2 bug):** the fixed-baseline profile is now stretched
 >   (not wrapped) onto the live track, so L99.6/fixed no longer has a seam that
 >   caused wheel-rail contact loss. `smoke_geometry` checks contact at 70/80/90
@@ -74,14 +78,26 @@ the network must be invariant to (it never estimates them).
 | `bundle_s13_bearcrack` | + bearing + crack = all **bridge** damages | " |
 | `bundle_s14_prof` | + rail profile (FRA-4, per-state) = **the roughness rung** | " |
 | `bundle_s15_track` | + track-layer damage (ballast / hanging sleepers / pads) | " |
-| `bundle_s16_all` | + wheel OOR & flats = **all damages**; **deployment selection** (3 archs × 28 pairs) | " |
+| `bundle_s16_all` | + wheel OOR (polygonization; flats disabled) = **all modeled EOVs**; **deployment selection** (4 archs × 28 pairs) | " |
 | `bundle_s21_scour4` | scour only | **L99.6 / 4-span**, piers 2,3,4 |
 | `bundle_s22_bearcrack4` | + bearing + crack | " |
-| `bundle_s23_all4` | all damages; **deployment selection** (3 archs × 28 pairs) | " |
+| `bundle_s23_all4` | all modeled EOVs; **deployment selection** (4 archs × 28 pairs) | " |
 
-**Deployment selection (Feature B, 2026-07-19):** the two fully-realistic rungs
-(s16_all, s23_all4) re-open the architecture question — 3 archs × 28 pairs × 3
-seeds = **252 studies each**. Their winner is EXPLORATORY: it goes to a separate
+**Audit r3 (2026-07-22) — applies to every bundle rebuilt after this date:**
+true Keogh PAA (window means, not linear resampling); noise realization keyed
+by global DOF (sensor-set comparisons are noise-paired); SCOUR-primary
+objective (bearing heads trained + reported, never selected on;
+range-normalized multi-task loss); 4th architecture arm `PAA_CNN` (no
+multi-rate pooling — the pooling-ablation control); the full 8-DOF array runs
+at every rung as a NON-selectable sensor-budget control; contact gate 24 kN
+two-tier; hanging↔fouling coupling corrected to the documented 3:1 odds and
+overlapping ballast patches resolved by worst-patch-governs (**s15/s16/s23
+generated before this date must be REGENERATED**; all other rungs' data
+stands); tagged re-runs get their own summary dir.
+
+**Deployment selection (Feature B, 2026-07-19):** the two all-EOV rungs
+(s16_all, s23_all4) re-open the architecture question — 4 archs × 28 pairs × 3
+seeds = **336 studies each**. Their winner is EXPLORATORY: it goes to a separate
 `results/_deployment_selection_<stage>_..json` manifest (with a state-level
 bootstrap 95% CI on the outer-test MSE) and **never overwrites the s0 ladder
 champion**. The claim it supports is exactly *"best among these 3 architectures

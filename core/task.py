@@ -77,9 +77,45 @@ def n_outputs(config: dict) -> int:
     return int(60 / disc) + 1
 
 
+# Label ranges [%] — pre-registered loss/objective constants (audit r3,
+# 2026-07-22). Scour severity is drawn on 0-60 %; bearing fixity on 0-95 %
+# (phi ~ U(0, 0.95) -> label in %). Recorded in TRAIN_PROTOCOL, so any change
+# moves the protocol hash.
+SCOUR_RANGE_PCT   = 60.0
+BEARING_RANGE_PCT = 95.0
+
+
+class WeightedHeadMSE(nn.Module):
+    """Range-normalized multi-task MSE (audit r3, 2026-07-22).
+
+    Plain MSELoss over heads lets the wider-range bearing labels (0-95 %)
+    dominate the gradient over the scour labels (0-60 %) — the network could
+    buy bearing accuracy with scour accuracy even though scour is the primary
+    scientific target. Weights are w_h = 1/range_h^2, normalized to mean 1 so
+    the loss magnitude (and the tuned LR range) stays comparable to MSELoss.
+    """
+
+    def __init__(self, ranges: list):
+        super().__init__()
+        w = torch.tensor([1.0 / (r * r) for r in ranges], dtype=torch.float32)
+        self.register_buffer("w", w / w.mean())
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if pred.dim() == 1:
+            pred, target = pred.unsqueeze(1), target.unsqueeze(1)
+        return (self.w.to(pred.device) * (pred - target) ** 2).mean()
+
+
 def make_criterion(config) -> nn.Module:
-    """MSE for regression, cross-entropy for classification."""
-    return nn.MSELoss() if is_regression(config) else nn.CrossEntropyLoss()
+    """Cross-entropy for classification; MSE for regression — range-normalized
+    per head when bearing heads share the network with scour heads."""
+    if not is_regression(config):
+        return nn.CrossEntropyLoss()
+    nb = n_bearing_outputs(config)
+    if nb == 0:
+        return nn.MSELoss()   # all heads share the scour range: equal weights
+    ranges = [SCOUR_RANGE_PCT] * n_scour_outputs(config) + [BEARING_RANGE_PCT] * nb
+    return WeightedHeadMSE(ranges)
 
 
 def label_dtype(config) -> torch.dtype:
@@ -88,8 +124,16 @@ def label_dtype(config) -> torch.dtype:
 
 
 def objective_value(metrics: dict) -> float:
-    """Scalar Optuna minimises - the (aggregate) validation MSE for both tasks."""
-    return metrics["mse"]
+    """Scalar Optuna minimises — the pre-registered PRIMARY estimand.
+
+    Audit r3 (2026-07-22): on bearing rungs this is the SCOUR-head MSE
+    ('scour_mse'), NOT the all-head aggregate — scour is the scientific
+    target; bearing heads exist to explain away their share of the response
+    and are reported as a secondary metric, never selected on. Rungs without
+    bearing heads (and classification) keep the aggregate, which is identical
+    to the scour MSE there. Recorded in TRAIN_PROTOCOL -> protocol hash.
+    """
+    return metrics.get("scour_mse", metrics["mse"])
 
 
 @torch.no_grad()

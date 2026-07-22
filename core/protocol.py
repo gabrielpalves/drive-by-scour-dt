@@ -261,6 +261,10 @@ def build_protocol_descriptors(
     # policy are protocol too. Defaults keep older callers/tests valid.
     deployment_selection_stages: set = frozenset(),
     bootstrap:            dict | None = None,
+    # Audit r3 (2026-07-22): non-selectable sensor-budget controls (the full
+    # 8-DOF array) reported as comparators at every rung. Default keeps older
+    # callers/tests valid.
+    control_sets:         list = (),
 ) -> tuple[dict, dict]:
     """Assemble (core_descriptor, full_descriptor).
 
@@ -308,8 +312,11 @@ def build_protocol_descriptors(
         # use_lstm) with an unchanged name must still change the protocol.
         "architectures": architectures,
         "selection": {
-            "selection_metric":       "median_inner_val_mse",
+            # Audit r3 (2026-07-22): objective_value is SCOUR-primary on
+            # bearing rungs (bearing reported, never selected on).
+            "selection_metric":       "median_inner_val_mse (scour-primary objective)",
             "extra_pairs":            [sorted(int(d) for d in p) for p in extra_pairs],
+            "control_sets":           [sorted(int(d) for d in c) for c in control_sets],
             "pair_search_stages":     sorted(pair_search_stages),
             "arch_selection_stages":  sorted(arch_selection_stages),
             # Feature B: deployment rungs re-open arch x pair; comparators are

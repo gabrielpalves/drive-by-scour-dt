@@ -342,8 +342,17 @@ function [V,Dbg] = local_track_vectors(Track,Model,Calc,Damage)
             for r = 1:size(T.ballast_patches,1)
                 p = T.ballast_patches(r,:);
                 sel = (x >= p(1)) & (x <= p(2));
-                mult_bal_k(sel) = mult_bal_k(sel)*p(3);
-                mult_bal_c(sel) = mult_bal_c(sel)*p(4);
+                % Overlapping patches: the patch with the LARGEST stiffness
+                % deviation |log eta_k| governs and supplies BOTH eta_k and
+                % eta_c (a sleeper is either predominantly wet-fouled,
+                % eta_k<1 & eta_c>1, or dry-fouled, eta_k>1 & eta_c<1 -
+                % mixing quantities across patches would be an unphysical
+                % hybrid). FIX 2026-07-22 (external audit r3, verified): the
+                % old product of stacked draws could leave the documented
+                % per-patch bands (k up to ~4 dry-on-dry, ~0.5 wet-on-wet).
+                upd = sel & (abs(log(p(3))) > abs(log(mult_bal_k)));
+                mult_bal_k(upd) = p(3);
+                mult_bal_c(upd) = p(4);
             end
         end
         if isfield(T,'hanging_groups') && ~isempty(T.hanging_groups)

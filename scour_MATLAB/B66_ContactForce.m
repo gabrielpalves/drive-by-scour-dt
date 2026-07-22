@@ -80,7 +80,15 @@ if Calc.Options.VBI == 1
         % (flat and void impacts mostly occur over plain track). These fields
         % are persisted per passage by A00 (data2save.contact_log) and
         % asserted on by the smoke tests.
-        ind0 = (Calc.Veh(veh_num).x_path >= 0);
+        % On-track = [0, Calc.Profile.L], the same mask B50 uses to zero
+        % off-profile forces. FIX 2026-07-22 (external audit r3, verified):
+        % the old lower-bound-only mask (x_path >= 0) counted post-exit
+        % samples (F identically 0 there) in the DENOMINATOR, diluting
+        % tension_frac and making the sustained-tension gate read laxer
+        % than pre-registered. Applies forward; saved contact_logs keep
+        % their generation-time values (all passed with >3x margin).
+        ind0 = (Calc.Veh(veh_num).x_path >= 0) & ...
+               (Calc.Veh(veh_num).x_path <= Calc.Profile.L);
         Sol.Veh(veh_num).F_onTrack_max     = max(Sol.Veh(veh_num).F_onBeam(ind0));
         Sol.Veh(veh_num).contactLost_track = Sol.Veh(veh_num).F_onTrack_max > 0;
         Sol.Veh(veh_num).tension_frac      = ...
@@ -134,7 +142,15 @@ elseif Calc.Options.VBI == 0
         Sol.Veh(veh_num).contactLost = max(max(Sol.Veh(veh_num).F_onBeam.*ind))>0;
 
         % Whole on-track path (audit 2026-07-17; see the VBI==1 branch)
-        ind0 = (Calc.Veh(veh_num).x_path >= 0);
+        % On-track = [0, Calc.Profile.L], the same mask B50 uses to zero
+        % off-profile forces. FIX 2026-07-22 (external audit r3, verified):
+        % the old lower-bound-only mask (x_path >= 0) counted post-exit
+        % samples (F identically 0 there) in the DENOMINATOR, diluting
+        % tension_frac and making the sustained-tension gate read laxer
+        % than pre-registered. Applies forward; saved contact_logs keep
+        % their generation-time values (all passed with >3x margin).
+        ind0 = (Calc.Veh(veh_num).x_path >= 0) & ...
+               (Calc.Veh(veh_num).x_path <= Calc.Profile.L);
         Sol.Veh(veh_num).F_onTrack_max     = max(Sol.Veh(veh_num).F_onBeam(ind0));
         Sol.Veh(veh_num).contactLost_track = Sol.Veh(veh_num).F_onTrack_max > 0;
         Sol.Veh(veh_num).tension_frac      = ...

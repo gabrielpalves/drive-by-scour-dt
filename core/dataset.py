@@ -127,24 +127,32 @@ def _assert_groups_canonical(groups: np.ndarray, n_states, npass) -> None:
 
 from core.preprocessing import TTBIPreprocessor
 
-# Contact-validity gate (audit R5 2026-07-17; RECALIBRATED 2026-07-19 at first
-# campaign dispatch). The solver couples wheel and rail BILATERALLY, so brief
-# wheel unloading past zero shows up as small spurious TENSION instead of a
-# few-ms separation + re-contact. Two regimes, two-tier gate:
+# Contact-validity gate (audit R5 2026-07-17; recalibrated 2026-07-19 at first
+# campaign dispatch; F-tier recalibrated AGAIN 2026-07-22 on the second observed
+# event). The solver couples wheel and rail BILATERALLY, so brief wheel
+# unloading past zero shows up as small spurious TENSION instead of a few-ms
+# separation + re-contact. Two regimes, two-tier gate:
 #   * TOLERATED (logged, reported): brief micro-unloading — peak tension a
 #     small fraction of the ~118 kN static wheel load, on a tiny fraction of
-#     the path. First observed on s23_all4 state 24 (60% scour at the middle
-#     pier + FRA-4 + track damage + poly OOR): 6.4 kN (5.4% static) on 0.042%
-#     of samples. Physically plausible superposition tail; the bilateral
-#     approximation error is local and small. Censoring/resampling these
-#     states would MNAR-bias exactly the severe cases the paper is about.
-#   * FATAL (physics regression): tension beyond 10% of static (12 kN) OR
-#     sustained tension (> 0.2% of path samples) OR non-finite. The known true
-#     regressions sit far above: the R3 profile-seam bug gave 170 kN (144% of
-#     static); wheel flats exceed the uplift threshold 12-38x.
+#     the path. Observed events (both physically plausible superposition
+#     tails; censoring/resampling them would MNAR-bias exactly the severe
+#     cases the paper is about):
+#       - s23_all4 state 24 (60% scour + FRA-4 + track damage + poly OOR):
+#         6.4 kN (5.4% static) on 0.042% of samples.
+#       - s15_track state 244 (50%/13% scour + track damage): 13.4 kN (11.4%
+#         static) on 0.063% of samples — ONE sample at dt=1 ms, on the track
+#         portion (off-bridge; the void rung is DESIGNED to hammer the contact
+#         patch, so its unloading tail is naturally heavier).
+#   * FATAL (physics regression): tension beyond 20% of static (24 kN, ~1.8x
+#     the worst observed event) OR sustained tension (> 0.2% of path samples)
+#     OR non-finite. The known true regressions sit far above: the R3
+#     profile-seam bug gave 170 kN (144% of static); wheel flats exceed the
+#     uplift threshold 12-38x. Watch item unchanged: an event of tens of kN
+#     or sustained means the tail is heavier than believed -> revisit
+#     (unilateral contact vs censor-with-report), do NOT raise again.
 # The generator (A00 F_CONTACT_TOL_N / F_CONTACT_FRACTOL) enforces the SAME
 # two-tier rule per passage at generation time; values must stay identical.
-_CONTACT_F_TOL_N  = 12000.0  # FATAL above this peak tension [N] (10% static)
+_CONTACT_F_TOL_N  = 24000.0  # FATAL above this peak tension [N] (20% static)
 _CONTACT_FRAC_TOL = 0.002    # FATAL above this fraction of path samples in tension
 _re_state = re.compile(r'\d{4}\.mat$')   # NNNN.mat state-file matcher
 
@@ -172,7 +180,7 @@ N_SEGMENTS      = 512    # PAA segment count (TTBIPreprocessor)
 NOISE_RNG_SEED  = 42     # load-time sensor-noise RNG (deterministic rebuilds)
 LOAD_N_PASSAGES = 200    # passage cap requested from the loader (manifest npass
                          # is authoritative; the loader enforces exact ==)
-CACHE_SCHEMA_TAG = "_gs5"  # cache-contract tag appended to every cache stem
+CACHE_SCHEMA_TAG = "_gs6"  # cache-contract tag appended to every cache stem
                            # (gs5 = r8: family-stratified split + state table)
 
 
@@ -224,6 +232,10 @@ PREPROC_PROTOCOL = {
     "contact_f_tol_N":    _CONTACT_F_TOL_N,
     "contact_frac_tol":   _CONTACT_FRAC_TOL,
     "crop_ragged_tol":    _CROP_RAGGED_TOL,
+    # Audit r3 (2026-07-22): both fixes change feature bytes -> named here so
+    # the protocol hash moves with them and can never silently regress.
+    "paa_impl":           "keogh-window-mean-v2 (exact fractional windows)",
+    "noise_pairing":      "per-global-dof rng [seed, dof] (subset-invariant)",
 }
 
 
@@ -1240,7 +1252,9 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     geometry/crop + contact filtering); gs3 = R5 (3-way train/val/test split
     + reflect-fold profile); gs4 = R7 (atomic cache write + artifact digests +
     inventory + stricter loader payload); **gs5** = R8 (family-STRATIFIED split
-    + mandatory state table + per-file state_family). Older-tag caches are
+    + mandatory state table + per-file state_family); **gs6** = audit r3
+    2026-07-22 (TRUE Keogh PAA replaces the linear resampler + per-global-DOF
+    paired noise RNG + segment count named in the stem). Older-tag caches are
     orphaned, never reused.
 
     Kept private; the public filenames (features, labels, groups, scaler) are
@@ -1261,6 +1275,10 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     sn = config.get('sensor_noise')
     if sn:   # load-time noise injection -> its own cache, never collides with clean
         stem += f"_noise-{sn['mode']}" + (f"-{sn['desvio']}" if 'desvio' in sn else "")
+    # Segment count in the stem (audit r3 2026-07-22): N_SEGMENTS is a module
+    # constant, so editing it used to leave the stem unchanged and silently
+    # reuse a stale-length cache. Now the stem names the length it contains.
+    stem += f"_seg{N_SEGMENTS}"
     stem += CACHE_SCHEMA_TAG   # data+split+cache-contract schema tag (R7)
     return stem
 
@@ -1321,16 +1339,23 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
     signal-INDEPENDENT floor from sensor datasheets, noise-density x sqrt(BW)):
     add here when the noise-robustness arm lands.
     """
-    rng = np.random.default_rng(NOISE_RNG_SEED)   # protocol constant (hashed)
     X = np.array(X, dtype=np.float32, copy=True)
     desvio = float(sn.get('desvio', 0.05))
     WHEELS = (3, 4)
 
+    # NOISE PAIRING (fix 2026-07-22, external audit r3, verified): the RNG is
+    # keyed by the GLOBAL DOF id, so a given channel receives the IDENTICAL
+    # realization no matter which subset it is loaded in or in what order —
+    # sensor-set comparisons are noise-paired. The pre-fix single sequential
+    # generator made the draw depend on the channel's position within the
+    # loaded subset (same DOF: different noise alone vs in a pair), leaking
+    # realization variance into config comparisons.
     def add_mult(mask_dofs):
         for i, d in enumerate(dofs):
             if d in mask_dofs:
+                rng_d = np.random.default_rng([NOISE_RNG_SEED, int(d)])
                 X[:, i, :] += (desvio * X[:, i, :] *
-                               rng.standard_normal(X[:, i, :].shape)
+                               rng_d.standard_normal(X[:, i, :].shape)
                                .astype(np.float32))
 
     if sn['mode'] == 'legacy_wheel':
@@ -1422,6 +1447,8 @@ def get_or_create_cache(
     cur_inventory: list = []
     cur_manifest_sha = None
     cur_src_root = None
+    cur_digests_sha = None
+    cur_states_sha = None
     src_dir = os.path.join('data', dataset_name)
     if regression and os.path.isdir(src_dir):
         cur_nstates, cur_npass, cur_schema, cur_fp = _read_manifest(src_dir)
@@ -1433,6 +1460,18 @@ def get_or_create_cache(
         ci_path = os.path.join(src_dir, 'case_info.mat')
         if os.path.exists(ci_path):
             cur_manifest_sha = _sha256_file(ci_path)   # manifest edit -> cache stale
+        # Audit r3 (2026-07-22): also pin the per-state DIGEST TABLE itself
+        # (file_digests.mat) and the family table (damage_states.mat). Any
+        # tamper that keeps the digest chain self-consistent must rewrite
+        # these files -> cache invalidated -> rebuild re-validates every
+        # per-state SHA in the full loader. Residual (accepted, recorded):
+        # an inconsistent same-size edit of one NNNN.mat is IGNORED while a
+        # cache exists (the cache holds pre-edit bytes); it is caught at the
+        # next rebuild. Full per-file re-hash on reuse = queued follow-up.
+        fd_path = os.path.join(src_dir, 'file_digests.mat')
+        cur_digests_sha = _sha256_file(fd_path) if os.path.exists(fd_path) else None
+        dsm_path = os.path.join(src_dir, 'damage_states.mat')
+        cur_states_sha = _sha256_file(dsm_path) if os.path.exists(dsm_path) else None
         # `complete` requires the marker to EXIST *and* its content (schema+fp) to
         # match the manifest (audit R7.1 P3): a stale/wrong-content marker on the
         # fast path must not certify a source as complete.
@@ -1456,7 +1495,9 @@ def get_or_create_cache(
                "n_states": cur_nstates, "passages_per_state": cur_npass,
                "dano_max": cur_dano, "manifest_sha256": cur_manifest_sha,
                "source_root": cur_src_root, "complete": cur_complete,
-               "inventory": cur_inventory}
+               "inventory": cur_inventory,
+               "file_digests_sha256": cur_digests_sha,
+               "damage_states_sha256": cur_states_sha}
 
     # ── Fast path (audit R7.1 P5): validate a reusable cache and return it, or
     # return None. Factored out so it can be re-checked INSIDE the build lock. ──

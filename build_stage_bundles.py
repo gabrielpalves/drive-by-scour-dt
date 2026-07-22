@@ -156,7 +156,22 @@ for stage, (mode, adds) in STAGES.items():
         z.writestr("README_BUNDLE.md", readme(stage, mode, adds))
     built.append((f"bundle_{stage}.zip", os.path.getsize(out) // 1024, adds))
 
+# SHA-256 manifest (audit r3 2026-07-22): printed AND persisted so a bundle on
+# a campaign PC can be verified against what this tree actually built.
+import hashlib
+sha_lines = []
+for b, _, _ in built:
+    h = hashlib.sha256()
+    with open(os.path.join(REPO, b), "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    sha_lines.append(f"{h.hexdigest()}  {b}")
+with open(os.path.join(REPO, "bundle_sha256.txt"), "w") as fh:
+    fh.write("\n".join(sha_lines) + "\n")
+
 print(f"{'bundle':30} {'KB':>5}  adds")
-for b, kb, adds in built:
+for (b, kb, adds), sl in zip(built, sha_lines):
     print(f"{b:30} {kb:5}  {adds}")
-print(f"\n{len(built)} bundles x {len(names)+1} files, contents read from the repo working tree.")
+    print(f"  sha256 {sl.split()[0]}")
+print(f"\n{len(built)} bundles x {len(names)+1} files, contents read from the repo "
+      f"working tree. SHA-256 manifest -> bundle_sha256.txt")

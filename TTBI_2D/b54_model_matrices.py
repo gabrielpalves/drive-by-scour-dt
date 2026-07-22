@@ -47,8 +47,14 @@ def _track_vectors(Track, Model, Calc, Damage):
         if patches.size:
             for p in patches:
                 sel = (x >= p[0]) & (x <= p[1])
-                mult_bal_k[sel] *= p[2]
-                mult_bal_c[sel] *= p[3]
+                # Overlapping patches: largest |log eta_k| deviation governs
+                # and supplies BOTH eta_k and eta_c — exact mirror of the
+                # B54 fix 2026-07-22 (audit r3); the old stacked product
+                # could leave the documented per-patch bands, and mixing
+                # k/c across patches would be an unphysical hybrid state.
+                upd = sel & (abs(np.log(p[2])) > np.abs(np.log(mult_bal_k)))
+                mult_bal_k[upd] = p[2]
+                mult_bal_c[upd] = p[3]
         groups = np.atleast_2d(np.asarray(getattr(T, 'hanging_groups', []) if
                                getattr(T, 'hanging_groups', None) is not None else [], dtype=float))
         if groups.size:

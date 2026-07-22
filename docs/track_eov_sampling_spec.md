@@ -129,6 +129,16 @@ group sizes above 5 (cited range = 1-5 consecutive, 5 = wheel-load critical limi
   bound was an extrapolation); spatial mapping = 1D Gaussian (or exponential) random
   field with horizontal scale of fluctuation (correlation length) θ_x = 3–15 m,
   typically 10 m (cited).
+- **Overlap rule (audit r3, 2026-07-22):** where Poisson-placed patches overlap, the
+  patch with the **largest stiffness deviation |log η_k| governs and supplies BOTH
+  η_k and η_c** (a sleeper is either predominantly wet- or dry-fouled). The earlier
+  implementation MULTIPLIED stacked draws, which could leave the documented per-patch
+  bands (up to η_k ≈ 4 dry-on-dry); fixed in B54 + the Python mirror.
+- **Coupling correction (audit r3, 2026-07-22):** the fouling↔voiding coupling is
+  enforced by rejection sampling with acceptance ODDS **3:1 inside vs outside a
+  fouled patch** — the documented ×3. The pre-fix weights compounded to 9:1
+  (mult²); datasets generated with the 9:1 draw (s15/s16/s23 before this date)
+  must be regenerated.
 
 ### (c) Rail-pad deterioration
 - **Representation:** aging = progressive multipliers on pad stiffness (χ_pad) and
