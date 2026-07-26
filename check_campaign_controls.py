@@ -294,6 +294,37 @@ else:
     # ZIP; runtime control tests above remain applicable there.
     print("  [SKIP] bundle-manifest audit (builder absent in stage bundle)")
 
+# ── Pre-registered PRIMARY ESTIMAND (audit r5) ───────────────────────────────
+# BLIND SPOT found by mutation testing 2026-07-25: reverting objective_value to
+# the all-head aggregate — i.e. letting selection see the bearing heads again,
+# undoing the r3 pre-registration — passed the ENTIRE suite, including
+# check_protocol_hash. TRAIN_PROTOCOL["objective"] only DESCRIBES the estimand
+# in prose; nothing bound the description to the implementation (unlike
+# batch_size/patience, which the trainer reads FROM the protocol, and unlike
+# the loss, which check_weighted_head_mse asserts behaviourally). These checks
+# close the declared-vs-actual gap for the objective.
+from core import task as _task                                   # noqa: E402
+from training.trainer import TRAIN_PROTOCOL as _TRAIN_PROTOCOL   # noqa: E402
+
+# Bearing rung: scour_mse and the aggregate disagree -> must return SCOUR.
+_bearing_metrics = {"mse": 4.0, "scour_mse": 1.0, "bearing_mse": 7.0}
+check("objective is SCOUR-primary when bearing heads exist",
+      _task.objective_value(_bearing_metrics) == 1.0)
+check("objective ignores the all-head aggregate on bearing rungs",
+      _task.objective_value(_bearing_metrics) != _bearing_metrics["mse"])
+# Scour-only rung / classification: no scour_mse key -> aggregate is correct.
+check("objective falls back to the aggregate without bearing heads",
+      _task.objective_value({"mse": 2.5}) == 2.5)
+# A lower scour error must always rank better, whatever bearing does.
+check("a scour improvement outranks a bearing improvement",
+      _task.objective_value({"mse": 9.0, "scour_mse": 1.0})
+      < _task.objective_value({"mse": 2.0, "scour_mse": 3.0}))
+# The prose in TRAIN_PROTOCOL must keep saying what the code does, so the
+# protocol hash moves if the estimand is ever re-registered.
+_obj_text = str(_TRAIN_PROTOCOL.get("objective", "")).upper()
+check("TRAIN_PROTOCOL objective still declares the SCOUR-primary estimand",
+      "SCOUR" in _obj_text)
+
 print()
 print("CAMPAIGN CONTROLS: ALL PASS" if fails == 0
       else f"CAMPAIGN CONTROLS: {fails} CHECK(S) FAILED")

@@ -67,8 +67,12 @@ check("Python result is row-order invariant",
 # Invoke the actual MATLAB production helper and compare its saved numerical
 # vector to Python's result. No repository data/results/bundles are touched.
 matlab = shutil.which("matlab")
+matlab_ran = matlab is not None
 if matlab is None:
-    print("  [SKIP] MATLAB executable unavailable; Python fixture passed")
+    # Audit r5: a silent skip used to still print "ALL PASS", so a dispatch-PC
+    # preflight log could claim cross-language parity that never ran. The
+    # summary line below now states the degraded scope explicitly.
+    print("  [SKIP] MATLAB executable not on PATH — the MATLAB half did NOT run")
 else:
     repo = Path(__file__).resolve().parent
     with tempfile.TemporaryDirectory(prefix="b54-parity-") as td:
@@ -98,6 +102,11 @@ else:
                   np.array_equal(mc, V.mult_bal_c))
 
 print()
-print("B54 OVERLAP PARITY: ALL PASS" if fails == 0
-      else f"B54 OVERLAP PARITY: {fails} CHECK(S) FAILED")
+if fails:
+    print(f"B54 OVERLAP PARITY: {fails} CHECK(S) FAILED")
+elif matlab_ran:
+    print("B54 OVERLAP PARITY: ALL PASS")
+else:
+    print("B54 OVERLAP PARITY: PYTHON-ONLY PASS "
+          "(MATLAB cross-language half SKIPPED — not verified on this machine)")
 sys.exit(1 if fails else 0)
