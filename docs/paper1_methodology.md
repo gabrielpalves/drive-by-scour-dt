@@ -1,5 +1,11 @@
 ﻿# Paper 1 â€” Methodology (draft prose)
 
+> **NON-AUTHORITATIVE HISTORICAL DRAFT.** This file predates the R4
+> four-architecture joint pair search, grouped outer test, finalist repeated CV,
+> state-first inference and exact campaign counts. Do not submit or quote its
+> protocol numbers. Rewrite from the executed `protocol_descriptor.json`,
+> result manifests and `docs/audit_r4_results.md`.
+
 Drafted 2026-07-09 from the implementation (`scour_MATLAB/`, `core/`, `training/`) and the
 talk (`presentation/SHM_Markdown/main.md`). This is the Â§4 material for
 `docs/paper1_outline.md`. **Numbers marked âš  need a final check against the code/config at
@@ -338,7 +344,8 @@ speed-dependent** — whereas noise injected in space is white. Measured on our 
 ≈ 0.67× the variance but ≈ **1.46× the energy surviving PAA** (the colouring concentrates
 energy at low spatial frequencies, exactly what PAA's averaging preserves). Same nominal 5%,
 materially different perturbation. We therefore state the noise model explicitly instead of
-leaving it implicit in the pipeline. The ablation injects a uniform 5% multiplicative noise
+leaving it implicit in the pipeline. The ablation injects zero-mean Gaussian
+multiplicative noise with pointwise standard deviation 5% of the absolute signal
 on every channel at load time; the physically-correct model for future work is an
 **additive, signal-independent floor** from sensor datasheets (noise density × √bandwidth).
 ⚠ **EN 61373** position severities (carbody:bogie:axle) describe the vibration *environment*

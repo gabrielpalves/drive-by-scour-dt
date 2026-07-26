@@ -15,7 +15,8 @@ SOURCE_MANIFEST = os.path.join(REPO, "bundle_source_files.txt")
 
 # THE LADDER (2026-07-14). Everything is regenerated from scratch (raw/Option-B
 # format + the new EOV design), so every stage is a GEN stage and every stage
-# ablates with `all_mult` = uniform 5% multiplicative noise on EVERY channel,
+# ablates with `all_mult` = channel-symmetric Gaussian multiplicative noise
+# (pointwise sigma = 5% of |signal|) on EVERY channel,
 # injected at LOAD time onto noise-free data. One factor per rung.
 STAGES = {
     # id                (noise mode, one-line what-it-adds)
@@ -90,8 +91,11 @@ def readme(stage, mode, adds, source_commit):
         "Must print PARITY PASS (max|MATLAB-Python| < 1e-12) before the long run.", "",
         "## 3. Python — ablate",
         "`python comprehensive_ablation_multidamage.py` (STAGE + SENSOR_NOISE preset).",
-        f"Noise: `{mode}` = uniform 5% multiplicative on EVERY channel, injected at load",
-        "time onto the noise-free data. 100 trials x 3 seeds + the mixed pair [1,3];",
+        f"Noise: `{mode}` = zero-mean Gaussian multiplicative noise on EVERY channel",
+        "with pointwise sigma = 5% of |signal|, injected at load time onto the",
+        "noise-free data. 100 useful Optuna trials x 3 seeds per configuration;",
+        "pair search, controls, finalist CV and the outer-test firewall are fixed",
+        "by the hash-carried protocol described in README_CAMPAIGN.md.",
         f"summary -> `results/{stage}_summary_ph-<hash>/` (+ leaderboards +",
         "`protocol_descriptor.json`).", "",
         "## Heads vs nuisances",
@@ -159,15 +163,20 @@ if missing:
 DRIVER = "comprehensive_ablation_multidamage.py"
 A00 = "scour_MATLAB/A00_Run.m"
 
-# drop stale bundles from earlier stage naming
-for f in os.listdir(REPO):
-    if f.startswith("bundle_") and f.endswith(".zip"):
-        os.remove(os.path.join(REPO, f))
+# The manifest is the publication/dispatch commit marker for the complete
+# ten-bundle set. Invalidate any previous marker before replacing even one ZIP:
+# an interrupted build may leave a mixture of generations, but that mixture
+# must never retain a plausibly valid campaign manifest.
+sha_manifest = os.path.join(REPO, "bundle_sha256.txt")
+invalid_manifest = sha_manifest + ".INVALID_BUILD_IN_PROGRESS"
+if os.path.isfile(sha_manifest):
+    os.replace(sha_manifest, invalid_manifest)
 
 built = []
 for stage, (mode, adds) in STAGES.items():
     out = os.path.join(REPO, f"bundle_{stage}.zip")
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    tmp_out = out + ".tmp"
+    with zipfile.ZipFile(tmp_out, "w", zipfile.ZIP_DEFLATED) as z:
         for n in names:
             data = blobs[n]
             if n == DRIVER:
@@ -179,23 +188,34 @@ for stage, (mode, adds) in STAGES.items():
         z.writestr("README_BUNDLE.md", readme(
             stage, mode, adds, source_commit
         ))
+    # Publish each exact target atomically. Do not glob-delete unrelated or
+    # historical bundle_*.zip files from the user's working tree.
+    os.replace(tmp_out, out)
     built.append((f"bundle_{stage}.zip", os.path.getsize(out) // 1024, adds))
 
 # SHA-256 manifest (audit r3 2026-07-22): printed AND persisted so a bundle on
-# a campaign PC can be verified against what this tree actually built.
+# a campaign PC can be verified against what this tree actually built. It is
+# published last, and therefore certifies that the complete set was built.
 import hashlib
-sha_lines = [f"# source_commit {source_commit}"]
+sha_lines = [
+    f"# source_commit {source_commit}",
+    f"# complete_bundle_count {len(STAGES)}",
+]
 for b, _, _ in built:
     h = hashlib.sha256()
     with open(os.path.join(REPO, b), "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     sha_lines.append(f"{h.hexdigest()}  {b}")
-with open(os.path.join(REPO, "bundle_sha256.txt"), "w") as fh:
+sha_manifest_tmp = sha_manifest + ".tmp"
+with open(sha_manifest_tmp, "w", encoding="utf-8", newline="\n") as fh:
     fh.write("\n".join(sha_lines) + "\n")
+os.replace(sha_manifest_tmp, sha_manifest)
+if os.path.isfile(invalid_manifest):
+    os.remove(invalid_manifest)
 
 print(f"{'bundle':30} {'KB':>5}  adds")
-for (b, kb, adds), sl in zip(built, sha_lines[1:]):
+for (b, kb, adds), sl in zip(built, sha_lines[2:]):
     print(f"{b:30} {kb:5}  {adds}")
     print(f"  sha256 {sl.split()[0]}")
 print(f"\n{len(built)} bundles x {len(names)+1} files, contents read from the repo "

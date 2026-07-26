@@ -4,13 +4,16 @@ Everything is **regenerated from scratch**: new ladder, raw/Option-B data format
 anchored EOVs, noise-free generation. The earlier Stage-0/1 datasets and the L100
 Stage-2 pilot are **superseded** (kept only as a historical record under `results/`).
 
-> ## 🔴 AUDIT R4 (2026-07-25) — current ZIPs are not dispatchable
+> ## 🔴 AUDIT R4 (2026-07-25) — audit-snapshot ZIPs are not dispatchable
 >
-> The untracked `bundle_*.zip` files in this working copy predate the R4
-> methodology/provenance changes. Do not dispatch them. After independent review,
-> commit the reviewed source, then rebuild from that clean commit; the builder
-> now reads the explicit tracked `bundle_source_files.txt`, refuses dirty runtime
-> inputs and records the source commit plus transport SHA-256.
+> The `bundle_*.zip` files present at the time of this audit predate the R4
+> methodology/provenance changes. Do not dispatch that snapshot. After
+> independent review, commit the reviewed source, then rebuild from that clean
+> commit. Dispatch only a complete ten-ZIP set listed in `bundle_sha256.txt`,
+> whose `source_commit` equals the reviewed commit and whose SHA-256 entries all
+> verify. The builder reads the explicit tracked `bundle_source_files.txt`,
+> refuses dirty runtime inputs, invalidates the old manifest before replacing
+> any ZIP, and publishes a new manifest only after the complete set is built.
 >
 > R4 adds: true finalist-only 5-fold × 2-repeat **state-grouped** CV; fold-local
 > scaling; an immutable outer-test firewall; state-first cross-seed bootstrap and
@@ -182,8 +185,9 @@ while the previous one ablates.
   window at load time (`core/dataset._raw_to_space_crop`, an exact `interp1`
   mirror). The measurement model now lives entirely at load time and can change
   **without regenerating**. Storage is ~neutral (`DimSpace ≈ 2.2·DimAcel`).
-- **Noise.** Generation is noise-free; the ablation injects a uniform 5%
-  multiplicative noise on **every** channel at load time (`all_mult`). Adding noise
+- **Noise.** Generation is noise-free; the ablation injects zero-mean Gaussian
+  multiplicative noise with pointwise σ = 5% of `|signal|` on **every** channel
+  at load time (`all_mult`). Adding noise
   before vs after the interpolation is *not* equivalent (time-domain noise becomes
   coloured + speed-dependent: ≈0.67× variance but ≈1.46× the energy surviving PAA).
 - **EOVs are anchored** (`docs/track_eov_sampling_spec.md`): persistent conditions

@@ -287,6 +287,24 @@ The probe (low mass, locked low speed) is a *different operating condition* than
   - **🔧 FOLLOW-UP 2026-07-23 — `gen_rule_ver` added to the fingerprint (caught while planning the 3-PC dispatch; would have silently corrupted it).** The r3 MATLAB fixes changed generation RULES while leaving every knob VALUE untouched (`hang_foul_mult` is still 3.0; only the odds arithmetic changed) — so `gen_fingerprint` and `gen_schema` were both UNCHANGED across the fix. Consequence: extracting the new bundle over a pre-fix partial folder (e.g. the user's s15 stopped at state 244) would pass the resume guard and continue, MIXING 9:1-drawn states 1–243 with 3:1-drawn states 244+ in one dataset — exactly the silently-mixed-code-versions failure the R2 schema guard exists to prevent, re-entering through the value-vs-rule gap. FIX: `gen_rule_ver = 'r3-2026-07-22-hangodds3to1-patchgovern-b66bounded'` added to the fingerprint config (and to case_info for the human record) → the fingerprint now moves with BEHAVIOUR, so any pre-fix partial folder ABORTS on resume. **Rule going forward: bump `gen_rule_ver` whenever generation behaviour changes without a knob value changing.** Deliberately NOT a `gen_schema` bump: that is the global data contract and would invalidate every COMPLETE pre-fix dataset (s0/s11–s14/s21/s22 are provably unaffected in their SIGNALS — the track rules never fire without track EOV, and the B66 mask touches only the logged contact diagnostics, which passed with >3× margin). Complete datasets keep loading (the loader reads the stored fingerprint, never recomputes it); only RESUME of a partial folder is blocked. **Dispatch consequence: every not-yet-COMPLETE folder on every PC must restart in a fresh folder, regardless of rung**; complete datasets stand.
   - Checks after all fixes: py_compile all edited files OK; check_paa 18/18; check_loader_provenance 45/45; check_protocol_hash ALL PASS; check_cache_provenance ALL PASS; check_split_grouping ALL PASS; MATLAB smoke_audit ALL PASS; smoke_stage3/smoke_geometry rerun in progress; bundles rebuilt from the committed tree with SHA manifest (see commit).
 
+- **EXTERNAL AUDIT ROUND 4 (Codex) — IMPLEMENTED 2026-07-25.** The executable
+  result and honest publication gate are in `docs/audit_r4_results.md`; source
+  checkpoint `f805fbe`. Supersedes the R3 “queued” status for finalist inference
+  and provenance. Implemented: finalist-only 5-fold × 2-repeat state-grouped CV
+  with fold-local scaling/frozen HPO; immutable outer-test firewall; top-5 +
+  per-architecture finalists; state-first cross-seed bootstrap and aligned paired
+  contrasts; state-first disentanglement; exact pair/seed/full-array guards;
+  full source re-hash on cache reuse; canonical Optuna protocol records;
+  weight/scaler/best-trial cryptographic linkage and idempotent export; exact
+  Python/CUDA environment lock; nondeterministic PyTorch operations hard-fail;
+  MATLAB R2025b gate; contact-refinement harness; tracked bundle source manifest.
+  **Still empirical, not “fixed by code”:** execute s23#24 and s15#244 at
+  1/0.5/0.25 ms; run the actual campaign; nuisance-only has only one outer state
+  and remains exploratory; current multiplicative noise is a controlled stress
+  model rather than a datasheet additive floor. The paper claim is continuous
+  support-stiffness-loss estimation/localisation under the simulated distribution,
+  not binary detection or global sensor/architecture optimality.
+
 ---
 
 ## Reference shortlist

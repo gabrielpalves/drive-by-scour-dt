@@ -1510,7 +1510,8 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
         # Reproduce (approximately) the legacy baked model: mult noise, WHEELS only.
         add_mult(WHEELS)
     elif sn['mode'] == 'all_mult':
-        # Uniform multiplicative 5% on EVERY channel. Use on NOISE-FREE data
+        # Channel-symmetric Gaussian multiplicative noise on EVERY channel
+        # (pointwise sigma = desvio*|signal|). Use on NOISE-FREE data
         # (varVST / new stages) to make all channels equally noisy. Do NOT use on
         # legacy baked-wheel data (varNVST Stage-0/1) - the wheels would be
         # DOUBLE-noised; use 'sprung_mult' there instead.

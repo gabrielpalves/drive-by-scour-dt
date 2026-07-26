@@ -26,6 +26,9 @@ core/protocol.py
 core/statistical_inference.py
 core/task.py
 core/utils.py
+docs/audit_r4_results.md
+docs/framework_rationale.md
+docs/track_eov_sampling_spec.md
 environment/campaign-py313-cu128.json
 make_micro_smoke.py
 plotting/aggregate_ablation.py

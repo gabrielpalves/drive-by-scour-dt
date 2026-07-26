@@ -265,6 +265,7 @@ required_new = {
     "scour_MATLAB/contact_closure_study.m",
     "scour_MATLAB/smoke_contact_closure.m",
     "core/artifact_provenance.py",
+    "docs/audit_r4_results.md",
 }
 if builder.is_file():
     builder_text = builder.read_text(encoding="utf-8")
@@ -281,6 +282,13 @@ if builder.is_file():
     check("bundle source manifest is tracked and explicit",
           "bundle_source_files.txt" in builder_text
           and "multidamage_stage2_bundle.zip" not in builder_text)
+    invalidate_at = builder_text.find("os.replace(sha_manifest, invalid_manifest)")
+    first_zip_publish_at = builder_text.find("os.replace(tmp_out, out)")
+    manifest_publish_at = builder_text.find(
+        "os.replace(sha_manifest_tmp, sha_manifest)")
+    check("bundle-set publication is fail-closed across interruption",
+          0 <= invalidate_at < first_zip_publish_at < manifest_publish_at
+          and "complete_bundle_count" in builder_text)
 else:
     # Stage bundles intentionally do not ship their own bundle builder/source
     # ZIP; runtime control tests above remain applicable there.
