@@ -77,14 +77,6 @@ def n_outputs(config: dict) -> int:
     return int(60 / disc) + 1
 
 
-# Label ranges [%] — pre-registered loss/objective constants (audit r3,
-# 2026-07-22). Scour severity is drawn on 0-60 %; bearing fixity on 0-95 %
-# (phi ~ U(0, 0.95) -> label in %). Recorded in TRAIN_PROTOCOL, so any change
-# moves the protocol hash.
-SCOUR_RANGE_PCT   = 60.0
-BEARING_RANGE_PCT = 95.0
-
-
 class WeightedHeadMSE(nn.Module):
     """Range-normalized multi-task MSE (audit r3, 2026-07-22).
 
@@ -122,16 +114,54 @@ class WeightedHeadMSE(nn.Module):
         return (self.w.to(pred.device) * (pred - target) ** 2).mean()
 
 
-def make_criterion(config) -> nn.Module:
-    """Cross-entropy for classification; MSE for regression — range-normalized
-    per head when bearing heads share the network with scour heads."""
+def make_criterion(config: dict, policy: dict) -> nn.Module:
+    """Build the task loss from the executable TRAIN_PROTOCOL specification."""
+    required_branches = {
+        "classification",
+        "regression_without_bearing_heads",
+        "regression_with_bearing_heads",
+    }
+    if not isinstance(policy, dict) or set(policy) != required_branches:
+        got = set(policy) if isinstance(policy, dict) else type(policy).__name__
+        raise ValueError(
+            "loss policy must define exactly "
+            f"{sorted(required_branches)!r}; got {got!r}.")
+
     if not is_regression(config):
+        branch = "classification"
+    elif n_bearing_outputs(config) > 0:
+        branch = "regression_with_bearing_heads"
+    else:
+        branch = "regression_without_bearing_heads"
+    spec = policy[branch]
+    if not isinstance(spec, dict) or "kind" not in spec:
+        raise ValueError(f"loss policy branch {branch!r} needs a mapping with 'kind'.")
+
+    kind = spec["kind"]
+    if kind == "cross_entropy":
+        if set(spec) != {"kind"}:
+            raise ValueError("cross_entropy loss accepts only the 'kind' field.")
         return nn.CrossEntropyLoss()
-    nb = n_bearing_outputs(config)
-    if nb == 0:
-        return nn.MSELoss()   # all heads share the scour range: equal weights
-    ranges = [SCOUR_RANGE_PCT] * n_scour_outputs(config) + [BEARING_RANGE_PCT] * nb
-    return WeightedHeadMSE(ranges)
+    if kind == "mse":
+        if set(spec) != {"kind"}:
+            raise ValueError("mse loss accepts only the 'kind' field.")
+        return nn.MSELoss()
+    if kind == "inverse_range_squared_mse":
+        if set(spec) != {"kind", "head_ranges_pct"}:
+            raise ValueError(
+                "inverse_range_squared_mse requires exactly kind and "
+                "head_ranges_pct.")
+        head_ranges = spec["head_ranges_pct"]
+        if not isinstance(head_ranges, dict) or set(head_ranges) != {
+                "scour", "bearing"}:
+            raise ValueError(
+                "head_ranges_pct must define exactly 'scour' and 'bearing'.")
+        ranges = (
+            [head_ranges["scour"]] * n_scour_outputs(config)
+            + [head_ranges["bearing"]] * n_bearing_outputs(config)
+        )
+        return WeightedHeadMSE(ranges)
+    raise ValueError(f"unsupported loss kind {kind!r} in branch {branch!r}.")
 
 
 def label_dtype(config) -> torch.dtype:
@@ -139,17 +169,36 @@ def label_dtype(config) -> torch.dtype:
     return torch.float32 if is_regression(config) else torch.long
 
 
-def objective_value(metrics: dict) -> float:
-    """Scalar Optuna minimises — the pre-registered PRIMARY estimand.
+def objective_value(metrics: dict, config: dict, policy: dict) -> float:
+    """Return the protocol-selected scalar that Optuna minimises.
 
-    Audit r3 (2026-07-22): on bearing rungs this is the SCOUR-head MSE
-    ('scour_mse'), NOT the all-head aggregate — scour is the scientific
-    target; bearing heads exist to explain away their share of the response
-    and are reported as a secondary metric, never selected on. Rungs without
-    bearing heads (and classification) keep the aggregate, which is identical
-    to the scour MSE there. Recorded in TRAIN_PROTOCOL -> protocol hash.
+    ``policy`` is ``TRAIN_PROTOCOL["objective"]``. It is deliberately passed
+    by the trainer rather than imported here (which would create a circular
+    import). The policy is executable data: regression tasks with bearing
+    heads require their registered metric, while all other tasks require the
+    default metric. Missing metrics fail closed instead of silently falling
+    back to the all-head aggregate on a malformed bearing evaluation.
     """
-    return metrics.get("scour_mse", metrics["mse"])
+    required_branches = {"regression_with_bearing_heads", "default"}
+    if not isinstance(policy, dict) or set(policy) != required_branches:
+        got = set(policy) if isinstance(policy, dict) else type(policy).__name__
+        raise ValueError(
+            "objective policy must define exactly "
+            f"{sorted(required_branches)!r}; got {got!r}.")
+    if not all(isinstance(metric, str) and metric for metric in policy.values()):
+        raise ValueError("objective policy metric names must be non-empty strings.")
+
+    branch = (
+        "regression_with_bearing_heads"
+        if is_regression(config) and n_bearing_outputs(config) > 0
+        else "default"
+    )
+    metric = policy[branch]
+    if metric not in metrics:
+        raise KeyError(
+            f"objective policy requires metric {metric!r} for branch {branch!r}, "
+            f"but evaluation returned {sorted(metrics)!r}.")
+    return metrics[metric]
 
 
 @torch.no_grad()

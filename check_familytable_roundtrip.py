@@ -31,8 +31,8 @@ def check(name, ok, detail=""):
 
 
 if not os.path.exists(os.path.join(SMOKE_DIR, 'damage_states.mat')):
-    print(f"  [SKIP] {SMOKE_DIR} not found — run smoke_familytable in MATLAB first.")
-    sys.exit(0)
+    print(f"  [FAIL] {SMOKE_DIR} not found — run smoke_familytable in MATLAB first.")
+    sys.exit(2)
 
 table = read_state_table(SMOKE_DIR)
 check("REAL MATLAB cellstr family parses", table['family'] == EXPECTED_FAMILY,

@@ -248,3 +248,6 @@ multidamage_*.zip
 
 # Root-level temporary smoke/validation scripts
 /_*.py
+
+# Isolated mutation-guard sandboxes (check_*_mutation_guards.py)
+.audit_tmp/

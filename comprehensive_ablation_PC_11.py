@@ -82,6 +82,7 @@ def make_config(arch: dict, dofs: list[int], seed: int) -> dict:
     dof_str = "_".join(str(d) for d in dofs)
     return {
         "name":          f"{arch['name_short']}_DOFs_{dof_str}_seed{seed}",
+        "seed":          seed,
         "method":        arch["method"],
         "dofs":          list(dofs),
         "discretization": DISCRETIZATION,

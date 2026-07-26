@@ -83,9 +83,7 @@ from core.models     import build_model
 from core.protocol   import (build_protocol_descriptors, protocol_hash,
                              short_hash, descriptor_diff)
 from core.statistical_inference import (
-    FoldStandardizedDataset,
     assemble_state_repeat_seed_tensor,
-    channel_standardization_stats,
     finalist_cv_strata,
     frozen_checkpoint_epoch_count,
     hierarchical_state_seed_bootstrap,
@@ -100,7 +98,12 @@ from training.pipeline import (
     execute_ablation_pipeline,
     verify_digital_twin_package,
 )
-from training.trainer  import DEVICE, TRAIN_PROTOCOL, SEARCH_SPACE
+from training.trainer  import (
+    DEVICE,
+    TRAIN_PROTOCOL,
+    SEARCH_SPACE,
+    fit_predict_finalist_fold,
+)
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -363,8 +366,9 @@ def _with_run_tag(stem: str) -> str:
 # output name via _cfg_suffix, so a re-run on a reused results/DB directory can
 # NEVER resume a pre-audit Optuna study or reuse an old champion manifest (the
 # pipeline uses load_if_exists=True, and the study name is the only key). Bumped
-# in lockstep with the MATLAB gen_schema (audit-2026-07-19-r8) and the
-# core.dataset `_gs5` cache tag whenever the data or protocol changes. R5 = the
+# in lockstep with the MATLAB gen_schema and the protocol contract whenever
+# generated data or selection semantics change. The cache tag advances only
+# when feature bytes change. R5 = the
 # 3-way train/val/test split + reflect-fold profile + canonical fingerprint.
 # R6 (reviewer-hardening) = profile-asset hash + loader finiteness/count guards +
 # inner-val pair selection. R7 (Codex re-review of R6) = STRICT test-report firewall
@@ -376,7 +380,11 @@ def _with_run_tag(stem: str) -> str:
 # (this tag is INSIDE it), Feature A state families + stratified split (state
 # counts changed), Feature B deployment selection, MATLAB resume full payload
 # validation. r7 datasets/studies are a different design and must be orphaned.
-SCHEMA_TAG = "gs5a20260719r8"
+# R9 (2026-07-25, audit-R5 convergence) = deliberate full regeneration and a
+# single unconditional generator-behaviour key. Feature bytes are unchanged,
+# so CACHE_SCHEMA_TAG remains _gs6; source provenance still rejects every R8
+# cache, while this tag and expected_gen_schema move every study/artifact name.
+SCHEMA_TAG = "gs6a20260725r9"
 
 # Load-time sensor noise (None = the noise-free chain default). Generation is
 # NOISE-FREE from stage1_crack onward (A00 use_signal_noise=false; folder tag
@@ -1236,7 +1244,8 @@ def summarize() -> tuple[list[int], str]:
         {"stage": STAGE, "architecture": win["architecture"], "dofs": win["dofs"],
          "selected_pair": selected_pair,
          "inner_val_mse": win.get("inner_val_mse"),
-         "selection_metric": "median_inner_val_mse (scour-primary objective)",
+         # Exact executable policy; never duplicate it as drift-prone prose.
+         "selection_metric": TRAIN_PROTOCOL["objective"],
          "deployment_selection": STAGE in DEPLOYMENT_SELECTION_STAGES,
          # Unified protocol hash (2026-07-19): binds this frozen selection to
          # the exact protocol (and dataset fingerprint) it was made under.
@@ -1514,66 +1523,18 @@ def _fit_predict_finalist_fold(
     seed: int,
     n_epochs: int | None = None,
 ) -> dict[str, np.ndarray]:
-    """Fixed-hyperparameter refit on one development-only CV fold."""
+    """Delegate to the single shared production finalist-fold implementation."""
 
-    if str(cfg.get("method", "")).lower() != "paa":
-        raise RuntimeError(
-            "finalist repeated CV currently requires affine-standardised PAA "
-            "features; add an explicit fold-scaler implementation before using "
-            f"method={cfg.get('method')!r}"
-        )
-    if n_epochs is None:
-        n_epochs = EPOCHS
-    n_epochs = int(n_epochs)
-    if not (1 <= n_epochs <= EPOCHS):
-        raise ValueError(
-            f"finalist-CV refit epochs must be in [1, {EPOCHS}], got {n_epochs}"
-        )
-    mean, scale = channel_standardization_stats(X, fold.train_idx)
-    set_global_seed(seed)  # reset before every fold: order-independent and paired
-    train_loader = DataLoader(
-        FoldStandardizedDataset(
-            X, y, fold.train_idx, mean, scale,
-            label_dtype=task.label_dtype(cfg),
-        ),
-        batch_size=TRAIN_PROTOCOL["batch_size"], shuffle=True, num_workers=0,
-    )
-    val_loader = DataLoader(
-        FoldStandardizedDataset(
-            X, y, fold.val_idx, mean, scale,
-            label_dtype=task.label_dtype(cfg),
-        ),
-        batch_size=TRAIN_PROTOCOL["batch_size"], shuffle=False, num_workers=0,
-    )
-    model, _ = build_model(cfg, params, X.shape, DEVICE)
-    criterion = task.make_criterion(cfg).to(DEVICE)
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=params["lr"],
-        weight_decay=params.get("weight_decay", 1e-4),
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=EPOCHS
-    )
-    # Fixed epoch budget: the held-out CV fold is never reused for early
-    # stopping. Hyperparameters were already frozen by the canonical inner-val.
-    for _ in range(n_epochs):
-        model.train()
-        for batch_x, batch_y in train_loader:
-            optimizer.zero_grad()
-            loss = criterion(model(batch_x.to(DEVICE)), batch_y.to(DEVICE))
-            loss.backward()
-            optimizer.step()
-        scheduler.step()
-
-    model.eval()
-    predictions, truth = [], []
-    with torch.no_grad():
-        for batch_x, batch_y in val_loader:
-            predictions.append(model(batch_x.to(DEVICE)).cpu().numpy())
-            truth.append(batch_y.numpy())
-    return per_state_regression_metrics(
-        np.vstack(predictions), np.vstack(truth),
-        np.asarray(groups)[fold.val_idx],
+    return fit_predict_finalist_fold(
+        cfg,
+        params,
+        X,
+        y,
+        groups,
+        fold,
+        seed,
+        n_epochs=n_epochs,
+        max_epochs=EPOCHS,
         n_scour_heads=len(TARGET_SUPPORTS),
     )
 
@@ -2511,7 +2472,7 @@ if __name__ == "__main__":
     # Persist the full hashed descriptor FIRST — even a crashed run leaves an
     # auditable record of the protocol it started under (2026-07-19).
     _write_protocol_record()
-    set_global_seed(SEEDS[0])
+    set_global_seed(SEEDS[0], TRAIN_PROTOCOL["determinism"])
 
     # Single-DOF sweep + architecture selection run ONLY at the selection stage
     # (audit R6 C9). Later rungs read the champion arch from the manifest and

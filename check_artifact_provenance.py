@@ -45,6 +45,19 @@ def rejects(name: str, fn) -> None:
         check(name, False)
 
 
+def rejects_with_message(name: str, fn, message: str) -> None:
+    """Require the intended fail-closed error, not an incidental exception."""
+
+    try:
+        fn()
+    except RuntimeError as exc:
+        check(name, message in str(exc))
+    except Exception:
+        check(name, False)
+    else:
+        check(name, False)
+
+
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 config = {
     "name": "artifact-fixture",
@@ -158,11 +171,32 @@ with tempfile.TemporaryDirectory(prefix="artifact-prov-") as tmp:
               study, config, str(output)
           )["best_trial_number"] == study.best_trial.number)
 
+    metadata_path = output / "DT_metadata.json"
+    metadata_original = metadata_path.read_text(encoding="utf-8")
+    missing_field = json.loads(metadata_original)
+    del missing_field["scaler_sha256"]
+    metadata_path.write_text(json.dumps(missing_field), encoding="utf-8")
+    rejects_with_message(
+        "standalone verifier rejects a missing required provenance field",
+        lambda: verify_standalone_dt_package(
+            str(output / "DT_champion_weights.pth"),
+            str(metadata_path),
+            str(output / "DT_scaler.pkl"),
+        ),
+        "metadata lacks provenance fields",
+    )
+    metadata_path.write_text(metadata_original, encoding="utf-8")
+
     champion = output / "DT_champion_weights.pth"
     original = champion.read_bytes()
     corrupt = bytearray(original)
     corrupt[-1] ^= 1
     champion.write_bytes(corrupt)
+    rejects("standalone verifier rejects one-byte champion tamper",
+            lambda: verify_standalone_dt_package(
+                str(champion), str(metadata_path),
+                str(output / "DT_scaler.pkl"),
+            ))
     rejects("one-byte champion tamper rejected",
             lambda: verify_digital_twin_package(study, config, str(output)))
     champion.write_bytes(original)
@@ -172,17 +206,32 @@ with tempfile.TemporaryDirectory(prefix="artifact-prov-") as tmp:
     scaler_corrupt = bytearray(scaler_bytes)
     scaler_corrupt[-1] ^= 1
     exported_scaler.write_bytes(scaler_corrupt)
+    rejects("standalone verifier rejects one-byte scaler tamper",
+            lambda: verify_standalone_dt_package(
+                str(champion), str(metadata_path), str(exported_scaler),
+            ))
     rejects("one-byte scaler tamper rejected",
             lambda: verify_digital_twin_package(study, config, str(output)))
     exported_scaler.write_bytes(scaler_bytes)
 
-    metadata_path = output / "DT_metadata.json"
-    metadata_original = metadata_path.read_text(encoding="utf-8")
     altered = json.loads(metadata_original)
     altered["protocol_descriptor"]["core"]["protocol_version"] = 999
     metadata_path.write_text(json.dumps(altered), encoding="utf-8")
+    rejects("standalone verifier rejects descriptor/hash disagreement",
+            lambda: verify_standalone_dt_package(
+                str(champion), str(metadata_path), str(exported_scaler),
+            ))
     rejects("metadata protocol-descriptor tamper rejected",
             lambda: verify_digital_twin_package(study, config, str(output)))
+    metadata_path.write_text(metadata_original, encoding="utf-8")
+
+    altered = json.loads(metadata_original)
+    altered["scaler_filename"] = "different_scaler.pkl"
+    metadata_path.write_text(json.dumps(altered), encoding="utf-8")
+    rejects("standalone verifier rejects scaler filename substitution",
+            lambda: verify_standalone_dt_package(
+                str(champion), str(metadata_path), str(exported_scaler),
+            ))
     metadata_path.write_text(metadata_original, encoding="utf-8")
 
     altered = json.loads(metadata_original)

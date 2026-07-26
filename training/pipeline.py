@@ -39,7 +39,12 @@ from core.utils    import set_global_seed, DOF_NAME_TO_IDX
 from plotting.confusion        import plot_cached_confusion_matrix
 from plotting.robustness_plots import generate_optuna_robustness_plots, plot_stochastic_summary
 from training.robustness       import evaluate_stochastic_robustness, evaluate_parametric_robustness
-from training.trainer          import Objective, print_best_callback, DEVICE
+from training.trainer          import (
+    DEVICE,
+    TRAIN_PROTOCOL,
+    Objective,
+    print_best_callback,
+)
 
 # Silence Optuna's per-trial log spam; callback handles champion announcements
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -317,7 +322,7 @@ def execute_ablation_pipeline(
                     'Stochastic_Mean_MSE', 'Stochastic_Std_MSE', 'UCB_95_MSE'.
     """
     os.makedirs(cache_dir_name, exist_ok=True)
-    set_global_seed(optuna_seed)
+    set_global_seed(optuna_seed, TRAIN_PROTOCOL["determinism"])
 
     all_results: list[dict] = []
 

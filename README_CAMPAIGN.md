@@ -23,6 +23,30 @@ Stage-2 pilot are **superseded** (kept only as a historical record under `result
 > MATLAB contact time-step closure harness. The complete evidence and remaining
 > gates are in `docs/audit_r4_results.md`.
 >
+> R5 makes the complete training policy executable and hash-bound: objective,
+> multi-head loss, optimiser, scheduler, required trial seed and deterministic
+> runtime are consumed from `TRAIN_PROTOCOL`, rather than duplicated in prose.
+> It also consolidates generator identity at R9 and mutation-tests the R4
+> inference/provenance guards. Before rebuilding dispatch bundles, run
+> `python benchmark_r5_compute.py` from the clean reviewed commit. The benchmark
+> uses an explicitly non-scientific legacy cache only as an immutable compute
+> fixture, runs 100 useful production-path Optuna trials plus one shared
+> finalist-fold refit, and writes timing/provenance only under `.audit_tmp`.
+> Optuna trial-value logging is suppressed; restart timing is cumulative but an
+> abrupt-stop heartbeat is only a lower bound at a nominal cadence. Recovery is
+> explicit and evidence-preserving, and the completed receipt authenticates
+> every HPO/refit artifact plus an immutable logical SQLite backup. Never cite
+> its objective values or reuse its study for model selection.
+> The lightweight `python check_benchmark_contract.py` belongs to the fast
+> preflight suite on every campaign PC. In contrast,
+> `python check_r4_mutation_guards.py`,
+> `python check_training_policy_mutation_guards.py` and the real
+> `python benchmark_r5_compute.py` are audit-only gates run once against the
+> clean reviewed source commit; they are shipped solely for reproducibility.
+> Their commit-bound evidence and the dispatch verdict belong in
+> `docs/audit_r5_results.md`. While that report says `DISPATCH BLOCKED`, all
+> existing bundle ZIPs remain stale.
+>
 > Two empirical gates remain before confirmatory publication claims: run the
 > 1/0.5/0.25-ms contact-closure study on the regenerated s23 state 24 and s15
 > state 244, and complete the actual campaign. The six `nuisance_only` states
@@ -45,7 +69,8 @@ Stage-2 pilot are **superseded** (kept only as a historical record under `result
 > the pre-mass-fix `CHAMPION_ARCH` must be re-selected from the new s0 run.
 > **Before generating anything:** rebuild bundles from this tree
 > (`python build_stage_bundles.py`), run `smoke_audit.m`, `smoke_stage3.m`,
-> `smoke_geometry.m` (MATLAB) and `python check_split_grouping.py` — all must
+> `smoke_geometry.m` (MATLAB), `python check_generation_contract.py`, and
+> `python check_split_grouping.py` — all must
 > print ALL PASS. If a PC already started from a 2026-07-16 bundle, stop it and
 > discard.
 >
@@ -81,6 +106,9 @@ Stage-2 pilot are **superseded** (kept only as a historical record under `result
 >   aborts resume if it differs; the Python loader requires `gen_schema` +
 >   `contact_log` in every `.mat`. Caches are tagged `_gs6` (all older tags
 >   orphaned; gs6 = true Keogh PAA + per-DOF-paired noise, audit r3 2026-07-22).
+>   R9 deliberately orphans every earlier generator schema and carries exactly
+>   one unconditional `generation_behavior_version` inside the fingerprint;
+>   bump it whenever generation rules change without a knob-value change.
 > - **Profile fix (my R2 bug):** the fixed-baseline profile is now stretched
 >   (not wrapped) onto the live track, so L99.6/fixed no longer has a seam that
 >   caused wheel-rail contact loss. `smoke_geometry` checks contact at 70/80/90
@@ -157,15 +185,20 @@ The R4 MCSE report gives the next-regeneration recommendation (design floor:
 
 ## Per-bundle run order
 
-1. **MATLAB — generate.** Open `scour_MATLAB/A00_Run.m` and run it. `STAGE` is
+1. **Once per reviewed source — verify MATLAB/Python metadata encoding.** Run
+   `smoke_familytable` in MATLAB, then
+   `python check_familytable_roundtrip.py`. The normal command is fail-closed:
+   a missing genuine-MATLAB artifact is a failure, not a skipped pass.
+2. **MATLAB — generate.** Open `scour_MATLAB/A00_Run.m` and run it. `STAGE` is
    already set and `use_signal_noise = false` (noise is a load-time model).
    Output → `scour_MATLAB/Results/<case>/`; move it under `data/`.
-2. **Once per campaign — verify the transform.** After the FIRST state of the
+3. **Once per campaign — verify the transform.** After the FIRST R9 state of the
    first rung exists:
    `smoke_raw_parity('Results/<case>')` in MATLAB, then
    `python check_raw_parity.py "scour_MATLAB/Results/<case>"`.
-   **Must print `PARITY PASS`** (max|MATLAB−Python| < 1e-12) before the long runs.
-3. **Python — ablate.** `python comprehensive_ablation_multidamage.py`
+   **Must exit zero and print `PARITY PASS`**
+   (max|MATLAB−Python| < 1e-12) before the long runs.
+4. **Python — ablate.** `python comprehensive_ablation_multidamage.py`
    (STAGE + SENSOR_NOISE preset), with 100 useful Optuna trials × 3 seeds per
    configuration. `s0` runs the four-architecture × 28-pair factorial (plus a
    diagnostic single-DOF sweep); `s16/s23` repeat the full joint factorial for

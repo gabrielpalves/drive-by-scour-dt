@@ -83,6 +83,23 @@ regeneration with more independent nuisance states).
   historical ZIP. The builder refuses dirty source/manifest inputs and records
   both source commit and transport SHA-256.
 
+### Intentional deployment-package compatibility break
+
+- R4 deliberately makes every pre-R4 standalone digital-twin package
+  unloadable. `digital_twin.assets.DigitalAsset` now calls the fail-closed
+  standalone-package verifier, which requires the champion-weights and scaler
+  SHA-256 digests, scaler filename, protocol hash and canonical protocol
+  descriptor. Older packages do not carry that provenance and are rejected
+  rather than silently trusted.
+- This is an intentional breaking change, not a migration defect: all existing
+  packages also predate the corrected bridge-mass campaign and are invalid for
+  scientific reuse. They must be regenerated from a verified post-R4 champion;
+  missing fields must never be backfilled by assertion alone.
+- The prototype-twin figures that use a synthetic observation model do not
+  consume these standalone packages. A broader audit of the digital-twin layer
+  remains separate from the present MATLAB-generation and ablation-methodology
+  audit.
+
 ## Executed evidence on this machine
 
 Environment observed: Python 3.13.3; Torch 2.7.0+cu128; CUDA 12.8; MATLAB

@@ -28,42 +28,110 @@ import torch
 # 1. Reproducibility
 # ──────────────────────────────────────────────────────────────────────────────
 
-def set_global_seed(seed: int = 42) -> None:
+DETERMINISM_POLICY = {
+    # Executable JSON-compatible inputs. TRAIN_PROTOCOL embeds this exact
+    # mapping, so the unified protocol hash describes runtime behaviour rather
+    # than a prose promise that can drift from the implementation.
+    "python_random": "seed",
+    "python_hash_seed_environment": "seed",
+    "numpy_random": "seed",
+    "torch_cpu_random": "seed",
+    "torch_cuda_random": "all_devices",
+    "cudnn_deterministic": True,
+    "cudnn_benchmark": False,
+    "torch_deterministic_algorithms": True,
+    "torch_deterministic_warn_only": False,
+    "cublas_workspace_config": ":4096:8",
+}
+
+
+def _validated_seed(seed: int) -> int:
+    """Return an integer accepted by every registered campaign RNG."""
+
+    if isinstance(seed, (bool, np.bool_)) or not isinstance(
+            seed, (int, np.integer)):
+        raise TypeError(f"seed must be an integer, got {type(seed).__name__}")
+    seed = int(seed)
+    # numpy.random.seed is the narrowest API in the registered stack.
+    if not 0 <= seed <= 2**32 - 1:
+        raise ValueError("seed must lie in [0, 2**32 - 1]")
+    return seed
+
+
+def _validate_determinism_policy(policy: dict) -> None:
+    required = set(DETERMINISM_POLICY)
+    if not isinstance(policy, dict) or set(policy) != required:
+        got = set(policy) if isinstance(policy, dict) else type(policy).__name__
+        raise ValueError(
+            "determinism policy must define exactly "
+            f"{sorted(required)!r}; got {got!r}.")
+    for key in (
+        "python_random",
+        "python_hash_seed_environment",
+        "numpy_random",
+        "torch_cpu_random",
+    ):
+        if policy[key] != "seed":
+            raise ValueError(
+                f"unsupported determinism policy {key}={policy[key]!r}")
+    if policy["torch_cuda_random"] != "all_devices":
+        raise ValueError(
+            "torch_cuda_random must be 'all_devices' for the campaign")
+    for key in (
+        "cudnn_deterministic",
+        "cudnn_benchmark",
+        "torch_deterministic_algorithms",
+        "torch_deterministic_warn_only",
+    ):
+        if not isinstance(policy[key], bool):
+            raise ValueError(f"determinism policy {key} must be boolean")
+    workspace = policy["cublas_workspace_config"]
+    if not isinstance(workspace, str) or not workspace:
+        raise ValueError(
+            "cublas_workspace_config must be a non-empty string")
+
+
+def set_global_seed(
+    seed: int,
+    policy: dict = DETERMINISM_POLICY,
+) -> None:
+    """Seed the registered RNGs and apply the executable determinism policy.
+
+    The active campaign passes ``TRAIN_PROTOCOL["determinism"]`` explicitly.
+    The default preserves older utility callers while pointing at the same
+    canonical mapping; there is deliberately no default *seed*.
     """
-    Lock all random-number generators to `seed` for repeatability within the
-    pinned campaign software/hardware environment.
 
-    Covers Python stdlib, NumPy, PyTorch CPU, and every CUDA device.
-    Also forces deterministic cuDNN kernels and disables its auto-tuner -
-    this trades a small throughput cost for bitwise-identical runs.
+    seed = _validated_seed(seed)
+    _validate_determinism_policy(policy)
 
-    Call once at the top of the ablation notebook and once at the start of
-    every Optuna trial (inside train_and_evaluate) to guard against state
-    accumulated between trials.
-
-    Args:
-        seed (int): Any non-negative integer. Default 42.
-    """
     random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    # This controls child interpreters; Python's current hash salt is fixed at
+    # interpreter startup, so campaign logic never relies on salted hash().
+    os.environ["PYTHONHASHSEED"] = str(seed)
 
-    # cuBLAS reproducibility (CUDA >= 10.2). Must be set BEFORE the first
-    # CUDA op of the process, hence here at the top of set_global_seed.
-    os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+    # cuBLAS reads this before its first CUDA operation. Never silently preserve
+    # a conflicting value supplied by the shell or another entry point.
+    required_workspace = policy["cublas_workspace_config"]
+    actual_workspace = os.environ.setdefault(
+        "CUBLAS_WORKSPACE_CONFIG", required_workspace)
+    if actual_workspace != required_workspace:
+        raise RuntimeError(
+            "CUBLAS_WORKSPACE_CONFIG conflicts with the registered "
+            f"determinism policy: {actual_workspace!r} != "
+            f"{required_workspace!r}")
 
     np.random.seed(seed)
-
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)           # multi-GPU setups
+    torch.cuda.manual_seed_all(seed)
 
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark     = False
-
-    # Reviewer-facing guarantee: a nondeterministic CUDA/CPU operation is fatal,
-    # never merely warned about. The campaign environment pins PyTorch 2.7, so
-    # silently falling back for older releases would contradict the lock.
-    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.backends.cudnn.deterministic = policy["cudnn_deterministic"]
+    torch.backends.cudnn.benchmark = policy["cudnn_benchmark"]
+    torch.use_deterministic_algorithms(
+        policy["torch_deterministic_algorithms"],
+        warn_only=policy["torch_deterministic_warn_only"],
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

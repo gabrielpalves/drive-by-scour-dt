@@ -307,7 +307,10 @@ def build_protocol_descriptors(
     from core.dataset import CACHE_SCHEMA_TAG
 
     core = {
-        "protocol_version": 2,          # v2: statistical-inference policy added
+        # v3: structured executable training/objective policy. This schema
+        # cannot be confused with v2 descriptors whose selection metric was
+        # duplicated as prose.
+        "protocol_version": 3,
         "code": {
             # Code-version markers: the driver/loader schema tag, the generator
             # schema the loader requires, and the cache contract tag. Bumping any
@@ -340,9 +343,9 @@ def build_protocol_descriptors(
         # use_lstm) with an unchanged name must still change the protocol.
         "architectures": architectures,
         "selection": {
-            # Audit r3 (2026-07-22): objective_value is SCOUR-primary on
-            # bearing rungs (bearing reported, never selected on).
-            "selection_metric":       "median_inner_val_mse (scour-primary objective)",
+            # Embed the exact executable objective policy instead of a second
+            # prose description that could drift from TRAIN_PROTOCOL.
+            "selection_metric":       train_protocol["objective"],
             "extra_pairs":            [sorted(int(d) for d in p) for p in extra_pairs],
             "control_sets":           [sorted(int(d) for d in c) for c in control_sets],
             "control_arch_policy":    (

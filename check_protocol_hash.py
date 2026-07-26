@@ -245,9 +245,27 @@ try:
     core0, full0 = build_protocol_descriptors(**_args(ds_a))
     ch0, fh0 = protocol_hash(core0), protocol_hash(full0)
 
+    check("structured protocol schema is version 3",
+          core0["protocol_version"] == 3)
+    check("selection metric is the executable objective policy",
+          core0["selection"]["selection_metric"] == TRAIN_PROTOCOL["objective"])
+
     core0b, full0b = build_protocol_descriptors(**_args(ds_a))
     check("rebuild with identical inputs -> identical hashes",
           protocol_hash(core0b) == ch0 and protocol_hash(full0b) == fh0)
+
+    alternate_objective = {
+        **TRAIN_PROTOCOL,
+        "objective": {
+            **TRAIN_PROTOCOL["objective"],
+            "regression_with_bearing_heads": "mse",
+        },
+    }
+    core_objective, _ = build_protocol_descriptors(
+        **_args(ds_a, train_protocol=alternate_objective))
+    check("selection metric follows a re-registered objective policy",
+          core_objective["selection"]["selection_metric"]
+          == alternate_objective["objective"])
 
     KNOBS = {
         "seeds value":      {"seeds": [42, 1337, 9999]},
@@ -266,6 +284,33 @@ try:
         "pair_search set":  {"pair_search_stages": {"s0_scour"}},
         "schema_tag":       {"schema_tag": "gs5a-r8"},
         "train_protocol":   {"train_protocol": {**TRAIN_PROTOCOL, "batch_size": 64}},
+        "objective policy": {
+            "train_protocol": {
+                **TRAIN_PROTOCOL,
+                "objective": {
+                    **TRAIN_PROTOCOL["objective"],
+                    "regression_with_bearing_heads": "mse",
+                },
+            },
+        },
+        "trial-seed policy": {
+            "train_protocol": {
+                **TRAIN_PROTOCOL,
+                "trial_seed": {
+                    **TRAIN_PROTOCOL["trial_seed"],
+                    "key": "alternate_seed",
+                },
+            },
+        },
+        "determinism policy": {
+            "train_protocol": {
+                **TRAIN_PROTOCOL,
+                "determinism": {
+                    **TRAIN_PROTOCOL["determinism"],
+                    "cudnn_benchmark": True,
+                },
+            },
+        },
         "search_space":     {"search_space": {**SEARCH_SPACE,
                                               "base": {**SEARCH_SPACE["base"],
                                                        "lr": ("logfloat", 1e-5, 1e-2)}}},

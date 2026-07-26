@@ -47,8 +47,17 @@ for p in range(npass):
         if py.shape != m_ref.shape:
             sys.exit(f"SHAPE MISMATCH {g} p{p}: python {py.shape} vs matlab {m_ref.shape}")
         d = float(np.max(np.abs(py - m_ref)))
+        if not np.isfinite(d):
+            sys.exit(
+                f"NON-FINITE PARITY DIFFERENCE {g} p{p} — investigate "
+                "before generating"
+            )
         worst = max(worst, d)
         print(f"  passage {p+1:2d}  {g:16s} shape {py.shape}  max|diff| = {d:.3e}")
 
 print(f"\nWORST max|MATLAB - Python| = {worst:.3e}")
-print("PARITY PASS" if worst < 1e-12 else "PARITY FAIL — investigate before generating")
+if worst < 1e-12:
+    print("PARITY PASS")
+else:
+    print("PARITY FAIL — investigate before generating")
+    sys.exit(1)

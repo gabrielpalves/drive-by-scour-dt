@@ -4,6 +4,7 @@ Run:  python check_b54_overlap_parity.py
 """
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import shutil
@@ -19,6 +20,16 @@ from TTBI_2D.b54_model_matrices import _track_vectors
 
 
 fails = 0
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--allow-python-only",
+    action="store_true",
+    help=(
+        "allow the independent Python oracle to pass when MATLAB is absent; "
+        "never use this degraded mode as a dispatch preflight"
+    ),
+)
+args = parser.parse_args()
 
 
 def check(name: str, cond: bool) -> None:
@@ -69,6 +80,11 @@ check("Python result is row-order invariant",
 matlab = shutil.which("matlab")
 matlab_ran = matlab is not None
 if matlab is None:
+    if not args.allow_python_only:
+        check(
+            "MATLAB is required for the default cross-language parity gate",
+            False,
+        )
     # Audit r5: a silent skip used to still print "ALL PASS", so a dispatch-PC
     # preflight log could claim cross-language parity that never ran. The
     # summary line below now states the degraded scope explicitly.
@@ -107,6 +123,6 @@ if fails:
 elif matlab_ran:
     print("B54 OVERLAP PARITY: ALL PASS")
 else:
-    print("B54 OVERLAP PARITY: PYTHON-ONLY PASS "
+    print("B54 OVERLAP PARITY: EXPLICITLY ALLOWED PYTHON-ONLY PASS "
           "(MATLAB cross-language half SKIPPED — not verified on this machine)")
 sys.exit(1 if fails else 0)

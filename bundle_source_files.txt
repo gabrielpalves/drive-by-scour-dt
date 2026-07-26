@@ -2,19 +2,24 @@
 # One repository-relative POSIX path per line. Keep sorted.
 README_CAMPAIGN.md
 TTBI_2D/b54_model_matrices.py
+benchmark_r5_compute.py
 check_artifact_provenance.py
 check_b54_overlap_parity.py
+check_benchmark_contract.py
 check_cache_provenance.py
 check_campaign_controls.py
 check_environment_lock.py
 check_familytable_roundtrip.py
+check_generation_contract.py
 check_loader_provenance.py
 check_paa.py
 check_protocol_hash.py
+check_r4_mutation_guards.py
 check_raw_parity.py
 check_sensor_noise_pairing.py
 check_split_grouping.py
 check_statistical_inference.py
+check_training_policy_mutation_guards.py
 check_weighted_head_mse.py
 comprehensive_ablation_multidamage.py
 core/artifact_provenance.py
@@ -27,6 +32,7 @@ core/statistical_inference.py
 core/task.py
 core/utils.py
 docs/audit_r4_results.md
+docs/audit_r5_results.md
 docs/framework_rationale.md
 docs/track_eov_sampling_spec.md
 environment/campaign-py313-cu128.json

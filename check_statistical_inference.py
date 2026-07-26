@@ -25,7 +25,7 @@ from core.statistical_inference import (
     per_state_regression_metrics,
     repeated_stratified_group_folds,
 )
-from core.utils import set_global_seed
+from training import trainer as campaign_trainer
 
 
 fails = 0
@@ -94,6 +94,36 @@ raises("under-populated stratum rejected",
            n_splits=5, n_repeats=1, seed=1
        ), ValueError)
 
+# Three six-state strata expose the cumulative balancing rule: a fixed cyclic
+# offset would put all three "extra" validation states in the same fold and
+# produce sizes [6, 3, 3, 3, 3].  The implemented offset search must distribute
+# those extras while preserving within-stratum round-robin balance.
+balance_groups = np.repeat(np.arange(18), 2)
+balance_strata = ["A"] * 6 + ["B"] * 6 + ["C"] * 6
+balance_folds = repeated_stratified_group_folds(
+    balance_groups, np.arange(len(balance_groups)), balance_strata,
+    n_splits=5, n_repeats=3, seed=314159,
+)
+check("cumulative fold-size balancing is non-trivial and within one state",
+      all(
+          max(len(f.val_states) for f in balance_folds if f.repeat == repeat)
+          - min(len(f.val_states) for f in balance_folds
+                if f.repeat == repeat) <= 1
+          for repeat in range(3)
+      ))
+check("round-robin assignment balances every stratum within one state",
+      all(
+          max(
+              sum(balance_strata[int(s)] == key for s in f.val_states)
+              for f in balance_folds if f.repeat == repeat
+          )
+          - min(
+              sum(balance_strata[int(s)] == key for s in f.val_states)
+              for f in balance_folds if f.repeat == repeat
+          ) <= 1
+          for repeat in range(3) for key in ("A", "B", "C")
+      ))
+
 # Exact failure mode from the R8 multi-head design: equal-width MAX-severity
 # bins can contain only 1-4 joint states. CV coarsens severity but retains crack
 # activation, producing viable, pre-registered strata without consulting outer
@@ -157,9 +187,9 @@ check("statistical policy flows through unified protocol descriptor",
       "statistical_inference = STATISTICAL_INFERENCE_PROTOCOL"
       in driver_source)
 
-# Compile the shipped function itself from the driver AST, then run a real
-# PyTorch optimisation/prediction step on synthetic grouped data. This avoids
-# importing the driver (which correctly requires a complete real dataset).
+# The driver remains import-hostile without a complete dataset, so compile its
+# thin wrapper from the AST and prove it delegates every scientific setting to
+# the shared production implementation.
 fit_node = driver_functions["_fit_predict_finalist_fold"]
 fit_module = ast.Module(body=[fit_node], type_ignores=[])
 ast.fix_missing_locations(fit_module)
@@ -174,27 +204,21 @@ class TinyRegressor(torch.nn.Module):
         return self.linear(x.flatten(1))
 
 
-tiny_task = SimpleNamespace(
-    label_dtype=lambda _cfg: torch.float32,
-    make_criterion=lambda _cfg: torch.nn.MSELoss(),
-)
+forwarded = {}
+sentinel = {"state": np.array([99])}
+
+
+def delegation_spy(*args, **kwargs):
+    forwarded["args"] = args
+    forwarded["kwargs"] = kwargs
+    return sentinel
+
+
 fit_namespace = {
-    "np": np,
-    "torch": torch,
-    "DataLoader": torch.utils.data.DataLoader,
-    "FoldStandardizedDataset": FoldStandardizedDataset,
-    "channel_standardization_stats": channel_standardization_stats,
-    "per_state_regression_metrics": per_state_regression_metrics,
-    "set_global_seed": set_global_seed,
-    "task": tiny_task,
-    "DEVICE": torch.device("cpu"),
-    "TRAIN_PROTOCOL": {"batch_size": 4},
+    "fit_predict_finalist_fold": delegation_spy,
     "EPOCHS": 3,
     "TARGET_SUPPORTS": [2],
 }
-fit_namespace["build_model"] = lambda _cfg, _params, shape, device: (
-    TinyRegressor(shape[1], shape[2]).to(device), None
-)
 exec(compile(fit_module, str(driver_path), "exec"), fit_namespace)
 fit_fold = fit_namespace["_fit_predict_finalist_fold"]
 toy_rng = np.random.default_rng(91)
@@ -205,17 +229,65 @@ toy_fold = SimpleNamespace(
     train_idx=np.arange(8), val_idx=np.arange(8, 12),
     val_states=np.array([4, 5]),
 )
-toy_metrics = fit_fold(
-    {"method": "PAA"}, {"lr": 1e-3, "weight_decay": 0.0},
+toy_config = {
+    "method": "PAA",
+    "task": "regression",
+    "target_supports": [2],
+    "bearing_targets": None,
+}
+wrapper_result = fit_fold(
+    toy_config, {"lr": 1e-3, "weight_decay": 0.0},
     toy_x, toy_y, toy_groups, toy_fold, 42, 1,
 )
-check("shipped fixed-fold trainer runs and returns state metrics",
+check("driver finalist wrapper delegates to shared implementation",
+      wrapper_result is sentinel
+      and len(forwarded["args"]) == 7
+      and forwarded["args"][0] is toy_config
+      and forwarded["args"][1] == {"lr": 1e-3, "weight_decay": 0.0}
+      and forwarded["args"][2] is toy_x
+      and forwarded["args"][3] is toy_y
+      and forwarded["args"][4] is toy_groups
+      and forwarded["args"][5] is toy_fold
+      and forwarded["args"][6] == 42
+      and forwarded["kwargs"] == {
+          "n_epochs": 1,
+          "max_epochs": 3,
+          "n_scour_heads": 1,
+      })
+
+# Exercise that shared implementation with a real optimisation/prediction step
+# while replacing only the expensive architecture factory.
+original_build_model = campaign_trainer.build_model
+original_device = campaign_trainer.DEVICE
+try:
+    campaign_trainer.DEVICE = torch.device("cpu")
+    campaign_trainer.build_model = (
+        lambda _cfg, _params, shape, device:
+        (TinyRegressor(shape[1], shape[2]).to(device), None)
+    )
+    toy_metrics = campaign_trainer.fit_predict_finalist_fold(
+        toy_config,
+        {"lr": 1e-3, "weight_decay": 0.0},
+        toy_x,
+        toy_y,
+        toy_groups,
+        toy_fold,
+        42,
+        n_epochs=1,
+        max_epochs=3,
+        n_scour_heads=1,
+    )
+finally:
+    campaign_trainer.build_model = original_build_model
+    campaign_trainer.DEVICE = original_device
+check("shared fixed-fold trainer runs and returns state metrics",
       np.array_equal(toy_metrics["state"], [4, 5])
       and np.isfinite(toy_metrics["scour_mse"]).all())
 raises("fixed-fold trainer rejects epoch count above protocol maximum",
-       lambda: fit_fold(
-           {"method": "PAA"}, {"lr": 1e-3, "weight_decay": 0.0},
-           toy_x, toy_y, toy_groups, toy_fold, 42, 4,
+       lambda: campaign_trainer.fit_predict_finalist_fold(
+           toy_config, {"lr": 1e-3, "weight_decay": 0.0},
+           toy_x, toy_y, toy_groups, toy_fold, 42,
+           n_epochs=4, max_epochs=3, n_scour_heads=1,
        ), ValueError)
 
 
@@ -333,6 +405,21 @@ check("repeated-CV statistic is mean of repeat-wise cross-seed medians",
       np.isclose(boot_repeated["estimate"], 18.0)
       and boot_repeated["n_repeats"] == 2)
 
+# Median and mean do not commute on this cyclic rank-crossing fixture.  The
+# registered statistic first averages sampled states for each seed, then takes
+# the cross-seed median (200/3); taking a median within each state first would
+# incorrectly return 100.
+rank_cross_states = np.array([
+    [0.0, 100.0, 100.0],
+    [100.0, 0.0, 100.0],
+    [100.0, 100.0, 0.0],
+])
+rank_cross_boot = hierarchical_state_seed_bootstrap(
+    rank_cross_states, n_boot=50, seed=17, ci=0.95
+)
+check("seed median is applied after state aggregation inside the statistic",
+      np.isclose(rank_cross_boot["estimate"], 200.0 / 3.0))
+
 comp = err + 5.0
 contrast = paired_state_contrast(
     err, comp, n_boot=300, seed=123, ci=0.95
@@ -357,6 +444,63 @@ check("contrast is difference of cross-seed medians, not median difference",
 raises("unpaired shapes rejected",
        lambda: paired_state_contrast(err, comp[:-1], n_boot=10, seed=1),
        ValueError)
+
+# Exercise the paper-facing driver's semantic state-key firewall, rather than
+# merely checking that paired numeric tensors happen to have equal shapes.
+alignment_nodes = [
+    driver_functions["_records_to_error_tensor"],
+    driver_functions["_outer_test_hierarchical_inference"],
+]
+alignment_module = ast.Module(body=alignment_nodes, type_ignores=[])
+ast.fix_missing_locations(alignment_module)
+alignment_namespace = {
+    "np": np,
+    "os": __import__("os"),
+    "assemble_state_repeat_seed_tensor": assemble_state_repeat_seed_tensor,
+    "hierarchical_state_seed_bootstrap": hierarchical_state_seed_bootstrap,
+    "paired_state_contrast": paired_state_contrast,
+    "SEEDS": [3, 7],
+    "BOOTSTRAP_N": 20,
+    "BOOTSTRAP_SEED": 123,
+    "SUMMARY_DIR": ".",
+    "_dofs_label": lambda dofs: ",".join(str(d) for d in dofs),
+    "_write_rows_csv": lambda *_args, **_kwargs: None,
+}
+exec(compile(alignment_module, str(driver_path), "exec"), alignment_namespace)
+outer_inference = alignment_namespace["_outer_test_hierarchical_inference"]
+
+
+def _alignment_fixture_rows():
+    rows = []
+    for architecture, dofs, states_for_model in (
+        ("winner", "0", (10, 20)),
+        ("comparator", "1", (10, 30)),
+    ):
+        for state in states_for_model:
+            for seed in (3, 7):
+                rows.append({
+                    "architecture": architecture,
+                    "dofs": dofs,
+                    "state": state,
+                    "family": "fixture",
+                    "repeat": 0,
+                    "seed": seed,
+                    "scour_mse": float(state + seed),
+                    "all_head_mse": float(state + seed + 1),
+                })
+    return rows
+
+
+raises("outer-test paired contrast rejects differently keyed state tensors",
+       lambda: outer_inference(
+           _alignment_fixture_rows(),
+           {("winner", (0,)), ("comparator", (1,))},
+           ("winner", (0,)),
+           [
+               {"architecture": "winner", "dofs": "0"},
+               {"architecture": "comparator", "dofs": "1"},
+           ],
+       ), RuntimeError)
 
 
 print("\n--- MCSE family-size planning ---")

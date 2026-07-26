@@ -8,6 +8,7 @@ Public API
 ----------
     train_and_evaluate   - one Optuna trial: suggest -> build -> train -> prune.
     run_single_training  - one fixed-seed run with known params (robustness use).
+    fit_predict_finalist_fold - one fold-local-scaled finalist CV refit.
     Objective            - callable wrapper so Optuna can call the trial function.
     print_best_callback  - Optuna study callback; prints only on new-best trials.
     DEVICE               - module-level torch.device (cuda if available, else cpu).
@@ -35,7 +36,12 @@ from core         import task
 from core.dataset import (MemmapDataset, get_or_create_cache,
                           canonical_train_val_split)
 from core.models  import build_model
-from core.utils   import set_global_seed
+from core.statistical_inference import (
+    FoldStandardizedDataset,
+    channel_standardization_stats,
+    per_state_regression_metrics,
+)
+from core.utils   import DETERMINISM_POLICY, set_global_seed
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -59,22 +65,130 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 TRAIN_PROTOCOL = {
     "batch_size":  32,       # train + val DataLoader batch size
     "patience":    5,        # early-stop after this many non-improving epochs
-    "optimizer":   "Adam(lr, weight_decay)",
-    "scheduler":   "CosineAnnealingLR(T_max=n_epochs)",
-    # Audit r3 (2026-07-22): SCOUR is the pre-registered primary estimand —
-    # selection never sees the bearing heads; they are trained (to explain
-    # away their share of the response) and reported, not selected on.
-    "objective":   ("best epoch-wise inner-val SCOUR-head MSE; aggregate MSE "
-                    "where no bearing heads exist (task.objective_value)"),
-    "loss":        ("regression: range-normalized multi-task MSE, w_h = "
-                    "1/range_h^2 normalized to mean 1 (scour 60 %, bearing "
-                    "95 %; task.WeightedHeadMSE); plain MSE without bearing "
-                    "heads; classification: cross-entropy"),
-    "trial_seed":  "config['seed'] (independent init/shuffle per config seed)",
-    "determinism": ("Python/NumPy/Torch seeded; cuDNN deterministic and benchmark "
-                    "disabled; torch deterministic algorithms hard-fail "
-                    "(warn_only=False); CUBLAS_WORKSPACE_CONFIG=:4096:8"),
+    # The Optuna training seed is a required config field. A silent default
+    # would collapse nominally independent seed arms onto the same RNG stream.
+    "trial_seed": {
+        "source":  "config",
+        "key":     "seed",
+        "missing": "error",
+    },
+    # Same object consumed by set_global_seed; no duplicated prose contract.
+    "determinism": DETERMINISM_POLICY,
+    # Executable optimizer/scheduler specs. The factories below consume these
+    # exact mappings at every production training call.
+    "optimizer": {
+        "kind":                "Adam",
+        "lr_param":            "lr",
+        "weight_decay_param":  "weight_decay",
+    },
+    "scheduler": {
+        "kind":     "CosineAnnealingLR",
+        "eta_min":  0.0,
+    },
+    # Audit r3/r5 (2026-07-22/25): executable, protocol-hashed objective policy.
+    # task.objective_value reads this mapping through the trainer call below.
+    # Therefore a re-registration changes BOTH running behaviour and the
+    # protocol hash; it cannot drift from a prose-only declaration.
+    "objective": {
+        "regression_with_bearing_heads": "scour_mse",
+        "default":                       "mse",
+    },
+    "loss": {
+        "classification": {
+            "kind": "cross_entropy",
+        },
+        "regression_without_bearing_heads": {
+            "kind": "mse",
+        },
+        "regression_with_bearing_heads": {
+            "kind": "inverse_range_squared_mse",
+            "head_ranges_pct": {
+                "scour":   60.0,
+                "bearing": 95.0,
+            },
+        },
+    },
 }
+
+
+def resolve_trial_seed(config: dict, policy: dict) -> int:
+    """Resolve the Optuna-training seed from the executable protocol policy."""
+
+    required = {"source", "key", "missing"}
+    if not isinstance(policy, dict) or set(policy) != required:
+        got = set(policy) if isinstance(policy, dict) else type(policy).__name__
+        raise ValueError(
+            f"trial-seed policy must define exactly {sorted(required)!r}; "
+            f"got {got!r}.")
+    if policy["source"] != "config" or policy["missing"] != "error":
+        raise ValueError(f"unsupported trial-seed policy {policy!r}")
+    key = policy["key"]
+    if not isinstance(key, str) or not key:
+        raise ValueError("trial-seed config key must be a non-empty string")
+    if key not in config:
+        raise KeyError(
+            f"trial-seed policy requires config field {key!r}; "
+            "a default seed is forbidden")
+    seed = config[key]
+    if isinstance(seed, (bool, np.bool_)) or not isinstance(
+            seed, (int, np.integer)):
+        raise TypeError(f"config[{key!r}] must be an integer seed")
+    seed = int(seed)
+    if not 0 <= seed <= 2**32 - 1:
+        raise ValueError(f"config[{key!r}] must lie in [0, 2**32 - 1]")
+    return seed
+
+
+def make_optimizer(parameters, params: dict, policy: dict):
+    """Build the optimizer from the executable TRAIN_PROTOCOL specification."""
+    required = {"kind", "lr_param", "weight_decay_param"}
+    if not isinstance(policy, dict) or set(policy) != required:
+        got = set(policy) if isinstance(policy, dict) else type(policy).__name__
+        raise ValueError(
+            f"optimizer policy must define exactly {sorted(required)!r}; "
+            f"got {got!r}.")
+    if policy["kind"] != "Adam":
+        raise ValueError(f"unsupported optimizer kind {policy['kind']!r}.")
+    lr_key = policy["lr_param"]
+    wd_key = policy["weight_decay_param"]
+    if not isinstance(lr_key, str) or not isinstance(wd_key, str):
+        raise ValueError("optimizer parameter keys must be strings.")
+    try:
+        lr = float(params[lr_key])
+        weight_decay = float(params[wd_key])
+    except KeyError as exc:
+        raise KeyError(
+            f"optimizer policy requires hyperparameter {exc.args[0]!r}; "
+            f"available keys are {sorted(params)!r}.") from exc
+    if not np.isfinite(lr) or lr <= 0:
+        raise ValueError(f"optimizer learning rate must be finite and > 0; got {lr}.")
+    if not np.isfinite(weight_decay) or weight_decay < 0:
+        raise ValueError(
+            "optimizer weight decay must be finite and >= 0; "
+            f"got {weight_decay}.")
+    return optim.Adam(parameters, lr=lr, weight_decay=weight_decay)
+
+
+def make_scheduler(optimizer, max_epochs: int, policy: dict):
+    """Build the epoch scheduler from the executable protocol specification."""
+    required = {"kind", "eta_min"}
+    if not isinstance(policy, dict) or set(policy) != required:
+        got = set(policy) if isinstance(policy, dict) else type(policy).__name__
+        raise ValueError(
+            f"scheduler policy must define exactly {sorted(required)!r}; "
+            f"got {got!r}.")
+    if policy["kind"] != "CosineAnnealingLR":
+        raise ValueError(f"unsupported scheduler kind {policy['kind']!r}.")
+    if isinstance(max_epochs, bool) or int(max_epochs) != max_epochs or max_epochs < 1:
+        raise ValueError(
+            f"scheduler max_epochs must be a positive integer; got {max_epochs!r}.")
+    eta_min = float(policy["eta_min"])
+    if not np.isfinite(eta_min) or eta_min < 0:
+        raise ValueError(
+            f"scheduler eta_min must be finite and >= 0; got {eta_min}.")
+    return optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=int(max_epochs), eta_min=eta_min)
+
 
 # The FULL hyperparameter search space, as data. Spec tuples:
 #     ("int",      low, high)          -> suggest_int(low, high)
@@ -170,7 +284,10 @@ def train_and_evaluate(
     # multi-seed grid claims independent init/shuffle per seed ("Independent
     # Optuna seeds per config"); the hardcoded 42 made every "seed" share the
     # same init stream so only the Optuna sampler varied.
-    set_global_seed(config.get('seed', 42))
+    set_global_seed(
+        resolve_trial_seed(config, TRAIN_PROTOCOL["trial_seed"]),
+        TRAIN_PROTOCOL["determinism"],
+    )
 
     # ── Data ─────────────────────────────────────────────────────────────────
     X, y, _, groups = get_or_create_cache(config, dataset_name, cache_dir)
@@ -197,11 +314,12 @@ def train_and_evaluate(
     # ── Model, loss, optimiser, scheduler ────────────────────────────────────
     # Loss follows the task: cross-entropy (classification) or MSE (regression).
     model, _  = build_model(config, params, X.shape, DEVICE)
-    criterion = task.make_criterion(config).to(DEVICE)
-    optimizer = optim.Adam(
-        model.parameters(), lr=params['lr'], weight_decay=params['weight_decay']
-    )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
+    criterion = task.make_criterion(
+        config, TRAIN_PROTOCOL["loss"]).to(DEVICE)
+    optimizer = make_optimizer(
+        model.parameters(), params, TRAIN_PROTOCOL["optimizer"])
+    scheduler = make_scheduler(
+        optimizer, n_epochs, TRAIN_PROTOCOL["scheduler"])
 
     # ── Training loop ─────────────────────────────────────────────────────────
     best_val_mse     = float('inf')
@@ -222,9 +340,13 @@ def train_and_evaluate(
             optimizer.step()
         scheduler.step()
 
-        # Validate - aggregate MSE (class-index for classification, % scour for
-        # regression); the single scalar Optuna minimises for both tasks.
-        val_mse = task.objective_value(task.evaluate(model, val_loader, config, DEVICE))
+        # Validate using the executable, protocol-hashed primary-estimand
+        # mapping. Bearing rungs require scour_mse; other tasks require mse.
+        val_mse = task.objective_value(
+            task.evaluate(model, val_loader, config, DEVICE),
+            config,
+            TRAIN_PROTOCOL["objective"],
+        )
 
         # Optuna pruning
         trial.report(val_mse, epoch)
@@ -286,7 +408,7 @@ def run_single_training(
         adds 'per_head_mse'/'per_head_mae'. Units are class-index (classification)
         or % scour (regression).
     """
-    set_global_seed(seed)
+    set_global_seed(seed, TRAIN_PROTOCOL["determinism"])
 
     # AUDIT FIX 2026-07-17: the split stays CANONICAL (seed 42, grouped) and only
     # the init/shuffle varies with `seed`. The scaler in the cache was fit on the
@@ -309,13 +431,12 @@ def run_single_training(
     )
 
     model, _  = build_model(config, params, X.shape, DEVICE)
-    criterion = task.make_criterion(config).to(DEVICE)
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=params['lr'],
-        weight_decay=params.get('weight_decay', 1e-4),
-    )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
+    criterion = task.make_criterion(
+        config, TRAIN_PROTOCOL["loss"]).to(DEVICE)
+    optimizer = make_optimizer(
+        model.parameters(), params, TRAIN_PROTOCOL["optimizer"])
+    scheduler = make_scheduler(
+        optimizer, n_epochs, TRAIN_PROTOCOL["scheduler"])
 
     model.train()
     for _ in range(n_epochs):
@@ -332,6 +453,116 @@ def run_single_training(
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Optuna wrappers
 # ──────────────────────────────────────────────────────────────────────────────
+
+def fit_predict_finalist_fold(
+    config: dict,
+    params: dict,
+    X: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    fold,
+    seed: int,
+    n_epochs: int | None = None,
+    *,
+    max_epochs: int,
+    n_scour_heads: int,
+) -> dict[str, np.ndarray]:
+    """Fixed-parameter refit and inference on one development-only CV fold.
+
+    This is the single implementation shared by the campaign driver and the
+    compute benchmark. Fold-local scaling is fitted on ``train_idx`` only;
+    validation never chooses a checkpoint or changes hyperparameters.
+    """
+
+    if str(config.get("method", "")).lower() != "paa":
+        raise RuntimeError(
+            "finalist repeated CV currently requires affine-standardised PAA "
+            "features; add an explicit fold-scaler implementation before using "
+            f"method={config.get('method')!r}"
+        )
+    if not task.is_regression(config):
+        raise ValueError("finalist-CV refit requires a regression config")
+    if isinstance(max_epochs, bool) or int(max_epochs) != max_epochs:
+        raise ValueError("max_epochs must be a positive integer")
+    max_epochs = int(max_epochs)
+    if max_epochs < 1:
+        raise ValueError("max_epochs must be a positive integer")
+    if n_epochs is None:
+        n_epochs = max_epochs
+    if isinstance(n_epochs, bool) or int(n_epochs) != n_epochs:
+        raise ValueError("n_epochs must be an integer")
+    n_epochs = int(n_epochs)
+    if not 1 <= n_epochs <= max_epochs:
+        raise ValueError(
+            f"finalist-CV refit epochs must be in [1, {max_epochs}], "
+            f"got {n_epochs}"
+        )
+    if (
+        isinstance(n_scour_heads, bool)
+        or not isinstance(n_scour_heads, (int, np.integer))
+        or int(n_scour_heads) != task.n_scour_outputs(config)
+    ):
+        raise ValueError(
+            "n_scour_heads must equal the regression config's scour outputs")
+    n_scour_heads = int(n_scour_heads)
+
+    X = np.asarray(X)
+    y = np.asarray(y)
+    groups = np.asarray(groups)
+    if len(X) != len(y) or len(y) != len(groups):
+        raise ValueError("X, y and groups must contain the same samples")
+
+    mean, scale = channel_standardization_stats(X, fold.train_idx)
+    set_global_seed(seed, TRAIN_PROTOCOL["determinism"])
+    train_loader = DataLoader(
+        FoldStandardizedDataset(
+            X, y, fold.train_idx, mean, scale,
+            label_dtype=task.label_dtype(config),
+        ),
+        batch_size=TRAIN_PROTOCOL["batch_size"],
+        shuffle=True,
+        num_workers=0,
+    )
+    val_loader = DataLoader(
+        FoldStandardizedDataset(
+            X, y, fold.val_idx, mean, scale,
+            label_dtype=task.label_dtype(config),
+        ),
+        batch_size=TRAIN_PROTOCOL["batch_size"],
+        shuffle=False,
+        num_workers=0,
+    )
+    model, _ = build_model(config, params, X.shape, DEVICE)
+    criterion = task.make_criterion(
+        config, TRAIN_PROTOCOL["loss"]).to(DEVICE)
+    optimizer = make_optimizer(
+        model.parameters(), params, TRAIN_PROTOCOL["optimizer"])
+    # A k-epoch refit reproduces the first k steps of the original max-epoch
+    # schedule; it does not compress a fresh cosine cycle into k.
+    scheduler = make_scheduler(
+        optimizer, max_epochs, TRAIN_PROTOCOL["scheduler"])
+    for _ in range(n_epochs):
+        model.train()
+        for batch_x, batch_y in train_loader:
+            optimizer.zero_grad()
+            loss = criterion(model(batch_x.to(DEVICE)), batch_y.to(DEVICE))
+            loss.backward()
+            optimizer.step()
+        scheduler.step()
+
+    model.eval()
+    predictions, truth = [], []
+    with torch.no_grad():
+        for batch_x, batch_y in val_loader:
+            predictions.append(model(batch_x.to(DEVICE)).cpu().numpy())
+            truth.append(batch_y.numpy())
+    return per_state_regression_metrics(
+        np.vstack(predictions),
+        np.vstack(truth),
+        groups[np.asarray(fold.val_idx, dtype=np.int64)],
+        n_scour_heads=n_scour_heads,
+    )
+
 
 class Objective:
     """

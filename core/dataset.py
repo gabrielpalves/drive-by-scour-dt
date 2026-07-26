@@ -177,7 +177,7 @@ _CROP_RAGGED_TOL = 4        # max samples the per-passage crop may differ by
 # by A00) AND a gen_fingerprint matching its manifest. Loading a file without
 # them, or with a different value, aborts — so pre-audit or R2/R3 data can never
 # silently enter the pipeline. Must equal A00_Run.m's gen_schema exactly.
-_EXPECTED_GEN_SCHEMA = 'audit-2026-07-19-r8'
+_EXPECTED_GEN_SCHEMA = 'audit-2026-07-25-r9'
 
 # ── PROTOCOL CONSTANTS (unified protocol_hash, 2026-07-19) ────────────────────
 # Single source of truth: the split/preprocessing code BELOW reads these same
@@ -192,7 +192,8 @@ NOISE_RNG_SEED  = 42     # load-time sensor-noise RNG (deterministic rebuilds)
 LOAD_N_PASSAGES = 200    # passage cap requested from the loader (manifest npass
                          # is authoritative; the loader enforces exact ==)
 CACHE_SCHEMA_TAG = "_gs6"  # cache-contract tag appended to every cache stem
-                           # (gs5 = r8: family-stratified split + state table)
+                           # (unchanged at R9: feature transform is unchanged;
+                           # source-schema/fingerprint sidecars orphan R8 data)
 
 
 # ── Feature A (2026-07-19): state families + stratified grouped split ────────

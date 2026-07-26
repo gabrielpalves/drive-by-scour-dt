@@ -78,9 +78,13 @@ for bad in ([], [0.0], [-1.0], [math.inf], [math.nan]):
 train_src = inspect.getsource(trainer.train_and_evaluate)
 robust_src = inspect.getsource(trainer.run_single_training)
 check("Optuna trainer moves criterion to DEVICE",
-      "task.make_criterion(config).to(DEVICE)" in train_src)
+      'TRAIN_PROTOCOL["loss"]' in train_src
+      and "task.make_criterion(" in train_src
+      and ".to(DEVICE)" in train_src)
 check("fixed-seed trainer moves criterion to DEVICE",
-      "task.make_criterion(config).to(DEVICE)" in robust_src)
+      'TRAIN_PROTOCOL["loss"]' in robust_src
+      and "task.make_criterion(" in robust_src
+      and ".to(DEVICE)" in robust_src)
 
 cfg = {
     "task": "regression",
@@ -89,8 +93,13 @@ cfg = {
 }
 device = trainer.DEVICE
 model = torch.nn.Linear(5, 4).to(device)
-criterion = task.make_criterion(cfg).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+loss_policy = trainer.TRAIN_PROTOCOL["loss"]
+criterion = task.make_criterion(cfg, loss_policy).to(device)
+optimizer = trainer.make_optimizer(
+    model.parameters(),
+    {"lr": 1e-3, "weight_decay": 1e-4},
+    trainer.TRAIN_PROTOCOL["optimizer"],
+)
 x = torch.randn(8, 5, device=device)
 y = torch.randn(8, 4, device=device)
 optimizer.zero_grad()
@@ -101,6 +110,83 @@ check(f"trainer-style step finite on {device}",
       bool(torch.isfinite(trainer_style_loss)))
 check("criterion buffer follows trainer device",
       criterion.w.device.type == device.type)
+
+# The registered branch/ranges are executable, not prose. Exercise every
+# branch and prove that mutating only the policy changes the actual weights.
+check("classification policy builds cross-entropy",
+      isinstance(task.make_criterion(
+          {"task": "classification"}, loss_policy), torch.nn.CrossEntropyLoss))
+check("scour-only regression policy builds plain MSE",
+      isinstance(task.make_criterion(
+          {"task": "regression", "target_supports": [2, 3]},
+          loss_policy), torch.nn.MSELoss))
+registered_ranges = loss_policy[
+    "regression_with_bearing_heads"]["head_ranges_pct"]
+check("registered scour/bearing ranges remain 60/95 percent",
+      registered_ranges == {"scour": 60.0, "bearing": 95.0})
+expected_registered = torch.tensor(
+    [1 / 60**2, 1 / 60**2, 1 / 95**2, 1 / 95**2],
+    dtype=torch.float32,
+)
+expected_registered /= expected_registered.mean()
+check("make_criterion weights are derived from TRAIN_PROTOCOL ranges",
+      torch.allclose(criterion.w.cpu(), expected_registered))
+mutated_loss_policy = {
+    **loss_policy,
+    "regression_with_bearing_heads": {
+        **loss_policy["regression_with_bearing_heads"],
+        "head_ranges_pct": {"scour": 30.0, "bearing": 95.0},
+    },
+}
+mutated_criterion = task.make_criterion(cfg, mutated_loss_policy)
+check("changing only loss policy changes executed head weights",
+      not torch.allclose(mutated_criterion.w.cpu(), criterion.w.cpu()))
+rejects("malformed loss policy rejected",
+        lambda: task.make_criterion(
+            cfg, {"classification": {"kind": "cross_entropy"}}))
+
+# Optimizer/scheduler are likewise constructed from structured hashed specs.
+probe = torch.nn.Parameter(torch.tensor([1.0]))
+optimizer_probe = trainer.make_optimizer(
+    [probe], {"lr": 2e-3, "weight_decay": 3e-4},
+    trainer.TRAIN_PROTOCOL["optimizer"])
+check("optimizer policy builds Adam with registered parameter keys",
+      isinstance(optimizer_probe, torch.optim.Adam)
+      and optimizer_probe.param_groups[0]["lr"] == 2e-3
+      and optimizer_probe.param_groups[0]["weight_decay"] == 3e-4)
+mutated_optimizer_policy = {
+    **trainer.TRAIN_PROTOCOL["optimizer"],
+    "lr_param": "alternate_lr",
+}
+mutated_optimizer = trainer.make_optimizer(
+    [torch.nn.Parameter(torch.tensor([1.0]))],
+    {"lr": 2e-3, "alternate_lr": 4e-3, "weight_decay": 3e-4},
+    mutated_optimizer_policy,
+)
+check("changing only optimizer policy changes executed learning rate",
+      mutated_optimizer.param_groups[0]["lr"] == 4e-3)
+scheduler_probe = trainer.make_scheduler(
+    optimizer_probe, 7, trainer.TRAIN_PROTOCOL["scheduler"])
+check("scheduler policy builds cosine schedule with campaign horizon",
+      isinstance(scheduler_probe, torch.optim.lr_scheduler.CosineAnnealingLR)
+      and scheduler_probe.T_max == 7
+      and scheduler_probe.eta_min == 0.0)
+mutated_scheduler_policy = {
+    **trainer.TRAIN_PROTOCOL["scheduler"],
+    "eta_min": 1e-5,
+}
+mutated_scheduler = trainer.make_scheduler(
+    optimizer_probe, 7, mutated_scheduler_policy)
+check("changing only scheduler policy changes executed eta_min",
+      mutated_scheduler.eta_min == 1e-5)
+rejects("unsupported optimizer kind rejected",
+        lambda: trainer.make_optimizer(
+            [torch.nn.Parameter(torch.tensor([1.0]))],
+            {"lr": 1e-3, "weight_decay": 0.0},
+            {**trainer.TRAIN_PROTOCOL["optimizer"], "kind": "SGD"}))
+rejects("malformed scheduler policy rejected",
+        lambda: trainer.make_scheduler(
+            optimizer_probe, 7, {"kind": "CosineAnnealingLR"}))
 
 # The campaign trainer currently has no autocast/GradScaler path. Still verify
 # half-precision predictions on CUDA because future AMP would exercise this

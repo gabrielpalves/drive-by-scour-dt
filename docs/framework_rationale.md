@@ -276,7 +276,7 @@ The probe (low mass, locked low speed) is a *different operating condition* than
   - **CONFIRMED + FIXED (Python; all change feature bytes or selection → cache tag `_gs5`→`_gs6`, PREPROC/TRAIN protocol entries added, hash moves):**
     (1) **"PAA" was a linear-interpolation resampler**, not Keogh window means (`interp1d(kind='linear')`; [0,0,0,4]→[0,4] not [0,2]) — point-subsampling with NO anti-aliasing, contradicting the cited definition and under-filtering exactly the wheel channels. FIX: true PAA via exact integration of the sample-and-hold signal (fractional windows for non-divisible lengths; global mean preserved exactly; chunked float64). NEW `check_paa.py` (18 checks incl. brute-force overlap reference + the audit example) ALL PASS. `paa_impl` now in PREPROC_PROTOCOL.
     (2) **Noise not paired across sensor subsets**: one sequential RNG made a DOF's realization depend on its position in the loaded subset (same DOF: different noise alone vs in a pair) — realization variance leaked into config comparisons. FIX: RNG keyed `[NOISE_RNG_SEED, global_dof]` → subset-invariant, sensor-set comparisons noise-paired. `noise_pairing` in PREPROC_PROTOCOL. (The uniform `all_mult` 5% remains the deliberate symmetric stress model; per-channel additive datasheet floors stay the queued robustness arm.)
-    (3) **Objective mismatch**: aggregate MSE pooled scour (0–60) with bearing (0–95) heads — selection could buy bearing accuracy with scour accuracy. FIX (pre-registered): `objective_value` = **SCOUR-head MSE** on bearing rungs (bearing trained + reported, never selected on); training loss = **range-normalized multi-task MSE** (`WeightedHeadMSE`, w∝1/range², normalized to mean 1; constants SCOUR_RANGE_PCT=60 / BEARING_RANGE_PCT=95). Both recorded in TRAIN_PROTOCOL; selection_metric strings updated (driver + core/protocol descriptor).
+    (3) **Objective mismatch**: aggregate MSE pooled scour (0–60) with bearing (0–95) heads — selection could buy bearing accuracy with scour accuracy. FIX (pre-registered): `objective_value` = **SCOUR-head MSE** on bearing rungs (bearing trained + reported, never selected on); training loss = **range-normalized multi-task MSE** (`WeightedHeadMSE`, w∝1/range², normalized to mean 1; constants SCOUR_RANGE_PCT=60 / BEARING_RANGE_PCT=95). Both are executable in `TRAIN_PROTOCOL`; the protocol descriptor and `frozen_selection.json` embed that exact objective mapping rather than a duplicated prose string.
     (4) **Cache stem ignored N_SEGMENTS** (editing the constant would silently reuse stale-length caches): stem now carries `_seg<N>`.
     (5) **No pooling ablation existed** (all arms `use_nhits=True`, in Part I too) and the module is `MultiRatePooling1D` (N-HiTS-*inspired*), not full N-HiTS. FIX: 4th arm **`PAA_CNN`** (no multi-rate pooling → models.py native GAP path) = the pooling-ablation control; paper wording must say "multi-rate pooling", never claim N-HiTS (Sinha-rename precedent). Deployment rungs now 4 archs × 28 pairs × 3 seeds = 336 studies.
     (6) **No full-8 control** (the driver docstring literally said so; "2≈8" was only ever a Part-I claim). FIX: `CONTROL_SETS=[ALL_DOFS]` runs at EVERY rung as a **non-selectable** comparator (summarize() selects only among n_sensors==2; publish-gate refuses non-pairs) + is added to the pre-registered comparator set → the 2-vs-8 economy is measured per rung. In the protocol descriptor.
@@ -307,10 +307,85 @@ The probe (low mass, locked low speed) is a *different operating condition* than
 
 - **🔍 AUDIT R4 INDEPENDENTLY VERIFIED — 2026-07-25 (my review of Codex's `f805fbe`/`a91f2f2`/`c0ead72`; full record `docs/audit_r5_handoff.md`).** Method: green suites treated as UNPROVEN until each guard was shown to fail. Ran all 12 Python checks + the MATLAB battery, then a **mutation harness** (re-inject each original defect byte-for-byte, run its guard, require non-zero exit, restore from original bytes with a byte-identity assert). **Result 5/6 caught → one blind spot → fixed → 6/6.**
   - **BLIND SPOT (substantive, FIXED): the pre-registered primary estimand was unguarded.** Reverting `objective_value` to `return metrics["mse"]` — selection silently seeing the bearing heads again, undoing the r3 pre-registration — passed the ENTIRE suite including `check_protocol_hash`. Root cause: `TRAIN_PROTOCOL["objective"]` only DESCRIBES the estimand in prose; nothing bound description to implementation. Contrast the two mechanisms that do work: `batch_size`/`patience` are READ FROM the protocol by the trainer (cannot drift), and the loss is asserted behaviourally by `check_weighted_head_mse`. The objective had neither — the same declared-vs-actual gap R7.1 closed for the search space, never extended to the objective. FIX: five behavioural assertions in `check_campaign_controls.py` (scour-primary with bearing heads; aggregate NOT returned there; correct fallback without bearing heads; scour improvement outranks bearing improvement; TRAIN_PROTOCOL prose still declares scour-primary so re-registration moves the hash). **Open question handed to r5:** whether the stronger fix is to DERIVE `objective_value` from `TRAIN_PROTOCOL` (the batch_size pattern) so divergence is impossible by construction — I chose the behavioural guard because it does not move the protocol hash.
-  - **MINOR (FIXED): `check_b54_overlap_parity` could silently degrade.** With MATLAB absent from PATH it printed `[SKIP]` then `ALL PASS`, so a dispatch-PC preflight log would assert cross-language parity that never ran. Now prints `PYTHON-ONLY PASS (MATLAB cross-language half SKIPPED)`; both branches verified (PATH stripped).
-  - **MINOR (documentation, for Codex to record): undocumented breaking change.** `digital_twin/assets.py` routes `DigitalAsset.__init__` through `verify_standalone_dt_package`, which RAISES on any package lacking the new provenance fields — every pre-R4 DT package is now unloadable. Judged correct and in-mandate (harmless in practice: pre-mass-fix packages are invalid anyway and the prototype-twin figures use a synthetic observation model, not `DigitalAsset`), but it is not recorded as breaking in `audit_r4_results.md`. Also note the DT layer still has no audit pass of its own.
+  - **MINOR (FIXED, THEN MADE FAIL-CLOSED IN R5): `check_b54_overlap_parity` could silently degrade.** With MATLAB absent from PATH it printed `[SKIP]` then `ALL PASS`, so a dispatch-PC preflight log would assert cross-language parity that never ran. R4 first made the degraded scope explicit; R5 additionally makes the normal command exit non-zero unless the MATLAB half actually runs. `--allow-python-only` is an explicit development-only escape hatch and is not a valid dispatch preflight.
+  - **MINOR (documentation, CLOSED IN R5): intentional breaking change.** `digital_twin/assets.py` routes `DigitalAsset.__init__` through `verify_standalone_dt_package`, which RAISES on any package lacking the new provenance fields — every pre-R4 DT package is now unloadable. This is correct because the pre-mass-fix packages are invalid and provenance cannot be backfilled by assertion. The compatibility break and scope boundary are now explicit in `docs/audit_r4_results.md`. The broader DT layer still awaits its own audit pass.
   - **STRUCTURAL PROPERTIES I TRIED TO BREAK AND COULD NOT:** (1) **Cross-language B54 parity is genuine, not a shared-bug trap** — the extracted `B54_TrackVectors.m` helper is tested against an INDEPENDENT hardcoded oracle in `check_b54_overlap_parity.py`, and mutating the MATLAB helper ALONE (governing rule → last-wins) turns the check RED via row-order invariance while the Python mirror stays correct. (2) **Test-once is enforced at runtime**, not by convention: finalist CV receives `development_idx` only and the driver raises if `development_idx ∩ outer_idx` is non-empty. (3) `batch_size`/`patience` genuinely protocol-bound (verified they are read from `TRAIN_PROTOCOL`, not re-hardcoded).
   - Evidence at this review: 12/12 Python checks PASS; MATLAB `smoke_audit`, `smoke_b54_overlap_parity`, `smoke_contact_closure`, `smoke_stage3`, `smoke_geometry` PASS; working tree byte-identical after every mutation. Codex's own R4 self-report checked out on every claim I tested.
+
+- **AUDIT R5 — GENERATION IDENTITY CONVERGED 2026-07-25.** Because the user
+  elected to discard and regenerate the entire campaign, the generator contract
+  is bumped globally to `audit-2026-07-25-r9` (MATLAB + Python loader), and the
+  study/artifact tag moves to `gs6a20260725r9`. The feature transform is
+  unchanged, so `CACHE_SCHEMA_TAG` correctly remains `_gs6`; cache provenance
+  already compares the source schema/fingerprint/root and therefore rebuilds
+  rather than reusing an R8 source. The overlapping manual rule markers
+  `gen_rule_ver` (unconditional) and `track_eov_impl` (conditional) are replaced
+  by exactly one unconditional `generation_behavior_version`, stored once in
+  the canonical fingerprint config and once in `case_info` for inspection.
+  MATLAB release provenance remains a separate environment field, not a second
+  rule-version key. Rule-only code changes must bump the behavior version;
+  changes to the global data contract bump `gen_schema`. New
+  `check_generation_contract.py` binds the MATLAB schema, Python expectation,
+  study tag, fingerprint field and manifest field, bans both legacy keys, and
+  proves sensitivity with seven in-memory mutations. No generated data, result
+  or bundle was modified; all current bundle ZIPs remain stale.
+
+- **AUDIT R5 — EXECUTABLE TRAINING PROTOCOL 2026-07-25.** The stronger answer
+  to the F1 design question is derivation *plus* behavioural guards, and the
+  protocol hash is intentionally allowed to move because no valid ablation has
+  begun. `TRAIN_PROTOCOL["objective"]` is now a structured mapping consumed by
+  `task.objective_value`: bearing-head regressions select `scour_mse`; all
+  other tasks select `mse`; missing metrics or malformed policies fail closed.
+  The same declared-vs-executed gap also existed for loss, optimiser,
+  scheduler, trial-seed source and determinism, so each is now executable
+  protocol data consumed by the production factories/call sites. The Optuna
+  seed is mandatory (`config["seed"]`); the silent default to 42 is removed.
+  Protocol descriptor schema v3 records the exact executable objective mapping
+  in `selection.selection_metric`; `frozen_selection.json` records the same
+  mapping, eliminating the former duplicated `scour-primary` prose contract.
+  The canonical determinism mapping is shared by `core.utils` and
+  `TRAIN_PROTOCOL`, including cuDNN, hard-fail deterministic algorithms and
+  the cuBLAS workspace contract. Behavioural and AST call-site guards prove
+  both policy sensitivity and end-to-end consumption.
+
+- **AUDIT R5 — MUTATION AND COMPUTE GATES 2026-07-25.** The R4 statistical,
+  artifact and environment machinery is tested by an isolated 12-mutant
+  harness (`check_r4_mutation_guards.py`), while
+  `check_training_policy_mutation_guards.py` targets the executable objective,
+  loss, optimiser, scheduler, trial-seed and determinism bindings. Each
+  baseline must be green, every injected defect must turn the intended guard
+  red, each temporary target is restored byte-for-byte, and the real tree is
+  hash-checked unchanged. A separate compute-only benchmark
+  (`benchmark_r5_compute.py`) runs the real production Optuna `Objective` for
+  100 useful trials and one refit through the exact shared finalist-fold
+  implementation; `check_benchmark_contract.py` is its lightweight, non-GPU
+  contract guard and belongs to the dispatch preflight suite. The benchmark's
+  legacy cache is immutable workload material only; it writes no scientific
+  performance values (including suppression/restoration of Optuna's INFO-level
+  trial-value logging), uses a `BENCHMARK_ONLY_DO_NOT_PUBLISH__` study name,
+  requires a clean committed tree, records source/fixture/environment/hardware
+  hashes and timing, and confines all outputs to `.audit_tmp`. HPO timing is
+  cumulative across explicitly acknowledged restarts; after an abrupt stop its
+  heartbeat is an honest lower bound at a nominal five-second cadence, not a
+  strict five-second tail guarantee. Trial timestamps are converted from
+  Optuna's naive local datetimes to timezone-aware UTC before publication.
+  HPO completion requires a matching completed heartbeat, two concurrent stale
+  recoverers are serialized by a crash-released OS mutex, and contradictory or
+  missing timing evidence is never fabricated. The finalist has at-least-once execution
+  semantics and exactly one *durably accepted* completion: a published marker
+  repairs a torn attempt pointer without retraining, while an unmarked prior
+  attempt may have physically completed and is reported as unaccepted. The
+  final summary hashes every HPO/finalist artifact it announces, points to an
+  immutable logical SQLite backup (rather than unstable WAL/SHM files), and
+  supports only explicit, evidence-preserving repair of a torn completion
+  pointer. Its durable marker has an exact, type-checked field schema and is
+  validated on first publication as well as resume. The genuine-MATLAB family
+  table and raw-transform parity checkers are fail-closed: missing artifacts,
+  non-finite differences, or tolerance failures return non-zero. The mutation
+  campaigns and heavy benchmark are audit-only, not
+  per-PC preflights.
+  Commit-bound evidence in `docs/audit_r5_results.md` must authorize dispatch
+  before bundles are rebuilt.
 
 ---
 
