@@ -102,6 +102,11 @@ Passed Python checks:
 - `check_environment_lock.py`
 - `check_loader_provenance.py`
 - `check_split_grouping.py`
+- `check_familytable_roundtrip.py` (real MATLAB cell/logical encoding)
+- `check_raw_parity.py` (worst MATLAB–Python interpolation/crop difference
+  `1.980e-13`, below the `1e-12` gate)
+- `_stage3_smoke.py` (legacy/empty-descriptor healthy paths bit-identical;
+  finite track-damage + wheel-polygonisation response on all eight DOFs)
 
 Passed MATLAB checks:
 
@@ -113,6 +118,15 @@ Passed MATLAB checks:
 - `smoke_geometry` (all six fixed/FRA-profile, L60/L99.6 and 70/80/90-km/h
   configurations; live bridge length, full-deck crop, finite full-track profile,
   and compressive contact all passed)
+- `smoke_familytable` (MATLAB save/load, resume equality and fingerprint JSON
+  contracts)
+
+MATLAB R2025b Code Analyzer reported zero messages for `B54_ModelMatrices.m`,
+`B54_TrackVectors.m`, `B66_ContactForce.m`, `contact_closure_study.m` and
+`smoke_contact_closure.m`. `A00_Run.m` retains 41 non-fatal analyzer advisories:
+unreachable branches created by campaign constants, `parfor` broadcast/performance
+advice, obsolete suppressions, one `datestr` deprecation and formatting/
+preallocation suggestions.
 
 ## Remaining gates
 
