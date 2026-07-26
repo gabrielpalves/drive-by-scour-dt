@@ -387,6 +387,8 @@ The probe (low mass, locked low speed) is a *different operating condition* than
   Commit-bound evidence in `docs/audit_r5_results.md` must authorize dispatch
   before bundles are rebuilt.
 
+- **✅ r9 GENERATION PATH RE-VALIDATED — 2026-07-25, at commit `0db3bf2`.** Gap found while planning the idle-week work: `smoke_stage3` and `smoke_geometry` (the two heavy full-solve smokes that validate generation physics end to end) had last run on the **r4** tree, BEFORE Codex's r5 `gen_schema` bump to `audit-2026-07-25-r9` and the `generation_behavior_version` consolidation in A00. Re-ran both at r9: **SMOKE STAGE-3 ALL PASS** (healthy byte parity, damaged path, track damage placed on the real deck in the global frame, compressive contact) and **SMOKE GEOMETRY ALL PASS** (all six fixed/FRA × L60/L99.6 × 70/80/90 km/h configs; live bridge length, full-deck crop, finite full-track profile, no tension). Together with checkcode A00 = 41 baseline, `smoke_audit`, `smoke_b54_overlap_parity` and `smoke_familytable` at the same commit, **the r9 generation path is validated to the same standard the r4 tree was** — the r5 A00 delta was provenance-only (schema string + one version key), not physics. This is evidence FOR the pending R5 dispatch authorization, not a substitute for it: `docs/audit_r5_results.md` still reads DISPATCH BLOCKED and the bundle builder still refuses to write ZIPs.
+
 ---
 
 ## Reference shortlist
