@@ -1,0 +1,405 @@
+{
+  "active_compute_seconds_cumulative": 7332.772615299997,
+  "artifacts": {
+    "active_wall_heartbeat": "active_wall_heartbeat.json",
+    "descriptor": "descriptor.json",
+    "finalist_active_wall_heartbeat": "finalist_active_wall_heartbeat.json",
+    "finalist_attempt_state": "finalist_attempt_state.json",
+    "finalist_compute": "finalist_compute.json",
+    "hpo_compute": "hpo_compute.json",
+    "immutable_study_receipt": "study_receipt.sqlite3",
+    "study": "study.sqlite3",
+    "summary": "summary.json",
+    "trial_compute": "trial_compute.csv"
+  },
+  "classification": "NON-SCIENTIFIC WORKLOAD FIXTURE",
+  "classification_detail": "COMPUTE/THROUGHPUT BENCHMARK ONLY. The legacy fixture is not admissible for model selection, performance claims, scientific inference, or paper tables. Objective and returned finalist values are not exported.",
+  "cleanup": {
+    "exact_files_removed": 0,
+    "exact_paths_considered": 100,
+    "unexpected_paths_touched": false
+  },
+  "command": {
+    "argv": [
+      "C:\\Users\\gabri\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+      "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\benchmark_r5_compute.py"
+    ],
+    "cwd": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt",
+    "rendered": "C:\\Users\\gabri\\AppData\\Local\\Programs\\Python\\Python313\\python.exe C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\benchmark_r5_compute.py",
+    "this_invocation_measurement_completed_utc": "2026-07-26T19:54:11.725690+00:00",
+    "this_invocation_started_utc": "2026-07-26T17:51:39.348163+00:00",
+    "wall_clock_semantics": "this invocation from immediately after the warning banner through immutable study-receipt creation; excludes only final telemetry/summary/run-state writes",
+    "wall_seconds_before_summary_publication": 7352.377541599999
+  },
+  "descriptor_sha256": "317a02c0cd731252b7b5dffc9e3ae88520f38f43ce6f4de208d283f94be63d80",
+  "environment": {
+    "campaign_lock_validation": {
+      "cublas_workspace_config": ":4096:8",
+      "cuda_available": true,
+      "cudnn": 90701,
+      "generator_requirements": {
+        "matlab_release": "R2025b",
+        "validation": "hard-gated by scour_MATLAB/A00_Run.m"
+      },
+      "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+      "lock_sha256": "d7ba20c09e5a5b0ae955606451bbfe3e56aef25ce80aa321a4a6af54b2d8e15c",
+      "packages": {
+        "PyWavelets": "1.8.0",
+        "joblib": "1.4.2",
+        "matplotlib": "3.10.1",
+        "numpy": "2.2.5",
+        "optuna": "4.3.0",
+        "pandas": "2.2.3",
+        "pgmpy": "1.0.0",
+        "scikit-learn": "1.6.1",
+        "scipy": "1.15.2",
+        "seaborn": "0.13.2",
+        "torch": "2.7.0+cu128",
+        "tqdm": "4.67.1"
+      },
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.13.3",
+      "torch_cuda": "12.8"
+    },
+    "cpu_count": 32,
+    "cublas_workspace_config": ":4096:8",
+    "cuda_available": true,
+    "cudnn": 90701,
+    "environment_scope": "this invocation; earlier interrupted-invocation telemetry is not reconstructed",
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "gpu_telemetry_this_invocation_end": {
+      "available": true,
+      "captured_utc": "2026-07-26T19:54:11.782488+00:00",
+      "devices": [
+        {
+          "driver_version": "610.74",
+          "index": "0",
+          "memory_total_mib": "8188",
+          "name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+          "power_limit_w": "[N/A]",
+          "pstate": "P0",
+          "temperature_gpu_c": "80"
+        }
+      ]
+    },
+    "gpu_telemetry_this_invocation_start": {
+      "available": true,
+      "captured_utc": "2026-07-26T17:51:57.576449+00:00",
+      "devices": [
+        {
+          "driver_version": "610.74",
+          "index": "0",
+          "memory_total_mib": "8188",
+          "name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+          "power_limit_w": "[N/A]",
+          "pstate": "P0",
+          "temperature_gpu_c": "67"
+        }
+      ]
+    },
+    "machine": "AMD64",
+    "packages": {
+      "joblib": "1.4.2",
+      "numpy": "2.2.5",
+      "optuna": "4.3.0",
+      "scikit-learn": "1.6.1",
+      "torch": "2.7.0+cu128",
+      "tqdm": "4.67.1"
+    },
+    "physical_memory_bytes": 34049417216,
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "processor_identifier": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "python": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+    "python_executable": "C:\\Users\\gabri\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+    "torch_cuda": "12.8"
+  },
+  "finalist_compute": {
+    "active_wall_checkpoint_interval_seconds": 5.0,
+    "active_wall_seconds_cumulative": 157.17842910000763,
+    "active_wall_semantics": "exact on clean exit; after abrupt stop the persisted value is a lower bound sampled at a nominal cadence, not a strict tail bound",
+    "attempt_count": 1,
+    "classification": "NON-SCIENTIFIC WORKLOAD FIXTURE",
+    "completed_utc": "2026-07-26T19:54:11.463291+00:00",
+    "descriptor_sha256": "317a02c0cd731252b7b5dffc9e3ae88520f38f43ce6f4de208d283f94be63d80",
+    "durably_accepted_refits": 1,
+    "execution_semantics": "exactly one durably accepted completion; at-least-once execution after explicit recovery. A prior unaccepted attempt may have physically completed before its marker was published.",
+    "fold": 0,
+    "frozen_checkpoint_epoch_count": 25,
+    "helper": "training.trainer.fit_predict_finalist_fold",
+    "memory": {
+      "cuda_peak_allocated_bytes": 288352256,
+      "cuda_peak_reserved_bytes": 1845493760,
+      "rss_peak_bytes": null
+    },
+    "memory_complete": true,
+    "memory_scope": "durably accepted attempt only; may understate peaks from prior unaccepted attempts",
+    "n_repeats": 2,
+    "n_splits": 5,
+    "nominal_unrecorded_tail_seconds_per_abrupt_stop": 5.0,
+    "prior_unaccepted_attempt_count": 0,
+    "repeat": 0,
+    "returned_values_discarded": true,
+    "returned_values_finite": true,
+    "scale_train_infer_seconds": 157.1697783999989,
+    "schema": "ttbi-r5-compute-benchmark-v1",
+    "selected_parameter_sha256": "de902bb997320726628dc9cea0eecfdb7b1085151378cd121bdd1eb29e77230b",
+    "selected_trial_number": 54,
+    "split_seed": 271828,
+    "status": "completed",
+    "timing_complete": true,
+    "train_sample_count": 8250,
+    "train_state_count": 165,
+    "train_states_sha256": "36831817a012748510478d98b3e661e7b3d67b3671cad4dbf43a08bbf04f03ce",
+    "unrecorded_tail_bound": "not guaranteed; OS scheduling, the GIL and filesystem locks can delay a heartbeat beyond its nominal cadence",
+    "validation_sample_count": 2100,
+    "validation_state_count": 42,
+    "validation_states_sha256": "5d5697132040b479c907b2d4ef61c07433c90b43abf78a32b45ec75189a1aa45"
+  },
+  "fixture": {
+    "features_dtype": "float32",
+    "features_memmap_read_only": true,
+    "features_shape": [
+      12950,
+      2,
+      512
+    ],
+    "full_finiteness_chunk_samples": 256,
+    "full_finiteness_verified": true,
+    "labels_dtype": "float32",
+    "labels_memmap_read_only": true,
+    "labels_shape": [
+      12950,
+      2
+    ],
+    "passages_per_state": 50,
+    "sampled_finiteness_sample_count": 1024,
+    "sampled_finiteness_verified": true,
+    "state_block_order_verified": true,
+    "state_count": 259
+  },
+  "hashes": {
+    "descriptor_sha256": "317a02c0cd731252b7b5dffc9e3ae88520f38f43ce6f4de208d283f94be63d80",
+    "fixture_after": {
+      "features": {
+        "mtime_ns": 1783619718310994300,
+        "path": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\results\\Stage0\\cache\\MD0_Pair_RearBogie_Vert__CarBody_Pitch_all_DOF_2_5_disc1\\cache_L60_3span_multi_scour_scourS2-3_bearOFF_dano0-60pct_states259_Npass50_varNVST_PAA_dofs_2_5_disc1_reg_t2_3.npy",
+        "sha256": "901ada1f70eba8c29c321f6a5f8dd8321c7e3a8882b6b0d2c3341af5c1ca78d9",
+        "size_bytes": 53043328
+      },
+      "labels": {
+        "mtime_ns": 1783619717897724600,
+        "path": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\results\\Stage0\\cache\\MD0_Pair_RearBogie_Vert__CarBody_Pitch_all_DOF_2_5_disc1\\cache_L60_3span_multi_scour_scourS2-3_bearOFF_dano0-60pct_states259_Npass50_varNVST_PAA_dofs_2_5_disc1_reg_t2_3_labels.npy",
+        "sha256": "ff7862eaa229e4c1c6816f252380f087803acae5ae5d7686d0c4cd1bcf042a26",
+        "size_bytes": 103728
+      }
+    },
+    "fixture_before": {
+      "features": {
+        "mtime_ns": 1783619718310994300,
+        "path": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\results\\Stage0\\cache\\MD0_Pair_RearBogie_Vert__CarBody_Pitch_all_DOF_2_5_disc1\\cache_L60_3span_multi_scour_scourS2-3_bearOFF_dano0-60pct_states259_Npass50_varNVST_PAA_dofs_2_5_disc1_reg_t2_3.npy",
+        "sha256": "901ada1f70eba8c29c321f6a5f8dd8321c7e3a8882b6b0d2c3341af5c1ca78d9",
+        "size_bytes": 53043328
+      },
+      "labels": {
+        "mtime_ns": 1783619717897724600,
+        "path": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\results\\Stage0\\cache\\MD0_Pair_RearBogie_Vert__CarBody_Pitch_all_DOF_2_5_disc1\\cache_L60_3span_multi_scour_scourS2-3_bearOFF_dano0-60pct_states259_Npass50_varNVST_PAA_dofs_2_5_disc1_reg_t2_3_labels.npy",
+        "sha256": "ff7862eaa229e4c1c6816f252380f087803acae5ae5d7686d0c4cd1bcf042a26",
+        "size_bytes": 103728
+      }
+    },
+    "immutable_evidence": {
+      "active_wall_heartbeat.json": {
+        "sha256": "d1fbd22d8d0dd68a22f2f1a6db0341ee3d034074f201bc7ed5a93205282ea070",
+        "size_bytes": 380
+      },
+      "descriptor.json": {
+        "sha256": "4d962165f0238def2e7d9ace85da14f5625e26b767f2a4cf7ce3ea76b406cbc6",
+        "size_bytes": 6220
+      },
+      "finalist_active_wall_heartbeat.json": {
+        "sha256": "8862a080209f52ac4cc90a57cb7b12b84d7445fe0d65c3fd5dba6cbf5c96dd44",
+        "size_bytes": 381
+      },
+      "finalist_attempt_state.json": {
+        "sha256": "eee95c9aadac329b740513e334605fef45a4dc0774540716e111d9e1b2746b8d",
+        "size_bytes": 665
+      },
+      "finalist_compute.json": {
+        "sha256": "035ef079353a4926f6874bcfbf162a4dc7fb81e97aa41337ee9ddf6933efe48b",
+        "size_bytes": 2080
+      },
+      "hpo_compute.json": {
+        "sha256": "39b3da3959db42463e066df5954da6e28cabce0d39f00ccfa3031baf67e0f09c",
+        "size_bytes": 3496
+      },
+      "study_receipt.sqlite3": {
+        "sha256": "b56f7e76155330d4345e4f45f5bf2e16e9b3e58386b31917811ca54d4da4dcf8",
+        "size_bytes": 434176
+      },
+      "trial_compute.csv": {
+        "sha256": "202e7c7df7498087ed1532bc77b9ab9a27976b6a117675da2320c86dbb99c4c9",
+        "size_bytes": 23899
+      }
+    },
+    "source_after": {
+      "benchmark_r5_compute.py": "959f0b8354b8fa45b2ea3a09766a085c3004358e54ebdc35f9a844c57f0d2ce5",
+      "check_benchmark_contract.py": "971a15c76b2f80a9af1ea8f4bbb27862cb692993e816b256f299edc75d1292c1",
+      "comprehensive_ablation_multidamage.py": "4226002c3655117fd1b9e1549b352084c22a1d86ee13e2f4423b5a28463ac660",
+      "core/dataset.py": "0cf42163c1b7b9b80d090cd75d1f94e6139ad6468c02c4152da6a85542a7ae0a",
+      "core/environment.py": "33a66617feba33d136e62dc2e00d37a3000082547709be43ddc38ae1a6a94f3c",
+      "core/models.py": "e8d4110ff1da420a2460d439b5e5dcbb68a7f30438858d45fead29b0034677ef",
+      "core/preprocessing.py": "de66ad8a583037f33c117d37595b0342e31d1bd5d69af308aa06aa7387b75a47",
+      "core/protocol.py": "3d57155526154cebb693e7a3f4670f693c05656e9df322fa99c44a58be01975b",
+      "core/statistical_inference.py": "0e3da181d2c77681e4e39b024bea1b40614aaa2126fff332be07f1e7c1638f6f",
+      "core/task.py": "254b6352523543c40181f9dde916e406270cf884c92cf84918860f1d29087ef9",
+      "core/utils.py": "6e51efe9f0025836756835d368344cba4dddd706c596a5d5bc31850ff1f7c847",
+      "environment/campaign-py313-cu128.json": "d7ba20c09e5a5b0ae955606451bbfe3e56aef25ce80aa321a4a6af54b2d8e15c",
+      "plotting/confusion.py": "dcc10feee7313ea8b7837d041e8b55b457512a23af4cc1af0a33fc1c5792a709",
+      "plotting/robustness_plots.py": "c54dbaa4abe5ad1de5b331ea6e217acfff78cc0d6e3b72838fadbe3618dc621d",
+      "training/pipeline.py": "d073379249b049e623bfde26f4da74f1753f56e2b2c266cf5fe7fcd94e9683e2",
+      "training/robustness.py": "0bee267918015f8bc02fa105735226003fceca82f667d1fa7d349ae88fc57ce2",
+      "training/trainer.py": "23d55a772c0e1256c633a7923a000dd970d4731009993010d4d564b1dc4d2f2e"
+    },
+    "source_before": {
+      "benchmark_r5_compute.py": "959f0b8354b8fa45b2ea3a09766a085c3004358e54ebdc35f9a844c57f0d2ce5",
+      "check_benchmark_contract.py": "971a15c76b2f80a9af1ea8f4bbb27862cb692993e816b256f299edc75d1292c1",
+      "comprehensive_ablation_multidamage.py": "4226002c3655117fd1b9e1549b352084c22a1d86ee13e2f4423b5a28463ac660",
+      "core/dataset.py": "0cf42163c1b7b9b80d090cd75d1f94e6139ad6468c02c4152da6a85542a7ae0a",
+      "core/environment.py": "33a66617feba33d136e62dc2e00d37a3000082547709be43ddc38ae1a6a94f3c",
+      "core/models.py": "e8d4110ff1da420a2460d439b5e5dcbb68a7f30438858d45fead29b0034677ef",
+      "core/preprocessing.py": "de66ad8a583037f33c117d37595b0342e31d1bd5d69af308aa06aa7387b75a47",
+      "core/protocol.py": "3d57155526154cebb693e7a3f4670f693c05656e9df322fa99c44a58be01975b",
+      "core/statistical_inference.py": "0e3da181d2c77681e4e39b024bea1b40614aaa2126fff332be07f1e7c1638f6f",
+      "core/task.py": "254b6352523543c40181f9dde916e406270cf884c92cf84918860f1d29087ef9",
+      "core/utils.py": "6e51efe9f0025836756835d368344cba4dddd706c596a5d5bc31850ff1f7c847",
+      "environment/campaign-py313-cu128.json": "d7ba20c09e5a5b0ae955606451bbfe3e56aef25ce80aa321a4a6af54b2d8e15c",
+      "plotting/confusion.py": "dcc10feee7313ea8b7837d041e8b55b457512a23af4cc1af0a33fc1c5792a709",
+      "plotting/robustness_plots.py": "c54dbaa4abe5ad1de5b331ea6e217acfff78cc0d6e3b72838fadbe3618dc621d",
+      "training/pipeline.py": "d073379249b049e623bfde26f4da74f1753f56e2b2c266cf5fe7fcd94e9683e2",
+      "training/robustness.py": "0bee267918015f8bc02fa105735226003fceca82f667d1fa7d349ae88fc57ce2",
+      "training/trainer.py": "23d55a772c0e1256c633a7923a000dd970d4731009993010d4d564b1dc4d2f2e"
+    },
+    "study_storage": {
+      "study_receipt.sqlite3": {
+        "sha256": "b56f7e76155330d4345e4f45f5bf2e16e9b3e58386b31917811ca54d4da4dcf8",
+        "size_bytes": 434176
+      }
+    }
+  },
+  "identity": {
+    "git_sha": "a0793a11dee375e587c4d7b7b651c20895da37b1",
+    "git_tracked_dirty_at_start": false,
+    "hostname": "padilha",
+    "run_directory": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73",
+    "run_id": "a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73"
+  },
+  "runtime_output_directories": {
+    "CUDA_CACHE_PATH": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73\\runtime_cache\\cuda",
+    "MPLCONFIGDIR": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73\\runtime_cache\\matplotlib",
+    "NUMBA_CACHE_DIR": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73\\runtime_cache\\numba",
+    "TEMP": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73\\runtime_tmp",
+    "TMP": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73\\runtime_tmp",
+    "TMPDIR": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73\\runtime_tmp",
+    "TORCH_HOME": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73\\runtime_cache\\torch",
+    "XDG_CACHE_HOME": "C:\\Users\\gabri\\OneDrive\\Desktop\\Doutorado\\Sandwich\\DigitalTwins\\drive-by-scour-dt\\.audit_tmp\\r5_compute_benchmark\\a0793a11dee375e587c4d7b7b651c20895da37b1-padilha-r5c-317a02c0cd73\\runtime_cache"
+  },
+  "schema": "ttbi-r5-compute-benchmark-v1",
+  "splits": {
+    "assignment_pattern": [
+      "train",
+      "outer",
+      "inner",
+      "train",
+      "train"
+    ],
+    "development_sample_count": 10350,
+    "inner_indices_sha256": "7d6ad956c73169341dd136ac56199a03e027abf90b9a91e3fa5c56af03e3a20c",
+    "inner_sample_count": 2600,
+    "inner_state_count": 52,
+    "inner_states_sha256": "4909241a5704d68de53841ee5e26b9d6f52431e919de1bcd73c9637291a43311",
+    "outer_indices_sha256": "ab552649884b80a7fbe95f34b7c793f3933d7fa21316123983f8988d182d427f",
+    "outer_sample_count": 2600,
+    "outer_state_count": 52,
+    "outer_states_sha256": "04a3dea755dc78b7d87f11d730e70a77ecb0ed1f3df7fda203a9d1dcd503d046",
+    "seed": 42,
+    "stratum_count": 1,
+    "stratum_label": "workload",
+    "train_indices_sha256": "d69c819e3843aef4f18ffda57e31e3eadaa33d5a55f9cf8de2b40e9953fa9bc0",
+    "train_sample_count": 7750,
+    "train_state_count": 155,
+    "train_states_sha256": "43a3f7c5494cd23cd124ab0fc5b56935fb5af764061148921721c4b6007db512"
+  },
+  "stale_trials_recovered_this_invocation": [],
+  "status": "completed",
+  "study_compute": {
+    "active_wall_checkpoint_interval_seconds": 5.0,
+    "active_wall_semantics": "exact on clean exit; after abrupt stop the persisted value is a lower bound sampled at a nominal cadence, not a strict tail bound",
+    "adapter_calls": {
+      "canonical_split": 100,
+      "get_cache": 100
+    },
+    "adapter_calls_scope": "this invocation",
+    "all_stale_trial_numbers_recovered": [],
+    "checkpoint_files_removed_during_hpo": 100,
+    "counts_after": {
+      "complete": 29,
+      "failed": 0,
+      "pruned": 71,
+      "running": 0,
+      "total": 100,
+      "useful": 100,
+      "waiting": 0
+    },
+    "counts_before": {
+      "complete": 0,
+      "failed": 0,
+      "pruned": 0,
+      "running": 0,
+      "total": 0,
+      "useful": 0,
+      "waiting": 0
+    },
+    "epoch_cap_per_trial": 50,
+    "failed_trial_duration_reason": "stale FAIL durations may include powered-off downtime",
+    "failed_trial_durations_excluded": true,
+    "failure_slack": 20,
+    "hpo_active_wall_seconds_cumulative": 7175.594186199989,
+    "hpo_interruption_history": [],
+    "hpo_wall_seconds_this_invocation": 7175.58953859999,
+    "memory": {
+      "cuda_peak_allocated_bytes": 841755136,
+      "cuda_peak_reserved_bytes": 1845493760,
+      "rss_peak_bytes": null
+    },
+    "memory_complete": true,
+    "memory_scope": "entire HPO workload",
+    "nominal_unrecorded_tail_seconds_per_abrupt_stop": 5.0,
+    "optuna_recovery_events": [],
+    "resumed_with_existing_trials": false,
+    "stale_inflight_trial_numbers_recovered_this_invocation": [],
+    "study_name": "BENCHMARK_ONLY_DO_NOT_PUBLISH__317a02c0cd731252",
+    "timing_complete": true,
+    "trial_compute_sha256": "202e7c7df7498087ed1532bc77b9ab9a27976b6a117675da2320c86dbb99c4c9",
+    "unrecorded_tail_bound": "not guaranteed; OS scheduling, the GIL and filesystem locks can delay a heartbeat beyond its nominal cadence",
+    "useful_budget": 100,
+    "useful_epochs_reported_quantiles": {
+      "p0": 5.0,
+      "p100": 50.0,
+      "p25": 5.0,
+      "p50": 10.5,
+      "p75": 13.0,
+      "p95": 25.19999999999999
+    },
+    "useful_epochs_reported_sum": 1107,
+    "useful_trial_duration_seconds_quantiles": {
+      "p0": 25.986539,
+      "p100": 264.614706,
+      "p25": 32.942094,
+      "p50": 59.833664999999996,
+      "p75": 96.9682705,
+      "p95": 162.76606959999995
+    },
+    "useful_trial_duration_seconds_sum": 7165.956965
+  }
+}
