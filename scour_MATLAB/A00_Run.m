@@ -10,12 +10,48 @@ clear; clc; close all
 % Campaign environment gate (audit r4): generator numerics were validated under
 % MATLAB R2025b. Refuse a different release before any state is drawn or file is
 % written; the Python lock records the same requirement.
-expected_matlab_release = '2025b';
+% WIDENED to a VALIDATED ALLOWLIST (2026-07-25). The gate exists to stop MIXED
+% releases inside one campaign, NOT to bless one specific version -- a campaign
+% generated entirely on one validated release is homogeneous whichever release
+% that is. A release qualifies only after BOTH of the following pass ON IT:
+%   (1) the MATLAB smoke suite: smoke_audit, smoke_geometry, smoke_stage3,
+%       smoke_familytable, smoke_b54_overlap_parity  (validates the PHYSICS);
+%   (2) generation identity vs an already-validated release: run
+%       make_micro_smoke.py on both machines, then
+%       `python compare_generation_releases.py <dirA> <dirB>` must report
+%       BIT-IDENTICAL (or a numerical verdict explicitly accepted and recorded
+%       in docs/framework_rationale.md).
+% Risk areas that make (2) mandatory rather than assumed: Statistics Toolbox
+% samplers (poissrnd/wblrnd/lhsdesign) may change algorithm between releases,
+% and BLAS/LAPACK drift can accumulate over ~8.7k Newmark steps.
+% The release actually used is recorded in case_info.matlab_release of every
+% dataset, so cross-rung homogeneity stays auditable after the fact.
+%
+% VALIDATED RELEASES (add only with the evidence above):
+%   2025b -- audit r4/r5 full smoke suite; heavy smokes re-run at r9 2026-07-25.
+validated_matlab_releases = {'2025b'};
 matlab_release = version('-release');
-if ~strcmp(matlab_release, expected_matlab_release)
-    error('A00:MATLABRelease', ...
-        'Campaign requires MATLAB R%s; running R%s.', ...
-        expected_matlab_release, matlab_release);
+% Qualification escape hatch: permits an UNVALIDATED release so a machine can
+% run the smokes + micro-smoke needed to qualify it. The run is marked in
+% case_info (release_qualification_run) so its output can never be mistaken for
+% campaign data. NEVER set this for real generation.
+qualification_run = ~isempty(getenv('A00_RELEASE_QUALIFICATION'));
+if ~any(strcmp(matlab_release, validated_matlab_releases))
+    if ~qualification_run
+        error('A00:MATLABRelease', ...
+            ['Campaign generation requires a VALIDATED MATLAB release ' ...
+             '(%s); running R%s. To qualify this release run the MATLAB ' ...
+             'smoke suite and the generation-identity comparison (see the ' ...
+             'block above), then add it to validated_matlab_releases.'], ...
+            strjoin(strcat('R', validated_matlab_releases), ', '), ...
+            matlab_release);
+    end
+    fprintf(2, ['[A00] *** RELEASE-QUALIFICATION RUN on UNVALIDATED ' ...
+                'R%s ***\n      Output is NOT campaign data. Use it only ' ...
+                'for compare_generation_releases.py, then delete it.\n'], ...
+            matlab_release);
+else
+    fprintf('[A00] MATLAB release R%s (validated).\n', matlab_release);
 end
 
 % =========================================================================
@@ -789,6 +825,9 @@ case_info = struct( ...
     'gen_fingerprint', gen_fingerprint, ...
     'generation_behavior_version', generation_behavior_version, ...
     'matlab_release', ['R' matlab_release], ...
+    ... % true only for A00_RELEASE_QUALIFICATION runs on an UNVALIDATED
+    ... % release: marks output that must never be used as campaign data.
+    'release_qualification_run', qualification_run, ...
     'oor_flats_enabled', oor_flats_enabled, ...
     'timestamp', tempo_inicial_str, ...
     'damage_mode', damage_mode, ...
