@@ -23,8 +23,11 @@ import scipy.io as sio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.dataset import get_or_create_cache, _EXPECTED_GEN_SCHEMA  # noqa: E402
+from core.protocol import read_dataset_provenance  # noqa: E402
 
-NST, NP, L, FP = 4, 4, 64, "fp-cache-prov"
+# Keep the integration fixture at the campaign's 512 PAA segments.  PAA is a
+# reduction and now correctly rejects n_segments > raw length.
+NST, NP, L, FP = 4, 4, 512, "fp-cache-prov"
 CFG = {'method': 'PAA', 'dofs': [0], 'task': 'regression', 'target_supports': [2, 3]}
 fails = 0
 
@@ -151,9 +154,8 @@ def main():
         os.remove(_art(cache_dir, '_prov.json'))
         check("missing prov sidecar -> rebuilt", _rebuilds_ok(ds, cache_dir, shape))
 
-        # 6. Same-size SOURCE .mat overwrite -> source SHA rejects on rebuild attempt
-        #    (invalidate cache first by touching the manifest digest input)
-        os.remove(_art(cache_dir, '_prov.json'))       # force a rebuild path
+        # 6. Same-size SOURCE .mat overwrite -> source SHA rejects even while a
+        #    valid cache + provenance sidecar exist (audit r4 fast-path closure).
         sfile = os.path.join(data_dir, "0002.mat")
         bb = bytearray(open(sfile, 'rb').read()); bb[len(bb) // 2] ^= 0x01
         open(sfile, 'wb').write(bb)                     # same size, NO _finalize
@@ -165,7 +167,30 @@ def main():
         _build_dataset(data_dir)                        # restore a clean dataset
         shutil.rmtree(cache_dir, ignore_errors=True)
 
-        # 7. Wrong marker content -> source 'incomplete' -> rebuild -> loader rejects
+        # 7. Valid replacement after driver import must not train under the old
+        #    protocol identity (TOCTOU closure).
+        expected_source = read_dataset_provenance(data_dir)
+        bound_cfg = {
+            **CFG,
+            "protocol_hash": "fixture-old-protocol",
+            "protocol_descriptor": {
+                "rung": {"dataset_provenance": expected_source}
+            },
+        }
+        get_or_create_cache(bound_cfg, ds, cache_dir)
+        table_path = os.path.join(data_dir, "damage_states.mat")
+        table = sio.loadmat(table_path)
+        table["AnchorLevel"] = np.ones((NST, 1))
+        sio.savemat(table_path, table)
+        try:
+            get_or_create_cache(bound_cfg, ds, cache_dir)
+            check("post-import valid source replacement rejects stale protocol", False)
+        except RuntimeError:
+            check("post-import valid source replacement rejects stale protocol", True)
+        _build_dataset(data_dir)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+        # 8. Wrong marker content -> source 'incomplete' -> rebuild -> loader rejects
         get_or_create_cache(CFG, ds, cache_dir)         # fresh valid cache
         with open(os.path.join(data_dir, '_GENERATION_COMPLETE'), 'w') as fh:
             fh.write("WRONG\nWRONG\nWRONG\n")
@@ -177,7 +202,7 @@ def main():
         _build_dataset(data_dir)
         shutil.rmtree(cache_dir, ignore_errors=True)
 
-        # 8. CONCURRENT builds of the SAME stem (per-stem lock serialises them)
+        # 9. CONCURRENT builds of the SAME stem (per-stem lock serialises them)
         def _one(_):
             X, y, sc, g = get_or_create_cache(CFG, ds, cache_dir)
             n = len(g)

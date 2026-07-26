@@ -90,7 +90,7 @@ OPTUNA_PROTOCOL = {
     "max_fail_slack": 20,
     # What counts as a finished study (audit R6 C1 / R7 P1) - stated here so a
     # change in the completeness rule is a protocol change.
-    "finished_rule": "no RUNNING/WAITING and COMPLETE+PRUNED >= n_trials and COMPLETE >= 1",
+    "finished_rule": "no RUNNING/WAITING and COMPLETE+PRUNED == n_trials and COMPLETE >= 1",
 }
 
 
@@ -171,19 +171,24 @@ def read_dataset_provenance(dataset_dir: str) -> dict:
       * gen_schema equals the loader's expected schema (fail HERE, before hours
         of study time, not later inside the loader);
       * file_digests.mat present, root digest matches its own per-file lines;
+      * case_info.mat and damage_states.mat bytes enter the full protocol hash,
+        even for legacy R8 digest tables that listed state files only;
       * _GENERATION_COMPLETE marker present with schema/fp/root agreeing with
         the manifest + digests.
     This deliberately re-checks what the loader also checks: the protocol hash
     is computed ONCE at driver start, and a wrong dataset must stop the run
     before any study is created under a name derived from it.
 
-    NOTE: this does NOT hash the .mat bytes themselves (the loader's per-file
-    SHA check does that at load time); it binds the run to the recorded root.
+    Audit r4 additionally verifies every recorded source file's bytes here,
+    before any study is created.  The cache path repeats this call, which is a
+    cheap stat-only check after the process-local successful hash pass.
     """
     # Imported here (not module level) to keep this module import-light for the
     # check scripts; core.dataset pulls in torch/sklearn.
     from core.dataset import (_read_manifest, _read_file_digests, _root_digest,
-                              _read_dano_max, _EXPECTED_GEN_SCHEMA)
+                              _read_dano_max, _EXPECTED_GEN_SCHEMA,
+                              verify_source_file_bytes,
+                              _read_manifest_optional_string)
 
     if not os.path.isdir(dataset_dir):
         raise RuntimeError(
@@ -221,6 +226,9 @@ def read_dataset_provenance(dataset_dir: str) -> dict:
             f"protocol hash: {dataset_dir} marker content disagrees with "
             f"manifest/digests (marker={mk[:3]}, expected="
             f"{[gen_schema, gen_fp, root]}) - mixed or tampered dataset.")
+    byte_verification = verify_source_file_bytes(dataset_dir)
+    recorded_matlab_release = _read_manifest_optional_string(
+        dataset_dir, "matlab_release")
     return {
         "gen_schema":          gen_schema,
         "gen_fingerprint":     gen_fp,
@@ -228,6 +236,17 @@ def read_dataset_provenance(dataset_dir: str) -> dict:
         "n_states":            int(n_states),
         "passages_per_state":  int(npass),
         "scour_dano_max_frac": _read_dano_max(dataset_dir),
+        "matlab_release": (
+            recorded_matlab_release
+            if recorded_matlab_release else "UNRECORDED_R8_PRE_AUDIT_R4"
+        ),
+        "matlab_release_attestation": (
+            "recorded by A00 release gate"
+            if recorded_matlab_release
+            else "legacy R8 sidecar did not record release; current A00 hard-"
+                 "requires R2025b, but this dataset's release is unverified"
+        ),
+        "source_byte_verification": byte_verification,
     }
 
 
@@ -249,6 +268,7 @@ def build_protocol_descriptors(
     seeds:                list,
     n_trials:             int,
     epochs:               int,
+    use_pruner:           bool,
     sensor_noise:         dict | None,
     architectures:        list,
     extra_pairs:          list,
@@ -257,10 +277,16 @@ def build_protocol_descriptors(
     schema_tag:           str,
     train_protocol:       dict,
     search_space:         dict,
+    environment_lock:     dict | None = None,
     # Feature B (2026-07-19): deployment-selection stages + the bootstrap-CI
     # policy are protocol too. Defaults keep older callers/tests valid.
     deployment_selection_stages: set = frozenset(),
+    multi_arch_pair_selection_stages: set = frozenset(),
     bootstrap:            dict | None = None,
+    # Audit r4: repeated grouped-CV and state-first cross-seed inference are
+    # executable protocol, not post-processing decoration.  The whole policy is
+    # supplied as data by the driver and therefore moves the core hash.
+    statistical_inference: dict | None = None,
     # Audit r3 (2026-07-22): non-selectable sensor-budget controls (the full
     # 8-DOF array) reported as comparators at every rung. Default keeps older
     # callers/tests valid.
@@ -281,7 +307,7 @@ def build_protocol_descriptors(
     from core.dataset import CACHE_SCHEMA_TAG
 
     core = {
-        "protocol_version": 1,          # bump if the descriptor STRUCTURE changes
+        "protocol_version": 2,          # v2: statistical-inference policy added
         "code": {
             # Code-version markers: the driver/loader schema tag, the generator
             # schema the loader requires, and the cache contract tag. Bumping any
@@ -300,11 +326,13 @@ def build_protocol_descriptors(
             **OPTUNA_PROTOCOL,
             "n_trials": int(n_trials),
             "epochs":   int(epochs),
+            "use_pruner": bool(use_pruner),
             # SEEDS order is significant (SEEDS[0] = canonical representative),
             # so it is hashed as an ORDERED list.
             "seeds":    [int(s) for s in seeds],
         },
         "search_space": search_space,
+        "environment_lock": environment_lock,
         # None (clean chain) hashes differently from every configured dict, and
         # any dict key/value change (mode, desvio, ...) changes the hash.
         "sensor_noise": sensor_noise,
@@ -317,13 +345,21 @@ def build_protocol_descriptors(
             "selection_metric":       "median_inner_val_mse (scour-primary objective)",
             "extra_pairs":            [sorted(int(d) for d in p) for p in extra_pairs],
             "control_sets":           [sorted(int(d) for d in c) for c in control_sets],
+            "control_arch_policy":    (
+                "all trained architectures are compared on the selected pair "
+                "and full-array control at full-factorial stages; frozen rungs "
+                "report winner/carried architectures (deduplicated)"
+            ),
             "pair_search_stages":     sorted(pair_search_stages),
             "arch_selection_stages":  sorted(arch_selection_stages),
             # Feature B: deployment rungs re-open arch x pair; comparators are
             # keyed (architecture, pair); reported CIs are state-level bootstrap.
             "deployment_selection_stages": sorted(deployment_selection_stages),
+            "multi_arch_pair_selection_stages":
+                sorted(multi_arch_pair_selection_stages),
             "comparator_key":         "(architecture, pair)",
             "bootstrap":              bootstrap,
+            "statistical_inference":  statistical_inference,
         },
     }
     full = {

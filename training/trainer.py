@@ -71,6 +71,9 @@ TRAIN_PROTOCOL = {
                     "95 %; task.WeightedHeadMSE); plain MSE without bearing "
                     "heads; classification: cross-entropy"),
     "trial_seed":  "config['seed'] (independent init/shuffle per config seed)",
+    "determinism": ("Python/NumPy/Torch seeded; cuDNN deterministic and benchmark "
+                    "disabled; torch deterministic algorithms hard-fail "
+                    "(warn_only=False); CUBLAS_WORKSPACE_CONFIG=:4096:8"),
 }
 
 # The FULL hyperparameter search space, as data. Spec tuples:
@@ -194,7 +197,7 @@ def train_and_evaluate(
     # ── Model, loss, optimiser, scheduler ────────────────────────────────────
     # Loss follows the task: cross-entropy (classification) or MSE (regression).
     model, _  = build_model(config, params, X.shape, DEVICE)
-    criterion = task.make_criterion(config)
+    criterion = task.make_criterion(config).to(DEVICE)
     optimizer = optim.Adam(
         model.parameters(), lr=params['lr'], weight_decay=params['weight_decay']
     )
@@ -306,7 +309,7 @@ def run_single_training(
     )
 
     model, _  = build_model(config, params, X.shape, DEVICE)
-    criterion = task.make_criterion(config)
+    criterion = task.make_criterion(config).to(DEVICE)
     optimizer = optim.Adam(
         model.parameters(),
         lr=params['lr'],

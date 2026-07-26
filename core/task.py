@@ -97,12 +97,28 @@ class WeightedHeadMSE(nn.Module):
 
     def __init__(self, ranges: list):
         super().__init__()
-        w = torch.tensor([1.0 / (r * r) for r in ranges], dtype=torch.float32)
+        r = torch.as_tensor(ranges, dtype=torch.float32)
+        if r.ndim != 1 or r.numel() == 0:
+            raise ValueError("WeightedHeadMSE needs one positive range per head.")
+        if not bool(torch.isfinite(r).all()) or bool((r <= 0).any()):
+            raise ValueError(
+                f"WeightedHeadMSE ranges must be finite and positive; got {ranges!r}.")
+        w = 1.0 / (r * r)
         self.register_buffer("w", w / w.mean())
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         if pred.dim() == 1:
-            pred, target = pred.unsqueeze(1), target.unsqueeze(1)
+            pred = pred.unsqueeze(1)
+        if target.dim() == 1:
+            target = target.unsqueeze(1)
+        if pred.dim() != 2 or target.dim() != 2 or pred.shape != target.shape:
+            raise ValueError(
+                "WeightedHeadMSE expects matching (batch, heads) tensors; "
+                f"got pred={tuple(pred.shape)}, target={tuple(target.shape)}.")
+        if pred.shape[1] != self.w.numel():
+            raise ValueError(
+                f"WeightedHeadMSE was configured for {self.w.numel()} head(s), "
+                f"but received {pred.shape[1]}.")
         return (self.w.to(pred.device) * (pred - target) ** 2).mean()
 
 

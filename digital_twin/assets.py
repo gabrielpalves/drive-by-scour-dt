@@ -36,12 +36,10 @@ Imported by:
     drive_by_DT.py — all three classes
 """
 
-import json
-import os
-
 import numpy as np
 import torch
 
+from core.artifact_provenance import verify_standalone_dt_package
 from core.models        import build_model
 from core.preprocessing import TTBIPreprocessor
 from core.utils         import IDX_TO_DOF_NAME
@@ -338,8 +336,13 @@ class DigitalAsset:
         self.config = config
 
         # ── Load architecture metadata ────────────────────────────────────────
-        with open(metadata_path) as f:
-            self.metadata = json.load(f)
+        self.metadata = verify_standalone_dt_package(
+            model_path, metadata_path, scaler_path
+        )
+        if int(self.metadata.get("n_segments", config.n_segments)) \
+                != int(config.n_segments):
+            raise RuntimeError(
+                "DTConfig.n_segments differs from the authenticated package.")
 
         arch_flags   = self.metadata['architecture_flags']
         best_params  = self.metadata['optimal_hyperparameters']

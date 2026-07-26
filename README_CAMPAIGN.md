@@ -4,6 +4,29 @@ Everything is **regenerated from scratch**: new ladder, raw/Option-B data format
 anchored EOVs, noise-free generation. The earlier Stage-0/1 datasets and the L100
 Stage-2 pilot are **superseded** (kept only as a historical record under `results/`).
 
+> ## 🔴 AUDIT R4 (2026-07-25) — current ZIPs are not dispatchable
+>
+> The untracked `bundle_*.zip` files in this working copy predate the R4
+> methodology/provenance changes. Do not dispatch them. After independent review,
+> commit the reviewed source, then rebuild from that clean commit; the builder
+> now reads the explicit tracked `bundle_source_files.txt`, refuses dirty runtime
+> inputs and records the source commit plus transport SHA-256.
+>
+> R4 adds: true finalist-only 5-fold × 2-repeat **state-grouped** CV; fold-local
+> scaling; an immutable outer-test firewall; state-first cross-seed bootstrap and
+> paired contrasts; top-5 and per-architecture finalists; exact pair/seed matrix
+> guards; protocol-stamped Optuna studies and exported weights/scalers; full
+> source-file verification on cache reuse; a Python/CUDA environment lock; and a
+> MATLAB contact time-step closure harness. The complete evidence and remaining
+> gates are in `docs/audit_r4_results.md`.
+>
+> Two empirical gates remain before confirmatory publication claims: run the
+> 1/0.5/0.25-ms contact-closure study on the regenerated s23 state 24 and s15
+> state 244, and complete the actual campaign. The six `nuisance_only` states
+> leave only one outer-test state; that isolated false-positive probe is
+> **exploratory**, not confirmatory. The main joint-state estimation experiment
+> is unaffected by that wording constraint.
+>
 > ## 🔴 AUDIT 2026-07-17 — bundles built before this date are INVALID
 > An external code audit (verified line-by-line) found seven defects; all are
 > fixed in this tree (full record: `docs/framework_rationale.md`, 2026-07-17
@@ -15,7 +38,7 @@ Stage-2 pilot are **superseded** (kept only as a historical record under `result
 > (bilateral solver can't represent the separation they cause; polygonization
 > stays); wheel–rail tension is now logged per passage (`contact_log`); the
 > Python split is now **grouped by damage state** (caches retag to `_gs1`);
-> Stage 0 again runs **all architectures** (`stage0_multiscour` name bug) and
+> Stage 0 again runs **all architectures** (the old stage-name check was wrong) and
 > the pre-mass-fix `CHAMPION_ARCH` must be re-selected from the new s0 run.
 > **Before generating anything:** rebuild bundles from this tree
 > (`python build_stage_bundles.py`), run `smoke_audit.m`, `smoke_stage3.m`,
@@ -48,8 +71,9 @@ Stage-2 pilot are **superseded** (kept only as a historical record under `result
 >   contaminate (previously `s11` could resume `s0`'s studies).
 > - **Champion across PCs:** after s0 finishes, copy `results/_champion_arch_
 >   <schema>.json` to each s11+ PC (or point the `CHAMPION_MANIFEST` env var at
->   it, or set `CHAMPION_ARCH_OVERRIDE=<winner>`). s11+ still hard-errors if it
->   has no champion.
+>   it). Bare architecture/pair overrides are rejected: only the complete
+>   manifest proves the s0 split, budget, protocol hash, pair and `RUN_TAG`.
+>   Every later rung hard-errors if that authenticated lineage is absent.
 > - **Provenance:** A00 writes a `gen_fingerprint` (Npass/seeds/severities/…) and
 >   aborts resume if it differs; the Python loader requires `gen_schema` +
 >   `contact_log` in every `.mat`. Caches are tagged `_gs6` (all older tags
@@ -59,16 +83,20 @@ Stage-2 pilot are **superseded** (kept only as a historical record under `result
 >   caused wheel-rail contact loss. `smoke_geometry` checks contact at 70/80/90
 >   km/h.
 
-**One bundle per rung.** Each `bundle_<stage>.zip` is self-contained — MATLAB
-generator + Python ablation, both **preset for that rung**, plus the parity smoke.
-Extract into the repo root on a Lab PC and run; no editing. Rebuild any time with
+**One bundle per rung.** A newly rebuilt `bundle_<stage>.zip` is self-contained —
+MATLAB generator + Python ablation, both **preset for that rung**, plus the
+preflight smokes. Extract into a fresh folder on a Lab PC and run; no editing.
+Build only from a clean, independently reviewed commit with
 `python build_stage_bundles.py`. Each bundle carries its own `README_BUNDLE.md`.
 
 ## The ladder
 
-One factor per rung, so any degradation is **attributable**. Heads = **scour +
-bearing only**; crack / rail profile / track-layer / wheel damage are **nuisances**
-the network must be invariant to (it never estimates them).
+Within each declared ladder sequence, one data-generating factor is added per
+rung; attribution is conditional on the fixed ladder architecture/placement and
+the simulated design distribution. The separately labelled deployment selections
+are not causal ladder contrasts. Heads = **scour + bearing only**; crack / rail
+profile / track-layer / wheel damage are **nuisances** the network must be
+invariant to (it never estimates them).
 
 | Bundle | Adds | Geometry |
 |---|---|---|
@@ -100,9 +128,13 @@ stands); tagged re-runs get their own summary dir.
 seeds = **336 studies each**. Their winner is EXPLORATORY: it goes to a separate
 `results/_deployment_selection_<stage>_..json` manifest (with a state-level
 bootstrap 95% CI on the outer-test MSE) and **never overwrites the s0 ladder
-champion**. The claim it supports is exactly *"best among these 3 architectures
-× 28 two-sensor pairs at this budget + geometry"* — not a sensor-count claim.
-Hybrid campaign total ≈ 858 studies.
+champion**. The claim it supports is exactly *"best among these 4 architectures
+× 28 two-sensor pairs at this budget + geometry"* — not a sensor-count or global
+optimality claim. The full ladder requires approximately **1,344–1,359 Optuna
+studies** (134,400–135,900 useful trials), depending on whether the designed
+pair duplicates the carried pair, plus at most about **2,040 fixed-hyperparameter
+finalist-CV refits** after comparator deduplication. Benchmark wall time before
+dispatching the complete ladder.
 
 Folder names are **short** (`<stage>_L<len>_st<N>`, e.g. `s14_prof_L60_st300`) —
 the old ~110-char names blew past Windows MAX_PATH. The full descriptor lives in
@@ -114,7 +146,11 @@ State counts since **Feature A** (2026-07-19, explicit state families):
 + 6 `nuisance_only` (crack rungs). E.g. s0 = 278, s11 = 294, s12 = 284,
 s13–s16 = 300, s21 = 286, s22/s23 = 308. Every family is guaranteed present in
 train / inner-val / outer-test by the stratified split (`split_manifest.json`
-is written next to the data and verified on every load).
+is written next to the data and verified on every load). Presence is not the
+same as adequate inferential sample size: `nuisance_only=6` maps to only one
+outer-test state, so its isolated false-positive result is explicitly exploratory.
+The R4 MCSE report gives the next-regeneration recommendation (design floor:
+50 total states for ten expected evaluation states at a 20% allocation).
 
 ## Per-bundle run order
 
@@ -127,10 +163,14 @@ is written next to the data and verified on every load).
    `python check_raw_parity.py "scour_MATLAB/Results/<case>"`.
    **Must print `PARITY PASS`** (max|MATLAB−Python| < 1e-12) before the long runs.
 3. **Python — ablate.** `python comprehensive_ablation_multidamage.py`
-   (STAGE + SENSOR_NOISE preset). 100 Optuna trials × 3 seeds, Phase-1 single-DOF
-   sweep → auto pair + the designed mixed pair `[1,3]`.
-   Summary → `results/<stage>_summary_ph-<hash>/` (+ `leaderboard_median.csv` = the
-   paper-facing table).
+   (STAGE + SENSOR_NOISE preset), with 100 useful Optuna trials × 3 seeds per
+   configuration. `s0` runs the four-architecture × 28-pair factorial (plus a
+   diagnostic single-DOF sweep); `s16/s23` repeat the full joint factorial for
+   exploratory deployment selection; `s21/s22` search all pairs on the carried
+   architecture; frozen rungs run the carried pair, designed `[1,3]` comparator
+   and full-array control. Selection uses inner validation only. Finalist CV uses
+   development states only. The sealed outer test is opened after both freeze.
+   Summary → `results/<stage>_summary_ph-<hash>/`.
 
 Generation and ablation run **concurrently** — with 3 PCs, generate the next rung
 while the previous one ablates.
@@ -153,10 +193,27 @@ while the previous one ablates.
   fouling↔voiding **coupled ×3**; ballast **×3** near abutments.
 - **Provenance.** Re-ablations start **from scratch** via `RUN_TAG`; the noise mode
   enters the study name, so a noise A/B on identical data trains separate studies
-  instead of silently resuming.
+  instead of silently resuming. Protocol descriptors, dataset/source hashes,
+  study records, weights, scalers, environment lock and bundle source commit are
+  cross-checked before reuse or publication.
+
+## Claim boundary
+
+The implemented confirmatory task is **continuous scour support-stiffness-loss
+estimation and most-damaged-pier localisation** under the simulated design
+distribution. Do not claim a binary detector, sensitivity/specificity, calibrated
+probability of damage or minimum detectable severity: no development-locked
+detection threshold has been implemented. The 5% localisation threshold is a
+metric eligibility rule, not a binary alarm threshold.
 
 ## Requirements
-`torch, optuna, scikit-learn, numpy, scipy, joblib, matplotlib, seaborn,
-PyWavelets, tqdm` (the env that ran Stage 0), plus MATLAB with the Statistics
-toolbox (`poissrnd`, `wblrnd`, `lhsdesign`). Everything is resumable — re-running
-a rung continues where it stopped.
+
+Use **Python 3.13.3** with the direct-dependency versions in
+`requirements-campaign-py313-cu128.txt`; the driver verifies
+`environment/campaign-py313-cu128.json`, CUDA/cuDNN and deterministic cuBLAS
+configuration before creating a study. Use **MATLAB R2025b** (hard-gated in
+`A00_Run.m`) with the Statistics and Machine Learning Toolbox (`poissrnd`,
+`wblrnd`, `lhsdesign`). The lock is an exact direct-dependency/runtime lock, not
+a fully hashed transitive package archive. Valid studies resume only until the
+exact pre-registered useful-trial budget is met; manually extended studies are
+rejected.

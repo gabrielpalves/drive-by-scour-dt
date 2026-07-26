@@ -28,7 +28,7 @@ class TTBIPreprocessor:
     Supports four methods, selectable at construction time:
 
         'raw'     - no signal transform; only scale.
-        'paa'     - Piecewise Aggregate Approximation via linear interpolation.
+        'paa'     - Piecewise Aggregate Approximation via equal-width means.
         'fft'     - one-sided magnitude spectrum, resampled to n_segments bins.
         'cwt'     - Continuous Wavelet Transform (Morlet); produces 2-D scalograms.
                     PAA is applied first to prevent OOM on long sequences.
@@ -89,10 +89,31 @@ class TTBIPreprocessor:
         Returns:
             (Samples, Channels, n_segments)  float32
         """
+        X = np.asarray(X)
+        if X.ndim != 3:
+            raise ValueError(
+                f"PAA expects a 3-D (samples, channels, length) array; "
+                f"got shape {X.shape}.")
         n_samp, n_chan, length = X.shape
         n = self.n_segments
+        if isinstance(n, (bool, np.bool_)) or not isinstance(n, (int, np.integer)):
+            raise ValueError(f"PAA n_segments must be a positive integer; got {n!r}.")
+        n = int(n)
+        if n <= 0:
+            raise ValueError(f"PAA n_segments must be positive; got {n}.")
+        if length <= 0:
+            raise ValueError("PAA cannot transform an empty sequence.")
+        # PAA is a dimensionality-reduction transform.  Allowing n > length
+        # silently turns it into sample-and-hold upsampling, which is not the
+        # pre-registered method and can hide a crop/configuration regression.
+        if n > length:
+            raise ValueError(
+                f"PAA n_segments ({n}) cannot exceed input length ({length}).")
         if length == n:
-            return np.asarray(X, dtype=np.float32)
+            # Keep the transform's ownership contract consistent with the
+            # general path: callers may safely mutate the result without
+            # changing the raw input, even when no reduction is needed.
+            return np.array(X, dtype=np.float32, copy=True)
         # Window edges in sample coordinates; I(t) = integral of the
         # sample-and-hold signal is piecewise-linear between integer t, so
         # each window mean is (I(hi) - I(lo)) / (hi - lo), exact for

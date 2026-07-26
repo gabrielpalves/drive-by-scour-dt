@@ -4,7 +4,7 @@ function [Model] = B54_ModelMatrices(Beam,Track,Calc,Damage)
 %
 % Optional 4th argument Damage may carry per-passage TRACK-LAYER damage
 % descriptors in Damage.track (ballast patches, hanging-sleeper groups,
-% rail-pad aging/failures) — see local_track_vectors below and
+% rail-pad aging/failures) — see B54_TrackVectors.m and
 % docs/stage3_alldamage_spec.md. Without it (or with Damage.track absent)
 % the assembled matrices are numerically identical to the legacy path.
 if nargin < 4, Damage = struct(); end
@@ -118,7 +118,7 @@ end % if Track.PadUnderSleeperOnBeam.included == 1
 % Second output = placement diagnostics (resolved GLOBAL coordinates of every
 % modified sleeper/pad + the frame offset applied) - consumed by the smoke
 % tests to assert the damage actually lands on/around the deck.
-[TrkV,Model.TrackDmgDbg] = local_track_vectors(Track,Model,Calc,Damage);
+[TrkV,Model.TrackDmgDbg] = B54_TrackVectors(Track,Model,Calc,Damage);
 
 % ---------------------- Building Global matrices -------------------------
 
@@ -292,115 +292,3 @@ function [OutM] = funDiag(size,value)
     else
         OutM = diag(value(:).');
     end
-
-function [V,Dbg] = local_track_vectors(Track,Model,Calc,Damage)
-
-    % Per-sleeper track-layer property vectors from Damage.track descriptors.
-    % COORDINATE FRAME (audit fix 2026-07-17): descriptors carrying an
-    % .x_bridge_local field are in A00's BRIDGE-LOCAL window frame (deck
-    % starts at x = x_bridge_local). The sleeper axis here is GLOBAL
-    % (0..Calc.Profile.L) and under redux = 0 the deck really starts at
-    % num_app*spacing = L_Approach + max_TL (123.0 m for L60) - NOT at
-    % L_Approach, as a stale comment here used to claim. The global axis is
-    % shifted into the local frame before any selection, so every descriptor
-    % lands relative to the REAL deck. Descriptors WITHOUT .x_bridge_local
-    % (legacy datasets) are read as global coordinates, exactly as before.
-    % Fields (optional):
-    %   .ballast_patches : rows [x_start, x_end, eta_k, eta_c] — fouling /
-    %                      degradation patch (stiffness+damping multipliers)
-    %   .hanging_groups  : rows [x_start, n_consec] — unsupported-sleeper
-    %                      group (linearised: ballast support -> ~0)
-    %   .pad_stiff_mult  : scalar chi_pad (global pad aging multiplier)
-    %   .pad_damp_mult   : scalar beta_pad
-    %   .pad_failures    : vector of x-positions of failed pads (k -> ~0)
-    %   .x_bridge_local  : deck-start position in the descriptor frame [m]
-    % Healthy (no Damage.track) -> uniform vectors; the assembled matrices
-    % are numerically identical to the legacy scalar path.
-    % Mirror of TTBI_2D/b54_model_matrices.py::_track_vectors.
-    % Dbg = resolved GLOBAL positions of modified entries (smoke-test hook).
-
-    n = Track.Sleeper.Tnum;
-    x = Model.Mesh.XLoc.sleepers;            % [1 x n] sleeper positions [m]
-    % First/last on-beam sleeper in the GLOBAL sleeper-axis frame:
-    x_deck0 = Track.Sleeper.num_app * Track.Sleeper.spacing;
-    x_deck1 = (Track.Sleeper.num_app + Track.Sleeper.num_onbeam - 1) * ...
-        Track.Sleeper.spacing;
-    off = 0;                                 % global -> descriptor-frame shift
-    if isfield(Damage,'track') && ~isempty(Damage.track) && ...
-            isfield(Damage.track,'x_bridge_local') && ...
-            ~isempty(Damage.track.x_bridge_local)
-        off = x_deck0 - Damage.track.x_bridge_local;
-    end
-    x = x - off;                             % sleeper axis in descriptor frame
-    mult_bal_k = ones(1,n); mult_bal_c = ones(1,n);
-    mult_pad_k = ones(1,n); mult_pad_c = ones(1,n);
-    KILL = 1e-6;    % "removed" support: not exactly 0 to keep Kg well-posed
-
-    if isfield(Damage,'track') && ~isempty(Damage.track)
-        T = Damage.track;
-        if isfield(T,'ballast_patches') && ~isempty(T.ballast_patches)
-            for r = 1:size(T.ballast_patches,1)
-                p = T.ballast_patches(r,:);
-                sel = (x >= p(1)) & (x <= p(2));
-                % Overlapping patches: the patch with the LARGEST stiffness
-                % deviation |log eta_k| governs and supplies BOTH eta_k and
-                % eta_c (a sleeper is either predominantly wet-fouled,
-                % eta_k<1 & eta_c>1, or dry-fouled, eta_k>1 & eta_c<1 -
-                % mixing quantities across patches would be an unphysical
-                % hybrid). FIX 2026-07-22 (external audit r3, verified): the
-                % old product of stacked draws could leave the documented
-                % per-patch bands (k up to ~4 dry-on-dry, ~0.5 wet-on-wet).
-                upd = sel & (abs(log(p(3))) > abs(log(mult_bal_k)));
-                mult_bal_k(upd) = p(3);
-                mult_bal_c(upd) = p(4);
-            end
-        end
-        if isfield(T,'hanging_groups') && ~isempty(T.hanging_groups)
-            for r = 1:size(T.hanging_groups,1)
-                i0 = find(x >= T.hanging_groups(r,1) - Calc.Cte.tol,1,'first');
-                if isempty(i0), continue; end
-                idx = i0:min(i0 + T.hanging_groups(r,2) - 1, n);
-                mult_bal_k(idx) = KILL;
-                mult_bal_c(idx) = KILL;
-            end
-        end
-        if isfield(T,'pad_stiff_mult') && ~isempty(T.pad_stiff_mult)
-            mult_pad_k = mult_pad_k*T.pad_stiff_mult;
-        end
-        if isfield(T,'pad_damp_mult') && ~isempty(T.pad_damp_mult)
-            mult_pad_c = mult_pad_c*T.pad_damp_mult;
-        end
-        if isfield(T,'pad_failures') && ~isempty(T.pad_failures)
-            for r = 1:numel(T.pad_failures)
-                [~,i0] = min(abs(x - T.pad_failures(r)));
-                mult_pad_k(i0) = KILL;
-                mult_pad_c(i0) = KILL;
-            end
-        end
-    end
-
-    % Segment slices (approach / on-beam / after) — same indexing as the DOFs
-    i_app = 1:Track.Sleeper.num_app;
-    i_on  = Track.Sleeper.num_app + (1:Track.Sleeper.num_onbeam);
-    i_aft = Track.Sleeper.num_app + Track.Sleeper.num_onbeam + ...
-        (1:Track.Sleeper.num_aft);
-
-    % ---- Placement diagnostics (GLOBAL coordinates; smoke-test hook) ----
-    x_glob = x + off;
-    Dbg = struct();
-    Dbg.frame_offset     = off;                    % global - descriptor frame
-    Dbg.x_deck_global    = [x_deck0, x_deck1];     % first/last on-beam sleeper
-    Dbg.bal_x_global     = x_glob(mult_bal_k ~= 1 & mult_bal_k ~= KILL);
-    Dbg.hang_x_global    = x_glob(mult_bal_k == KILL);
-    Dbg.padfail_x_global = x_glob(mult_pad_k == KILL | mult_pad_c == KILL);
-
-    V.pad_k  = Track.Pad.Prop.k          * mult_pad_k;         % full track
-    V.pad_c  = Track.Pad.Prop.c          * mult_pad_c;
-    V.balA_k = Track.Ballast.Prop.k      * mult_bal_k(i_app);  % approach
-    V.balA_c = Track.Ballast.Prop.c      * mult_bal_c(i_app);
-    V.balB_k = Track.BallastOnBeam.Prop.k* mult_bal_k(i_on);   % on bridge
-    V.balB_c = Track.BallastOnBeam.Prop.c* mult_bal_c(i_on);
-    V.balF_k = Track.Ballast.Prop.k      * mult_bal_k(i_aft);  % after
-    V.balF_c = Track.Ballast.Prop.c      * mult_bal_c(i_aft);
-
-% ---- End of function ----

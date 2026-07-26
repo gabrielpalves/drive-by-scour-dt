@@ -23,6 +23,7 @@ Imported by:
 """
 
 import glob
+import hashlib
 import json
 import os
 import shutil
@@ -33,7 +34,7 @@ import torch
 
 from core          import task
 from core.dataset  import get_or_create_cache, _cache_stem
-from core.protocol import OPTUNA_PROTOCOL
+from core.protocol import OPTUNA_PROTOCOL, protocol_hash
 from core.utils    import set_global_seed, DOF_NAME_TO_IDX
 from plotting.confusion        import plot_cached_confusion_matrix
 from plotting.robustness_plots import generate_optuna_robustness_plots, plot_stochastic_summary
@@ -42,6 +43,208 @@ from training.trainer          import Objective, print_best_callback, DEVICE
 
 # Silence Optuna's per-trial log spam; callback handles champion announcements
 optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+
+def _sha256_file(path: str, chunk_size: int = 1 << 20) -> str:
+    """Streaming SHA-256 used to bind exported weights to their Optuna trial."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(chunk_size), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _atomic_json(path: str, value: dict) -> None:
+    """Publish a JSON sidecar atomically beside the artifact it describes."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=4, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _canonical_json_value(value):
+    """The exact value JSON storage preserves (tuples become lists, etc.)."""
+    return json.loads(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ))
+
+
+def _canonical_json_sha256(value) -> str:
+    payload = json.dumps(
+        _canonical_json_value(value),
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _stamp_study_protocol(
+    study: optuna.Study,
+    *,
+    config: dict,
+    dataset_name: str,
+    n_trials: int,
+    epochs: int,
+    sampler_seed: int,
+    use_pruner: bool,
+) -> None:
+    """Persist and enforce the complete protocol record in Optuna storage.
+
+    A protocol-hashed study with existing trials but no record is rejected:
+    retroactively attaching metadata would not prove which protocol generated
+    those trials. Fresh studies and legacy non-hashed callers remain supported.
+    """
+    if config.get("protocol_hash"):
+        if "seed" not in config:
+            raise RuntimeError(
+                f"{study.study_name}: protocol-hashed configs must declare the "
+                "training seed explicitly.")
+        descriptor = config.get("protocol_descriptor")
+        if descriptor is None or protocol_hash(descriptor) != config["protocol_hash"]:
+            raise RuntimeError(
+                f"{study.study_name}: protocol descriptor/hash pair is "
+                "missing or internally inconsistent.")
+    record = {
+        "schema": "optuna-study-provenance-v1",
+        "protocol_hash": config.get("protocol_hash"),
+        "protocol_descriptor": config.get("protocol_descriptor"),
+        "dataset": dataset_name,
+        "model_name": config.get("name"),
+        "seed": int(config.get("seed", sampler_seed)),
+        "sampler_seed": int(sampler_seed),
+        "n_trials": int(n_trials),
+        "epochs": int(epochs),
+        "use_pruner": bool(use_pruner),
+        "optuna_protocol": OPTUNA_PROTOCOL,
+    }
+    # Optuna persists user attributes through JSON.  Canonicalise before both
+    # storage and comparison because tuples (notably search-space bounds) return
+    # from SQLite as lists.  Comparing the raw Python objects made every genuine
+    # restart look like a protocol change even though their canonical JSON was
+    # identical.
+    record = _canonical_json_value(record)
+    key = "ttbi_protocol_record"
+    previous = study.user_attrs.get(key)
+    if previous is None:
+        if config.get("protocol_hash") and study.trials:
+            raise RuntimeError(
+                f"{study.study_name}: existing protocol-hashed study has "
+                f"{len(study.trials)} trial(s) but no {key!r}. Its trials "
+                "cannot be certified; start a fresh RUN_TAG/study.")
+        study.set_user_attr(key, record)
+    elif _canonical_json_value(previous) != record:
+        raise RuntimeError(
+            f"{study.study_name}: stored Optuna protocol record differs from "
+            "the requested run. Refusing to mix trials; use a fresh RUN_TAG.")
+
+
+def verify_digital_twin_package(
+    study: optuna.Study,
+    config: dict,
+    output_dir: str,
+) -> dict:
+    """Verify champion weights against both metadata and the Optuna study."""
+    if config.get("protocol_hash"):
+        descriptor = config.get("protocol_descriptor")
+        if descriptor is None or protocol_hash(descriptor) != config["protocol_hash"]:
+            raise RuntimeError(
+                f"{config.get('name')}: requested protocol descriptor/hash pair "
+                "is missing or internally inconsistent.")
+    weights_path = os.path.join(output_dir, "DT_champion_weights.pth")
+    metadata_path = os.path.join(output_dir, "DT_metadata.json")
+    if not os.path.isfile(weights_path) or not os.path.isfile(metadata_path):
+        raise RuntimeError(
+            f"{config.get('name')}: incomplete DT package in {output_dir}.")
+    with open(metadata_path, encoding="utf-8") as stream:
+        metadata = json.load(stream)
+
+    actual_sha = _sha256_file(weights_path)
+    scaler_name = metadata.get("scaler_filename")
+    scaler_path = os.path.join(output_dir, scaler_name) if scaler_name else ""
+    if not scaler_name or not os.path.isfile(scaler_path):
+        raise RuntimeError(
+            f"{config.get('name')}: metadata-linked scaler is missing.")
+    scaler_sha = _sha256_file(scaler_path)
+    architecture_flags = {
+        "use_space2vec": config.get("use_space2vec", False),
+        "use_lstm": config.get("use_lstm", False),
+        "use_nhits": config.get("use_nhits", False),
+        "model_type": config.get("model_type", "1D_MODULAR"),
+    }
+    expected = {
+        "model_name": config.get("name"),
+        "preprocessing_method": config.get("method"),
+        "active_dofs": list(config.get("dofs", [])),
+        "architecture_flags": architecture_flags,
+        "discretization": config.get("discretization", 1),
+        "n_segments": config.get("n_segments", 512),
+        "task": config.get("task", "classification"),
+        "target_supports": config.get("target_supports"),
+        "bearing_targets": config.get("bearing_targets"),
+        "protocol_hash": config.get("protocol_hash"),
+        "protocol_descriptor": _canonical_json_value(
+            config.get("protocol_descriptor")
+        ),
+        "study_name": study.study_name,
+        "best_trial_number": int(study.best_trial.number),
+        "best_trial_value": float(study.best_value),
+        "champion_weights_sha256": actual_sha,
+        "scaler_sha256": scaler_sha,
+    }
+    mismatches = {
+        key: (metadata.get(key), value)
+        for key, value in expected.items()
+        if (_canonical_json_value(metadata.get(key))
+            != _canonical_json_value(value))
+    }
+    if (_canonical_json_value(metadata.get("optimal_hyperparameters"))
+            != _canonical_json_value(study.best_params)):
+        mismatches["optimal_hyperparameters"] = (
+            metadata.get("optimal_hyperparameters"), study.best_params)
+
+    study_record = study.user_attrs.get("ttbi_protocol_record")
+    if config.get("protocol_hash"):
+        canonical_study_record = (
+            _canonical_json_value(study_record)
+            if study_record is not None else None
+        )
+        expected_record_fields = {
+            "schema": "optuna-study-provenance-v1",
+            "protocol_hash": config.get("protocol_hash"),
+            "protocol_descriptor": _canonical_json_value(
+                config.get("protocol_descriptor")
+            ),
+            "model_name": config.get("name"),
+        }
+        if "seed" in config:
+            expected_record_fields["seed"] = int(config["seed"])
+        if (canonical_study_record is None
+                or any(canonical_study_record.get(key) != value
+                       for key, value in expected_record_fields.items())):
+            mismatches["study.user_attrs.ttbi_protocol_record"] = (
+                canonical_study_record, expected_record_fields)
+        else:
+            record_sha = _canonical_json_sha256(canonical_study_record)
+            if metadata.get("study_protocol_record_sha256") != record_sha:
+                mismatches["study_protocol_record_sha256"] = (
+                    metadata.get("study_protocol_record_sha256"), record_sha)
+
+    expected_artifact = {
+        "schema": "champion-artifact-v1",
+        "best_trial_number": int(study.best_trial.number),
+        "best_trial_value": float(study.best_value),
+        "champion_weights_sha256": actual_sha,
+        "scaler_sha256": scaler_sha,
+        "protocol_hash": config.get("protocol_hash"),
+    }
+    artifact = study.user_attrs.get("ttbi_champion_artifact")
+    if artifact != expected_artifact:
+        mismatches["study.user_attrs.ttbi_champion_artifact"] = (
+            artifact, expected_artifact)
+    if mismatches:
+        raise RuntimeError(
+            f"{config.get('name')}: champion package provenance mismatch: "
+            f"{mismatches}")
+    return metadata
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -132,6 +335,15 @@ def execute_ablation_pipeline(
             sampler_seed=optuna_seed,
             use_pruner=use_pruner,
         )
+        _stamp_study_protocol(
+            study,
+            config=step,
+            dataset_name=dataset,
+            n_trials=n_trials,
+            epochs=epochs,
+            sampler_seed=optuna_seed,
+            use_pruner=use_pruner,
+        )
 
         # Budget = terminal-USEFUL trials (COMPLETE + PRUNED). FAILed trials are
         # RETRIED automatically (audit R7.1 P2): re-evaluate the budget AFTER each
@@ -181,12 +393,13 @@ def execute_ablation_pipeline(
         n_complete = sum(s == TS.COMPLETE for s in states)
         n_useful   = sum(s in (TS.COMPLETE, TS.PRUNED) for s in states)
         n_inflight = sum(s in (TS.RUNNING, TS.WAITING) for s in states)
-        if n_inflight or n_useful < n_trials or n_complete < 1:
+        if n_inflight or n_useful != n_trials or n_complete < 1:
             raise RuntimeError(
                 f"{step['name']}: study NOT finished (COMPLETE={n_complete}, "
                 f"useful={n_useful}/{n_trials}, in-flight={n_inflight}) — refusing "
                 f"to export weights / report. Investigate the FAILs (or delete the "
-                f"study to re-run); an incomplete study must not be published.")
+                f"study to re-run); an incomplete OR manually extended study "
+                f"must not be published.")
 
         print(f"  Best MSE: {study.best_value:.4f}  (trial {study.best_trial.number})")
 
@@ -253,15 +466,16 @@ def export_digital_twin_package(
         DT_scaler.pkl           - the fitted scaler (or .pt for PyTorch scalers).
 
     Also deletes all per-trial weight files (weights_<name>_trial_*.pth) after
-    the champion copy is safely in place, reclaiming SSD space.
+    the complete package has passed its provenance verification, reclaiming SSD
+    space. Re-running an already completed study is idempotent: when the
+    per-trial file was previously retired, the linked champion package is
+    verified against the current study and reused.
 
     Weight file resolution
     ----------------------
-    Looks for the per-trial weight file written by train_and_evaluate.  If it
-    is missing (e.g. the study was loaded from a DB but weights were on a
-    different machine) a warning is printed and the export continues without
-    the weight file rather than raising so that metadata and scaler are still
-    saved.
+    Looks for the per-trial weight file written by train_and_evaluate. If it is
+    absent, an existing complete champion package must verify exactly against
+    the current study/configuration; otherwise export fails closed.
 
     Args:
         study:            Completed Optuna study for this model.
@@ -299,8 +513,6 @@ def export_digital_twin_package(
         # predate the hash, e.g. the single-scour classification scripts).
         'protocol_hash':   config.get('protocol_hash'),
     }
-    with open(os.path.join(output_dir, 'DT_metadata.json'), 'w') as f:
-        json.dump(metadata, f, indent=4)
 
     # ── Champion weights ──────────────────────────────────────────────────────
     best_trial_num    = study.best_trial.number
@@ -310,22 +522,68 @@ def export_digital_twin_package(
     champion_path = os.path.join(output_dir, 'DT_champion_weights.pth')
 
     if os.path.exists(trial_weight_path):
-        shutil.copy(trial_weight_path, champion_path)
+        source_sha = _sha256_file(trial_weight_path)
+        shutil.copy2(trial_weight_path, champion_path)
+        champion_sha = _sha256_file(champion_path)
+        if champion_sha != source_sha:
+            raise RuntimeError(
+                "Champion weight copy failed SHA-256 verification: "
+                f"{source_sha} != {champion_sha}.")
         print(f"      Champion weights -> {champion_path}")
-        _delete_trial_weights(output_dir, config['name'])
     else:
-        # FATAL (audit r3, 2026-07-22 — was a WARNING): a study whose best
-        # trial has no weights cannot be tested or deployed; letting it
-        # "complete" here only defers the failure to summarize() with a less
-        # specific error, and leaves a weightless study that looks finished.
+        # A successful earlier export deliberately retires per-trial files.
+        # Verify that exact package before returning so a campaign restart is
+        # resumable without weakening the fail-closed missing-weight contract.
+        metadata_path = os.path.join(output_dir, "DT_metadata.json")
+        if os.path.isfile(champion_path) and os.path.isfile(metadata_path):
+            verify_digital_twin_package(study, config, output_dir)
+            print(f"      Verified existing DT package -> {output_dir}")
+            return
         raise RuntimeError(
-            f"Per-trial weights not found at {trial_weight_path} — the best "
-            f"trial ({best_trial_num}) of study '{config['name']}' has no "
-            f"saved weights. Refusing to finish the study; investigate "
-            f"(disk full / weight-save path / interrupted trial) and re-run.")
+            f"Per-trial weights not found at {trial_weight_path} and no "
+            f"verifiable champion package exists for best trial "
+            f"{best_trial_num} of study '{config['name']}'. Refusing to "
+            f"continue; investigate disk/save-path/interruption state.")
 
     # ── Scaler ────────────────────────────────────────────────────────────────
-    _copy_scaler(config, dataset_name, cache_dir, output_dir)
+    scaler_path = _copy_scaler(config, dataset_name, cache_dir, output_dir)
+    scaler_sha = _sha256_file(scaler_path)
+    study_record = study.user_attrs.get("ttbi_protocol_record")
+    if config.get("protocol_hash") and study_record is None:
+        raise RuntimeError(
+            f"{config['name']}: protocol-hashed study has no stored protocol "
+            "record; refusing to publish a provenance-incomplete package.")
+    study_record_sha = (
+        _canonical_json_sha256(study_record) if study_record is not None else None
+    )
+
+    artifact = {
+        "schema": "champion-artifact-v1",
+        "best_trial_number": int(best_trial_num),
+        "best_trial_value": float(study.best_value),
+        "champion_weights_sha256": champion_sha,
+        "scaler_sha256": scaler_sha,
+        "protocol_hash": config.get("protocol_hash"),
+    }
+    study.set_user_attr("ttbi_champion_artifact", artifact)
+    metadata.update({
+        "study_name": study.study_name,
+        "best_trial_number": int(best_trial_num),
+        "best_trial_value": float(study.best_value),
+        "champion_weights_sha256": champion_sha,
+        "champion_weights_hash_algorithm": "SHA-256",
+        "scaler_filename": os.path.basename(scaler_path),
+        "scaler_sha256": scaler_sha,
+        "protocol_descriptor": config.get("protocol_descriptor"),
+        "study_protocol_record_sha256": study_record_sha,
+    })
+    _atomic_json(os.path.join(output_dir, "DT_metadata.json"), metadata)
+    # Retain the source trial until the complete package and both provenance
+    # links have passed verification. A second verification proves cleanup did
+    # not disturb the champion package.
+    verify_digital_twin_package(study, config, output_dir)
+    _delete_trial_weights(output_dir, config['name'])
+    verify_digital_twin_package(study, config, output_dir)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -410,7 +668,7 @@ def _copy_scaler(
     dataset_name: str,
     cache_dir:    str,
     output_dir:   str,
-) -> None:
+) -> str:
     """
     Locate the fitted scaler in cache_dir and copy it to output_dir as
     DT_scaler.pkl (or DT_scaler.pt for PyTorch scalers).
@@ -427,17 +685,39 @@ def _copy_scaler(
     pt_dst   = os.path.join(output_dir, 'DT_scaler.pt')
 
     if os.path.exists(pkl_src):
-        shutil.copy(pkl_src, pkl_dst)
-        print(f"      Scaler (sklearn) -> {pkl_dst}")
+        src, dst, label = pkl_src, pkl_dst, "sklearn"
     elif os.path.exists(pt_src):
-        shutil.copy(pt_src, pt_dst)
-        print(f"      Scaler (PyTorch) -> {pt_dst}")
+        src, dst, label = pt_src, pt_dst, "PyTorch"
     else:
-        print(
-            f"      [WARNING] Scaler not found in {cache_dir}.\n"
+        raise RuntimeError(
+            f"Scaler not found in {cache_dir}.\n"
             f"      Expected: {pkl_src}\n"
-            f"      DT_scaler was NOT copied."
+            "      Refusing to publish an incomplete DT package."
         )
+    source_sha = _sha256_file(src)
+    if config.get("protocol_hash"):
+        prov_path = os.path.join(
+            cache_dir, f"cache_{_cache_stem(dataset_name, config)}_prov.json"
+        )
+        try:
+            with open(prov_path, encoding="utf-8") as stream:
+                expected_sha = json.load(stream)["artifacts"]["scaler"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"Cannot authenticate scaler source: invalid/missing cache "
+                f"provenance {prov_path}.") from exc
+        if source_sha != expected_sha:
+            raise RuntimeError(
+                f"Scaler source SHA-256 differs from cache provenance at "
+                f"{prov_path}; refusing to auto-sign a corrupted scaler.")
+    shutil.copy2(src, dst)
+    destination_sha = _sha256_file(dst)
+    if destination_sha != source_sha:
+        raise RuntimeError(
+            f"Scaler copy failed SHA-256 verification: "
+            f"{source_sha} != {destination_sha}.")
+    print(f"      Scaler ({label}) -> {dst}")
+    return dst
 
 
 def _delete_trial_weights(output_dir: str, model_name: str) -> None:

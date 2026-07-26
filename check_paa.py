@@ -26,6 +26,19 @@ def check(name: str, cond: bool) -> None:
         fails += 1
 
 
+def rejects(name: str, fn, exc=ValueError) -> None:
+    """Pass only when an invalid PAA contract is rejected explicitly."""
+    try:
+        fn()
+    except exc:
+        check(name, True)
+    except Exception as err:  # wrong exception is still an unstable contract
+        print(f"    unexpected {type(err).__name__}: {err}")
+        check(name, False)
+    else:
+        check(name, False)
+
+
 def paa(x, n):
     """Run the class transform on a 1-D signal, return 1-D output."""
     p = TTBIPreprocessor(method='paa', n_segments=n)
@@ -104,6 +117,35 @@ Yb = TTBIPreprocessor(method='paa', n_segments=8)._apply_paa(Xb)
 rowwise = np.stack([paa(Xb[i, 0], 8) for i in (0, 511, 512, 699)])
 check("chunked == row-wise at chunk boundary",
       np.allclose(Yb[[0, 511, 512, 699], 0, :], rowwise, atol=1e-6))
+
+# 9. Adversarial shape/configuration and ownership contract (audit r4).
+one = np.array([[[7.0]]], dtype=np.float32)
+one_out = TTBIPreprocessor(method='paa', n_segments=1)._apply_paa(one)
+check("length-one signal preserved", one_out.shape == (1, 1, 1)
+      and one_out.item() == 7.0)
+check("L==n result does not alias raw input", not np.shares_memory(one, one_out))
+one_out[...] = -1
+check("mutating L==n result leaves raw input unchanged", one.item() == 7.0)
+
+X64 = np.arange(12, dtype=np.float64).reshape(2, 2, 3)
+Y64 = TTBIPreprocessor(method='paa', n_segments=3)._apply_paa(X64)
+check("L==n float64 converts to owned float32", Y64.dtype == np.float32
+      and not np.shares_memory(X64, Y64))
+
+rejects("n_segments > length rejected (PAA cannot upsample)",
+        lambda: TTBIPreprocessor(method='paa', n_segments=2)._apply_paa(one))
+rejects("n_segments == 0 rejected",
+        lambda: TTBIPreprocessor(method='paa', n_segments=0)._apply_paa(one))
+rejects("negative n_segments rejected",
+        lambda: TTBIPreprocessor(method='paa', n_segments=-1)._apply_paa(one))
+rejects("non-integer n_segments rejected",
+        lambda: TTBIPreprocessor(method='paa', n_segments=1.5)._apply_paa(one))
+rejects("empty sequence rejected",
+        lambda: TTBIPreprocessor(method='paa', n_segments=1)
+        ._apply_paa(np.empty((1, 1, 0), dtype=np.float32)))
+rejects("non-3-D input rejected",
+        lambda: TTBIPreprocessor(method='paa', n_segments=1)
+        ._apply_paa(np.ones((2, 3), dtype=np.float32)))
 
 print()
 print("PAA: ALL PASS" if fails == 0 else f"PAA: {fails} CHECK(S) FAILED")

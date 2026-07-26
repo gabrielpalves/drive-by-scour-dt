@@ -30,7 +30,8 @@ import torch
 
 def set_global_seed(seed: int = 42) -> None:
     """
-    Lock all random-number generators to `seed` for full reproducibility.
+    Lock all random-number generators to `seed` for repeatability within the
+    pinned campaign software/hardware environment.
 
     Covers Python stdlib, NumPy, PyTorch CPU, and every CUDA device.
     Also forces deterministic cuDNN kernels and disables its auto-tuner -
@@ -59,17 +60,10 @@ def set_global_seed(seed: int = 42) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark     = False
 
-    # Stronger global guarantee than cudnn.deterministic: any non-deterministic
-    # op (e.g. some scatter / index ops) raises a warning instead of silently
-    # producing different results across runs. warn_only=True keeps the script
-    # running on hardware/ops without a deterministic implementation; flip to
-    # False if you want the script to hard-fail on non-determinism.
-    try:
-        torch.use_deterministic_algorithms(True, warn_only=True)
-    except (AttributeError, TypeError):
-        # Older PyTorch (<1.8): use_deterministic_algorithms or warn_only
-        # not available. cudnn.deterministic above is the best we can do.
-        pass
+    # Reviewer-facing guarantee: a nondeterministic CUDA/CPU operation is fatal,
+    # never merely warned about. The campaign environment pins PyTorch 2.7, so
+    # silently falling back for older releases would contradict the lock.
+    torch.use_deterministic_algorithms(True, warn_only=False)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

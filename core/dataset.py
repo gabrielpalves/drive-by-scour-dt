@@ -14,10 +14,12 @@ directly via digital_twin/physics.py rather than reading pre-recorded .mat files
 """
 
 import hashlib
+import hmac
 import json
 import os
 import pickle
 import re
+import threading
 import time
 
 import joblib
@@ -34,6 +36,15 @@ def _sha256_file(path: str, chunk: int = 1 << 20) -> str:
         for blk in iter(lambda: fh.read(chunk), b''):
             h.update(blk)
     return h.hexdigest()
+
+
+# Full source-byte verification is expensive for multi-GB datasets, but it must
+# happen before a cached feature array can certify those source bytes.  Cache a
+# successful pass per process and invalidate it whenever any recorded file's
+# size/mtime/ctime changes.  A lock prevents the many sensor configurations
+# launched by one process from hashing the same dataset concurrently.
+_SOURCE_VERIFY_LOCK = threading.Lock()
+_SOURCE_VERIFY_CACHE: dict[str, tuple[str, tuple]] = {}
 
 
 def _unique_tmp(path: str) -> str:
@@ -236,6 +247,15 @@ PREPROC_PROTOCOL = {
     # the protocol hash moves with them and can never silently regress.
     "paa_impl":           "keogh-window-mean-v2 (exact fractional windows)",
     "noise_pairing":      "per-global-dof rng [seed, dof] (subset-invariant)",
+    # Spell out the generator instead of relying on default_rng's current
+    # default. This pins cross-PC/cache-rebuild bytes across NumPy upgrades.
+    "noise_bit_generator": "numpy.random.PCG64",
+    "source_byte_verification":
+        "SHA-256 every file_digests entry before protocol/cache reuse; "
+        "memoized only while size+mtime+ctime are unchanged; always hash "
+        "case_info.mat and damage_states.mat into the protocol identity "
+        "(including legacy state-only digest tables); re-read current identity "
+        "at every cache entry and require equality with the study descriptor",
 }
 
 
@@ -832,6 +852,16 @@ def _read_manifest(dataset_path: str):
             _str('gen_schema'), _str('gen_fingerprint'))
 
 
+def _read_manifest_optional_string(dataset_path: str, field: str) -> str | None:
+    """Read an optional scalar string from case_info.mat without weakening R8."""
+    ci = os.path.join(dataset_path, "case_info.mat")
+    if not os.path.exists(ci):
+        return None
+    info = sio.loadmat(ci)["case_info"][0, 0]
+    names = info.dtype.names or ()
+    return str(np.ravel(info[field])[0]) if field in names else None
+
+
 def _read_file_digests(dataset_path: str):
     """(digests dict {fname: sha256}, root_sha) from file_digests.mat, or
     (None, None) if absent (audit R7.1 P4: source content integrity). A00 writes
@@ -864,6 +894,123 @@ def _root_digest(per_file: dict) -> str:
     """Root = SHA-256 over the sorted 'fname:sha' lines (audit R7.1 P4)."""
     joined = "\n".join(f"{k}:{per_file[k]}" for k in sorted(per_file))
     return hashlib.sha256(joined.encode()).hexdigest()
+
+
+def verify_source_file_bytes(dataset_path: str) -> dict:
+    """Verify every source file recorded in ``file_digests.mat``.
+
+    This closes the fast-cache gap where a same-size edit of ``NNNN.mat`` could
+    previously go unnoticed until a cache rebuild.  The first call in a process
+    hashes every recorded file.  Later cache lookups reuse that result only
+    while every file retains the same size, mtime and ctime; any change forces a
+    new full pass.  The digest table may also list sidecars (new generators list
+    ``case_info.mat`` and ``damage_states.mat``), while old state-only tables
+    remain valid. Those two required sidecars are always hashed separately into
+    the protocol identity, with a flag stating whether the generation-time root
+    covered them.
+
+    Returns a compact, JSON-safe verification summary for protocol provenance.
+    Raises ``RuntimeError`` on an incomplete, unsafe or mismatching digest set.
+    """
+    dataset_path = os.path.realpath(os.path.abspath(dataset_path))
+    per_file, root = _read_file_digests(dataset_path)
+    if not per_file or not root:
+        raise RuntimeError(
+            f"{dataset_path}: missing/invalid file_digests.mat; source bytes "
+            "cannot be certified for cache reuse.")
+    if not hmac.compare_digest(_root_digest(per_file), str(root).lower()):
+        raise RuntimeError(
+            f"{dataset_path}: file_digests.mat is internally inconsistent "
+            "(recomputed root differs from stored root).")
+
+    actual_states = sorted(
+        name for name in os.listdir(dataset_path) if _re_state.fullmatch(name)
+    )
+    recorded_states = sorted(name for name in per_file if _re_state.fullmatch(name))
+    if recorded_states != actual_states:
+        raise RuntimeError(
+            f"{dataset_path}: state-file digest inventory mismatch; recorded "
+            f"{len(recorded_states)} states but found {len(actual_states)}.")
+
+    def _signature() -> tuple:
+        rows = []
+        for name, expected in sorted(per_file.items()):
+            # Digest entries are filenames, never paths.  Rejecting traversal
+            # also makes the verification scope auditable and dataset-local.
+            if os.path.basename(name) != name or name in (".", ".."):
+                raise RuntimeError(
+                    f"{dataset_path}: unsafe digest entry {name!r}.")
+            expected = str(expected).lower()
+            if re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+                raise RuntimeError(
+                    f"{dataset_path}: invalid SHA-256 for digest entry {name!r}.")
+            path = os.path.join(dataset_path, name)
+            if not os.path.isfile(path):
+                raise RuntimeError(
+                    f"{dataset_path}: digest-listed source file is missing: {name}.")
+            stat = os.stat(path)
+            rows.append((
+                name, int(stat.st_size), int(stat.st_mtime_ns),
+                int(stat.st_ctime_ns), expected,
+            ))
+        return tuple(rows)
+
+    with _SOURCE_VERIFY_LOCK:
+        before = _signature()
+        cached = _SOURCE_VERIFY_CACHE.get(dataset_path)
+        if cached != (str(root).lower(), before):
+            for name, _size, _mtime, _ctime, expected in before:
+                actual = _sha256_file(os.path.join(dataset_path, name))
+                if not hmac.compare_digest(actual, expected):
+                    raise RuntimeError(
+                        f"{dataset_path}: source SHA-256 mismatch for {name}; "
+                        "the dataset is corrupt, incomplete or was edited after "
+                        "generation. Refusing cached and uncached training.")
+            after = _signature()
+            if after != before:
+                raise RuntimeError(
+                    f"{dataset_path}: source files changed during SHA-256 "
+                    "verification; retry only after generation/copying stops.")
+            _SOURCE_VERIFY_CACHE[dataset_path] = (str(root).lower(), after)
+
+    sidecars = sorted(name for name in per_file if not _re_state.fullmatch(name))
+    # R8 datasets generated before audit r4 contain a state-only digest table.
+    # They remain scientifically usable, but their two interpretation-critical
+    # sidecars must still participate in the full protocol identity: otherwise
+    # editing damage_states.mat could change the split/labels while resuming the
+    # same Optuna study. New A00 tables list these files and therefore also
+    # authenticate them against the generation root; old tables get an explicit
+    # live SHA binding (identity, not a retroactive generation-time signature).
+    required_sidecar_sha256: dict[str, str] = {}
+    for name in ("case_info.mat", "damage_states.mat"):
+        path = os.path.join(dataset_path, name)
+        if not os.path.isfile(path):
+            raise RuntimeError(
+                f"{dataset_path}: required provenance sidecar is missing: {name}.")
+        stat_before = os.stat(path)
+        required_sidecar_sha256[name] = _sha256_file(path)
+        stat_after = os.stat(path)
+        signature_before = (
+            int(stat_before.st_size), int(stat_before.st_mtime_ns),
+            int(stat_before.st_ctime_ns),
+        )
+        signature_after = (
+            int(stat_after.st_size), int(stat_after.st_mtime_ns),
+            int(stat_after.st_ctime_ns),
+        )
+        if signature_after != signature_before:
+            raise RuntimeError(
+                f"{dataset_path}: {name} changed during SHA-256 verification; "
+                "retry only after generation/copying stops.")
+    return {
+        "root": str(root).lower(),
+        "entry_count": len(per_file),
+        "state_count": len(recorded_states),
+        "sidecars": sidecars,
+        "required_sidecar_sha256": required_sidecar_sha256,
+        "required_sidecars_generation_digest_covered":
+            all(name in per_file for name in required_sidecar_sha256),
+    }
 
 
 def read_state_table(dataset_path: str) -> dict:
@@ -1353,7 +1500,8 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
     def add_mult(mask_dofs):
         for i, d in enumerate(dofs):
             if d in mask_dofs:
-                rng_d = np.random.default_rng([NOISE_RNG_SEED, int(d)])
+                rng_d = np.random.Generator(
+                    np.random.PCG64([NOISE_RNG_SEED, int(d)]))
                 X[:, i, :] += (desvio * X[:, i, :] *
                                rng_d.standard_normal(X[:, i, :].shape)
                                .astype(np.float32))
@@ -1463,11 +1611,9 @@ def get_or_create_cache(
         # Audit r3 (2026-07-22): also pin the per-state DIGEST TABLE itself
         # (file_digests.mat) and the family table (damage_states.mat). Any
         # tamper that keeps the digest chain self-consistent must rewrite
-        # these files -> cache invalidated -> rebuild re-validates every
-        # per-state SHA in the full loader. Residual (accepted, recorded):
-        # an inconsistent same-size edit of one NNNN.mat is IGNORED while a
-        # cache exists (the cache holds pre-edit bytes); it is caught at the
-        # next rebuild. Full per-file re-hash on reuse = queued follow-up.
+        # these files -> cache invalidated. Audit r4 additionally verifies every
+        # recorded source byte before either cache reuse or rebuild, so even an
+        # inconsistent same-size edit of one NNNN.mat is rejected immediately.
         fd_path = os.path.join(src_dir, 'file_digests.mat')
         cur_digests_sha = _sha256_file(fd_path) if os.path.exists(fd_path) else None
         dsm_path = os.path.join(src_dir, 'damage_states.mat')
@@ -1498,6 +1644,36 @@ def get_or_create_cache(
                "inventory": cur_inventory,
                "file_digests_sha256": cur_digests_sha,
                "damage_states_sha256": cur_states_sha}
+
+    # Audit r4: a cache hit is allowed only after the recorded SOURCE bytes
+    # themselves have passed SHA-256 verification.  Memoisation makes the first
+    # sensor configuration pay the sequential disk read; later configurations
+    # perform only a stat pass unless a source file changed.
+    if regression:
+        verify_source_file_bytes(src_dir)
+        # Bind the bytes used by this cache call to the descriptor that named
+        # the Optuna study. Without this second identity check, a dataset could
+        # be legitimately regenerated/replaced after driver import: the cache
+        # would then train on new bytes under the old protocol hash.
+        expected_provenance = (
+            (config.get("protocol_descriptor") or {})
+            .get("rung", {})
+            .get("dataset_provenance")
+        )
+        if config.get("protocol_hash") and expected_provenance is None:
+            raise RuntimeError(
+                f"{dataset_name}: protocol-hashed regression config has no "
+                "dataset_provenance descriptor; refusing an unbound cache.")
+        if expected_provenance is not None:
+            # Lazy import avoids a module-level dataset <-> protocol cycle.
+            from core.protocol import read_dataset_provenance
+            current_provenance = read_dataset_provenance(src_dir)
+            if current_provenance != expected_provenance:
+                raise RuntimeError(
+                    f"{dataset_name}: source identity changed after the protocol "
+                    "hash was computed. Refusing to reuse/build a cache under "
+                    "the stale study identity; restart the driver so it computes "
+                    "a fresh protocol hash.")
 
     # ── Fast path (audit R7.1 P5): validate a reusable cache and return it, or
     # return None. Factored out so it can be re-checked INSIDE the build lock. ──

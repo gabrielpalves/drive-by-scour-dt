@@ -28,6 +28,7 @@ import shutil
 import sys
 import tempfile
 
+import numpy as np
 import scipy.io as sio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -186,9 +187,17 @@ def _fixture(path, fp="fp-A", schema=_EXPECTED_GEN_SCHEMA, manifest=True,
                     {'case_info': {'n_states': 3, 'passages_per_state': 4,
                                    'gen_schema': schema, 'gen_fingerprint': fp,
                                    'scour_dano_max_frac': 0.60}})
+    sio.savemat(os.path.join(path, 'damage_states.mat'),
+                {'DamageStates': np.zeros((3, 2), dtype=float)})
     per = {'0001.mat': hashlib.sha256(b'one').hexdigest(),
            '0002.mat': hashlib.sha256(b'two').hexdigest(),
            '0003.mat': hashlib.sha256(b'three').hexdigest()}
+    # Audit r4 verifies the recorded source bytes before hashing the protocol,
+    # so the fixture must contain the exact files named by its digest table.
+    for filename, payload in (('0001.mat', b'one'), ('0002.mat', b'two'),
+                              ('0003.mat', b'three')):
+        with open(os.path.join(path, filename), 'wb') as fh:
+            fh.write(payload)
     lines = "\n".join(f"{k}:{per[k]}" for k in sorted(per))
     root = hashlib.sha256(lines.encode()).hexdigest()
     if digests:
@@ -207,6 +216,7 @@ def _args(dataset_dir, **over):
         target_supports=[2, 3], bearing_targets=None,
         task="regression", discretization=1,
         seeds=[42, 1337, 2026], n_trials=100, epochs=50,
+        use_pruner=True,
         sensor_noise=None,
         architectures=[{"name_short": "PAA_NHiTS", "method": "PAA",
                         "use_space2vec": False, "use_lstm": False,
@@ -214,6 +224,7 @@ def _args(dataset_dir, **over):
         extra_pairs=[[1, 3]],
         pair_search_stages={"s0_scour", "s16_all"},
         arch_selection_stages={"s0_scour"},
+        multi_arch_pair_selection_stages={"s0_scour", "s16_all"},
         schema_tag="gs4a20260718r7",
         train_protocol=TRAIN_PROTOCOL,
         search_space=SEARCH_SPACE,
@@ -243,6 +254,7 @@ try:
         "seeds ORDER":      {"seeds": [1337, 42, 2026]},
         "n_trials":         {"n_trials": 101},
         "epochs":           {"epochs": 51},
+        "pruner enabled":   {"use_pruner": False},
         "sensor_noise":     {"sensor_noise": {"mode": "all_mult", "desvio": 0.05}},
         "arch flag flip":   {"architectures": [{"name_short": "PAA_NHiTS",
                                                 "method": "PAA",
@@ -261,8 +273,24 @@ try:
         "discretization":   {"discretization": 5},
         # Feature B knobs (2026-07-19): deployment stages + bootstrap policy.
         "deployment set":   {"deployment_selection_stages": {"s16_all"}},
+        "multi-arch pair set": {
+            "multi_arch_pair_selection_stages": {"s0_scour"}
+        },
+        "environment lock": {
+            "environment_lock": {
+                "path": "environment/campaign.json",
+                "sha256": "a" * 64,
+                "spec": {"python": "3.13.3"},
+            }
+        },
         "bootstrap policy": {"bootstrap": {"unit": "state", "n_boot": 1000,
                                            "seed": 42, "ci": 0.95}},
+        "statistical inference": {
+            "statistical_inference": {
+                "finalist_cv": {"n_splits": 5, "n_repeats": 2, "seed": 271828},
+                "outer_test": {"hierarchical_bootstrap": "state-first"},
+            }
+        },
     }
     for label, over in KNOBS.items():
         core_i, _ = build_protocol_descriptors(**_args(ds_a, **over))
@@ -298,6 +326,17 @@ try:
           protocol_hash(full_b) != fh0)
     check("dataset regeneration does NOT change the CORE hash",
           protocol_hash(core_b) == ch0)
+    ds_sidecar = os.path.join(root_dir, "fixture_sidecar")
+    _fixture(ds_sidecar, fp="fp-A")
+    _, full_sidecar_0 = build_protocol_descriptors(**_args(ds_sidecar))
+    sio.savemat(os.path.join(ds_sidecar, "damage_states.mat"),
+                {'DamageStates': np.ones((3, 2), dtype=float)})
+    core_sidecar_1, full_sidecar_1 = build_protocol_descriptors(
+        **_args(ds_sidecar))
+    check("legacy state-only table still hashes damage_states bytes",
+          protocol_hash(full_sidecar_1) != protocol_hash(full_sidecar_0))
+    check("sidecar identity does not change the CORE hash",
+          protocol_hash(core_sidecar_1) == ch0)
     core_s, full_s = build_protocol_descriptors(
         **_args(ds_a, stage="s11_bear", bearing_targets=["left", "right"]))
     check("stage/targets change the FULL hash", protocol_hash(full_s) != fh0)

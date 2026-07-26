@@ -94,6 +94,14 @@ def _track_vectors(Track, Model, Calc, Damage):
     V.balB_c = Track.BallastOnBeam.Prop.c * mult_bal_c[i_on]
     V.balF_k = Track.Ballast.Prop.k       * mult_bal_k[i_aft]   # after
     V.balF_c = Track.Ballast.Prop.c       * mult_bal_c[i_aft]
+    # Audit diagnostics (parity with B54_TrackVectors.m): these do not enter
+    # matrix assembly, but expose the resolved rule so overlap behavior can be
+    # tested directly instead of inferred from coupled matrix diagonals.
+    V.x_descriptor = x.copy()
+    V.mult_bal_k = mult_bal_k.copy()
+    V.mult_bal_c = mult_bal_c.copy()
+    V.mult_pad_k = mult_pad_k.copy()
+    V.mult_pad_c = mult_pad_c.copy()
     return V
 
 

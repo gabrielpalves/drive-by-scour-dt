@@ -1,0 +1,23 @@
+{
+  "schema": "ttbi-campaign-environment-v1",
+  "python": "3.13.3",
+  "platform_system": "Windows",
+  "cuda_required": true,
+  "torch_cuda": "12.8",
+  "cublas_workspace_config": ":4096:8",
+  "matlab_release": "R2025b",
+  "packages": {
+    "joblib": "1.4.2",
+    "matplotlib": "3.10.1",
+    "numpy": "2.2.5",
+    "optuna": "4.3.0",
+    "pandas": "2.2.3",
+    "pgmpy": "1.0.0",
+    "PyWavelets": "1.8.0",
+    "scikit-learn": "1.6.1",
+    "scipy": "1.15.2",
+    "seaborn": "0.13.2",
+    "torch": "2.7.0+cu128",
+    "tqdm": "4.67.1"
+  }
+}
