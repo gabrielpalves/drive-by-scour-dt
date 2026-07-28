@@ -1,35 +1,172 @@
-"""check_cache_provenance.py - adversarial CACHE-provenance test (audit R7.1 P4/P5).
+"""Adversarial R11 cache-provenance test.
 
 Run:  python check_cache_provenance.py   (needs numpy + scipy + torch + sklearn)
 
-Builds a tiny VALID r7 dataset (with source SHA digests + 3-line marker) under a
+Builds a tiny valid R11 dataset (with source SHA digests + exact 3-line marker) under a
 temp data/ folder, exercises get_or_create_cache, then verifies that every
 tamper is caught: swapped/corrupted feature/label/GROUPS/scaler artifacts, a
 count-preserving group SWAP, a same-size source .mat overwrite, a wrong-content
-marker, an interrupted publication (missing sidecar), and CONCURRENT builds of
-the same stem (the per-stem lock must serialise them without error). MUST print
-ALL PASS before trusting the cache on a multi-day campaign.
+marker, full generator/environment provenance drift, qualification laundering,
+an interrupted publication (missing sidecar), and concurrent builds of the
+same stem. MUST print ALL PASS before trusting a multi-day campaign cache.
 """
 import concurrent.futures as cf
 import hashlib
+import json
 import os
 import re
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import scipy.io as sio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from core.dataset import get_or_create_cache, _EXPECTED_GEN_SCHEMA  # noqa: E402
+from core.dataset import (                                           # noqa: E402
+    _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+    _EXPECTED_GEN_SCHEMA,
+    _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+    _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+    _EXPECTED_MATLAB_RELEASE,
+    get_or_create_cache,
+)
 from core.protocol import read_dataset_provenance  # noqa: E402
+from core.source_provenance import generator_source_root              # noqa: E402
 
 # Keep the integration fixture at the campaign's 512 PAA segments.  PAA is a
 # reduction and now correctly rejects n_segments > raw length.
-NST, NP, L, FP = 4, 4, 512, "fp-cache-prov"
+NST, NP, L = 4, 4, 512
 CFG = {'method': 'PAA', 'dofs': [0], 'task': 'regression', 'target_supports': [2, 3]}
 fails = 0
+_GENERATOR = generator_source_root(Path(__file__).resolve().parent)
+_QUALIFICATION_SHA = "a" * 64
+DAMAGE_SEED = 1
+RNG_SCHEDULE = "uid-named-substreams-v2"
+STATE_STREAM_NAMES = (
+    "operations", "crack", "profile-state", "track", "profile-phase"
+)
+PASSAGE_STREAM_NAMES = ("profile-passage", "oor-passage")
+
+
+def _generation_config_json(
+    *,
+    generator_source_root_sha256=_GENERATOR.sha256,
+    qualification_source_sha256="PRODUCTION",
+):
+    """Canonical, hashed subset of the generator configuration for this fixture."""
+    return json.dumps(
+        {
+            "schema": _EXPECTED_GEN_SCHEMA,
+            "generation_behavior_version":
+                _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+            "campaign_matlab_release": _EXPECTED_MATLAB_RELEASE,
+            "campaign_matlab_environment_sha256":
+                _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+            "generator_source_root_sha256": generator_source_root_sha256,
+            "qualification_source_sha256": qualification_source_sha256,
+            "STAGE": "fixture_stage",
+            "n_states": NST,
+            "Npass": NP,
+            "damage_seed": DAMAGE_SEED,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+def _state_seed_id(uid):
+    token = f"ttbi-state-seed-v1|damage_seed={DAMAGE_SEED}|{uid}"
+    value = int(hashlib.sha256(token.encode("ascii")).hexdigest()[:8], 16)
+    assert value != 0
+    return value
+
+
+def _named_seed(root, uid, stream, passage=None):
+    token = (
+        f"{RNG_SCHEDULE}|root={root}|uid={uid}|stream={stream}"
+        + ("" if passage is None else f"|pass={passage:05d}")
+    )
+    value = int(hashlib.sha256(token.encode("ascii")).hexdigest()[:8], 16)
+    assert value != 0
+    return value
+
+
+def _state_identity(idx):
+    uid = f"fixture-state-{idx:03d}"
+    root = _state_seed_id(uid)
+    return {
+        "state_uid": uid,
+        "state_seed_id": np.uint32(root),
+        "random_stream_schedule_version": RNG_SCHEDULE,
+        "state_named_stream_seed_id": np.asarray([[
+            _named_seed(root, uid, name) for name in STATE_STREAM_NAMES
+        ]], dtype=np.uint32),
+        "passage_named_stream_seed_id": np.asarray([
+            [
+                _named_seed(root, uid, name, passage=passage)
+                for name in PASSAGE_STREAM_NAMES
+            ]
+            for passage in range(1, NP + 1)
+        ], dtype=np.uint32),
+        "latent_bearing_fixity": np.zeros((1, 2)),
+        "latent_crack_on": np.array([[False]], dtype=np.bool_),
+        "crack_on": np.array([[False]], dtype=np.bool_),
+        "bearing_fixity": np.zeros((1, 2)),
+        "scour_supports": np.array([[2, 3]], dtype=np.uint32),
+    }
+
+
+def _generation_metadata(*, qualification=False,
+                         qualification_source="PRODUCTION",
+                         generator_attestation=None):
+    metadata = {
+        'generation_behavior_version':
+            _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+        'matlab_release': _EXPECTED_MATLAB_RELEASE,
+        'campaign_matlab_release': _EXPECTED_MATLAB_RELEASE,
+        'release_qualification_run': qualification,
+        'actual_matlab_environment_descriptor':
+            _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+        'actual_matlab_environment_sha256':
+            _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+        'campaign_matlab_environment_descriptor':
+            _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+        'campaign_matlab_environment_sha256':
+            _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+        'generator_source_root_sha256': _GENERATOR.sha256,
+        'generator_source_digest_lines': _GENERATOR.digest_lines,
+        'generator_source_file_count': _GENERATOR.file_count,
+        'qualification_source_sha256': qualification_source,
+    }
+    metadata.update(generator_attestation or {})
+    return metadata
+
+
+def _top_level_stamps(data):
+    return {
+        'file_gen_schema': data['gen_schema'],
+        'file_gen_fingerprint': data['gen_fingerprint'],
+        'file_state_uid': data['state_uid'],
+        'file_state_seed_id': data['state_seed_id'],
+        'file_random_stream_schedule_version':
+            data['random_stream_schedule_version'],
+        'file_matlab_release': data['matlab_release'],
+        'file_campaign_matlab_release': data['campaign_matlab_release'],
+        'file_release_qualification_run':
+            data['release_qualification_run'],
+        'file_actual_matlab_environment_sha256':
+            data['actual_matlab_environment_sha256'],
+        'file_campaign_matlab_environment_sha256':
+            data['campaign_matlab_environment_sha256'],
+        'file_generator_source_root_sha256':
+            data['generator_source_root_sha256'],
+        'file_qualification_source_sha256':
+            data['qualification_source_sha256'],
+    }
 
 
 def _cellrow(nrows):
@@ -45,40 +182,167 @@ def _raw_meta():
             'bridge_samp': np.full((1, NP), float(L)), 'L_bridge_eff': np.full((1, NP), 60.0)}
 
 
-def _finalize(data_dir):
-    files = sorted(f for f in os.listdir(data_dir) if re.fullmatch(r'\d{4}\.mat', f))
-    per = {f: hashlib.sha256(open(os.path.join(data_dir, f), 'rb').read()).hexdigest()
-           for f in files}
+def _finalize(data_dir, *, fingerprint=None):
+    files = sorted(
+        f for f in os.listdir(data_dir)
+        if re.fullmatch(r'\d{4}\.mat', f)
+        or f in {'case_info.mat', 'damage_states.mat'}
+    )
+    per = {
+        f: hashlib.sha256(Path(data_dir, f).read_bytes()).hexdigest()
+        for f in files
+    }
     lines = "\n".join(f"{k}:{per[k]}" for k in sorted(per))
     root = hashlib.sha256(lines.encode()).hexdigest()
-    sio.savemat(os.path.join(data_dir, 'file_digests.mat'),
-                {'file_digests': {'digest_lines': lines, 'root': root}})
+    sio.savemat(
+        os.path.join(data_dir, 'file_digests.mat'),
+        {'file_digests': {
+            'schema': 'source-digests-v2',
+            'scope': 'NNNN.mat+case_info.mat+damage_states.mat',
+            'digest_lines': lines,
+            'root': root,
+        }},
+    )
+    if fingerprint is None:
+        # Read the first raw struct element so this helper can also finalize the
+        # deliberate multi-element case_info corruption used below.  The loader,
+        # unlike this digest/marker helper, must and does reject that grammar.
+        info = sio.loadmat(
+            os.path.join(data_dir, "case_info.mat")
+        )["case_info"]
+        fingerprint = str(
+            np.ravel(info[0, 0]["gen_fingerprint"])[0]
+        )
     with open(os.path.join(data_dir, '_GENERATION_COMPLETE'), 'w') as fh:
-        fh.write(f"{_EXPECTED_GEN_SCHEMA}\n{FP}\n{root}\n")
+        fh.write(f"{_EXPECTED_GEN_SCHEMA}\n{fingerprint}\n{root}\n")
 
 
-def _build_dataset(data_dir):
+def _foreign_generator_attestation():
+    """A canonical and internally coherent source identity unlike this tree."""
+    rows = _GENERATOR.digest_lines.split("\n")
+    name, digest = rows[0].split(":", 1)
+    replacement = "0" * 64 if digest != "0" * 64 else "1" * 64
+    rows[0] = f"{name}:{replacement}"
+    digest_lines = "\n".join(rows)
+    return {
+        "generator_source_root_sha256":
+            hashlib.sha256(digest_lines.encode("utf-8")).hexdigest(),
+        "generator_source_digest_lines": digest_lines,
+        "generator_source_file_count": len(rows),
+    }
+
+
+def _build_dataset(data_dir, *, qualification=False,
+                   qualification_source="PRODUCTION",
+                   generator_attestation=None):
     shutil.rmtree(data_dir, ignore_errors=True)
     os.makedirs(data_dir)
+    generation = _generation_metadata(
+        qualification=qualification,
+        qualification_source=qualification_source,
+        generator_attestation=generator_attestation,
+    )
+    generation_config_json = _generation_config_json(
+        generator_source_root_sha256=
+            generation["generator_source_root_sha256"],
+        qualification_source_sha256=qualification_source,
+    )
+    fingerprint = hashlib.sha256(
+        generation_config_json.encode("utf-8")
+    ).hexdigest()
     sio.savemat(os.path.join(data_dir, 'case_info.mat'), {'case_info': {
-        'n_states': NST, 'passages_per_state': NP, 'gen_schema': _EXPECTED_GEN_SCHEMA,
-        'gen_fingerprint': FP, 'scour_dano_max_frac': 0.60}})
-    # Feature A (2026-07-19): the state-family table is MANDATORY for the
-    # loader + stratified split; all fixture states are plain 'joint'.
+        'n_states': NST,
+        'passages_per_state': NP,
+        'gen_schema': _EXPECTED_GEN_SCHEMA,
+        'gen_fingerprint': fingerprint,
+        'generation_config_json': generation_config_json,
+        'case_name': '_cacheprov_ds',
+        'stage': 'fixture_stage',
+        'damage_mode': 'multi_scour',
+        'L_bridge_m': 60.0,
+        'num_spans': 3,
+        'num_supports': 4,
+        'scour_supports': '[2 3]',
+        'scour_dano_max_frac': 0.60,
+        'n_target_healthy': 0,
+        'n_scour_only': 0,
+        'n_bearing_only': 0,
+        'n_nuisance_only': 0,
+        'n_joint': NST,
+        'bearing_mode': 'off',
+        'bearing_label': 'fixity_ratio',
+        'use_crack_eov': False,
+        'crack_draw': 'per_state',
+        'profile_mode': 'fixed',
+        'profile_draw': 'per_state',
+        'profile_jitter_sd_mm': 0.0,
+        'use_track_eov': False,
+        'track_draw': 'per_state',
+        'track_L_app': 30.0,
+        'track_L_after': 30.0,
+        'use_oor_eov': False,
+        'oor_flats_enabled': False,
+        'use_signal_noise': False,
+        'use_vehicle_variability': True,
+        'use_speed_variability': True,
+        'use_temp_variability': True,
+        **generation}},
+        long_field_names=True)
+    identities = [_state_identity(index) for index in range(1, NST + 1)]
+    state_named = np.vstack([
+        identity["state_named_stream_seed_id"] for identity in identities
+    ])
+    passage_named = np.stack([
+        identity["passage_named_stream_seed_id"] for identity in identities
+    ])
     sio.savemat(os.path.join(data_dir, 'damage_states.mat'), {
-        'StateFamily':  np.array(['joint'] * NST, dtype=object).reshape(-1, 1),
-        'AnchorTarget': np.zeros((NST, 1)), 'AnchorLevel': np.zeros((NST, 1)),
-        'CrackOn':      np.zeros((NST, 1), dtype=np.uint8),
+        'StateFamily': np.array(['joint'] * NST, dtype=object).reshape(-1, 1),
+        'AnchorTarget': np.zeros((NST, 1)),
+        'AnchorLevel': np.zeros((NST, 1)),
+        'StateUID': np.asarray(
+            [identity["state_uid"] for identity in identities],
+            dtype=object,
+        ).reshape(-1, 1),
+        'StateSeedID': np.asarray(
+            [identity["state_seed_id"] for identity in identities],
+            dtype=np.uint32,
+        ).reshape(-1, 1),
+        'LatentBearingFixity': np.zeros((NST, 2)),
+        'LatentCrackOn': np.zeros((NST, 1), dtype=np.uint8),
+        'CrackOn': np.zeros((NST, 1), dtype=np.uint8),
+        'StateNamedStreamSeedID': state_named,
+        'PassageNamedStreamSeedID': passage_named,
+        'PassageNamedStreamSeedIDFlat': passage_named.reshape(
+            NST, -1, order="F"
+        ),
+        'random_stream_schedule_version': RNG_SCHEDULE,
+        'state_stream_names': np.asarray(
+            STATE_STREAM_NAMES, dtype=object
+        ).reshape(1, -1),
+        'passage_stream_names': np.asarray(
+            PASSAGE_STREAM_NAMES, dtype=object
+        ).reshape(1, -1),
         'DamageStates': np.tile([0.0, 0.1, 0.2, 0.0], (NST, 1)),
-        'BearingFixity': np.zeros((NST, 2))})
+        'BearingFixity': np.zeros((NST, 2)),
+        'scour_supports': np.array([[2, 3]], dtype=np.uint32),
+    })
     clog = np.column_stack([np.zeros(NP)] * 3 + [-1e5 * np.ones(NP)])
     for i in range(1, NST + 1):
         d = {'scour_vector': np.array([[0.0, 0.1, 0.2, 0.0]]), 'gen_schema': _EXPECTED_GEN_SCHEMA,
-             'gen_fingerprint': FP, 'state_family': 'joint',
+             'gen_fingerprint': fingerprint, 'state_family': 'joint',
+             **_state_identity(i),
+             **generation,
              'AcelPrimVag': _cellrow(3), 'AcelRodaPrimVag': _cellrow(4),
              'PitchPrimVag': _cellrow(3), 'contact_log': clog, **_raw_meta()}
-        sio.savemat(os.path.join(data_dir, f"{i:04d}.mat"), {'data': d})
-    _finalize(data_dir)
+        # generation_behavior_version belongs to case_info/fingerprint, not
+        # the per-state payload written by A00.
+        d.pop('generation_behavior_version')
+        sio.savemat(
+            os.path.join(data_dir, f"{i:04d}.mat"),
+            {'data': d, **_top_level_stamps(d)},
+            long_field_names=True,
+        )
+    _finalize(data_dir, fingerprint=fingerprint)
 
 
 def check(name, cond):
@@ -120,8 +384,22 @@ def main():
         check("prov has source + 4 artifact digests",
               set(prov['artifacts']) == {'feat', 'labels', 'groups', 'scaler'})
         check("source carries root + manifest digest + dano_max",
-              bool(prov['source'].get('source_root')) and bool(prov['source'].get('manifest_sha256'))
-              and prov['source'].get('dano_max') == 0.60)
+              bool(prov['source'].get('dataset_content_root_sha256'))
+              and bool(prov['source'].get('manifest_sha256'))
+              and prov['source'].get('dano_max') == 0.60
+              and prov['source'].get('matlab_release')
+                  == _EXPECTED_MATLAB_RELEASE
+              and prov['source'].get('release_qualification_run') is False
+              and prov['source'].get('actual_matlab_environment_sha256')
+                  == _EXPECTED_MATLAB_ENVIRONMENT_SHA256
+              and prov['source'].get('campaign_matlab_environment_sha256')
+                  == _EXPECTED_MATLAB_ENVIRONMENT_SHA256
+              and prov['source'].get('generator_source_root_sha256')
+                  == _GENERATOR.sha256
+              and prov['source'].get('generator_source_file_count')
+                  == _GENERATOR.file_count
+              and prov['source'].get('qualification_source_sha256')
+                  == "PRODUCTION")
         check("no leftover .tmp / .lock", not any(f.endswith(('.tmp', '.lock'))
                                                   for f in os.listdir(cache_dir)))
         del X, y, g
@@ -174,7 +452,17 @@ def main():
             **CFG,
             "protocol_hash": "fixture-old-protocol",
             "protocol_descriptor": {
-                "rung": {"dataset_provenance": expected_source}
+                # This tiny cache-only fixture is deliberately not one of the
+                # registered campaign rungs, but it must still carry the full
+                # descriptor grammar before exercising the source-identity
+                # TOCTOU guard.
+                "rung": {
+                    "stage": None,
+                    "dataset": ds,
+                    "target_supports": [2, 3],
+                    "bearing_targets": None,
+                    "dataset_provenance": expected_source,
+                }
             },
         }
         get_or_create_cache(bound_cfg, ds, cache_dir)
@@ -182,6 +470,7 @@ def main():
         table = sio.loadmat(table_path)
         table["AnchorLevel"] = np.ones((NST, 1))
         sio.savemat(table_path, table)
+        _finalize(data_dir)
         try:
             get_or_create_cache(bound_cfg, ds, cache_dir)
             check("post-import valid source replacement rejects stale protocol", False)
@@ -202,7 +491,20 @@ def main():
         _build_dataset(data_dir)
         shutil.rmtree(cache_dir, ignore_errors=True)
 
-        # 9. CONCURRENT builds of the SAME stem (per-stem lock serialises them)
+        # 9. Exact marker grammar also applies on the cache fast path: an extra
+        # nonempty line cannot be ignored as harmless annotation/restamping.
+        get_or_create_cache(CFG, ds, cache_dir)
+        with open(os.path.join(data_dir, '_GENERATION_COMPLETE'), 'a') as fh:
+            fh.write("RESTAMPED\n")
+        try:
+            get_or_create_cache(CFG, ds, cache_dir)
+            check("extra marker line rejected on cache fast path", False)
+        except Exception:
+            check("extra marker line rejected on cache fast path", True)
+        _build_dataset(data_dir)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+        # 10. CONCURRENT builds of the SAME stem (per-stem lock serialises them)
         def _one(_):
             X, y, sc, g = get_or_create_cache(CFG, ds, cache_dir)
             n = len(g)
@@ -213,6 +515,99 @@ def main():
         check("4 concurrent threads build without error",
               all(n == NST * NP for n in res)
               and not any(f.endswith(('.tmp', '.lock')) for f in os.listdir(cache_dir)))
+
+        # 11. A previously valid cache must not launder even a COHERENT
+        # qualification dataset whose manifest, nested payloads and top-level
+        # stamps all agree.
+        _build_dataset(
+            data_dir,
+            qualification=True,
+            qualification_source=_QUALIFICATION_SHA,
+        )
+        try:
+            get_or_create_cache(CFG, ds, cache_dir)
+            check("coherent qualification source rejected on cache fast path",
+                  False)
+        except RuntimeError:
+            check("coherent qualification source rejected on cache fast path",
+                  True)
+
+        # 12. The fast path revalidates the full R11 manifest rather than
+        # trusting the already-published cache sidecar.
+        _build_dataset(data_dir)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        get_or_create_cache(CFG, ds, cache_dir)
+        manifest_mutations = (
+            ("actual environment drift rejected on cache fast path",
+             "actual_matlab_environment_sha256", "0" * 64),
+            ("generator source drift rejected on cache fast path",
+             "generator_source_root_sha256", "1" * 64),
+            ("generation behaviour drift rejected on cache fast path",
+             "generation_behavior_version", "generation-rules-v3"),
+        )
+        for label, field, bad_value in manifest_mutations:
+            ci_path = os.path.join(data_dir, "case_info.mat")
+            ci = sio.loadmat(ci_path, simplify_cells=True)["case_info"]
+            ci[field] = bad_value
+            sio.savemat(
+                ci_path,
+                {"case_info": ci},
+                long_field_names=True,
+            )
+            try:
+                get_or_create_cache(CFG, ds, cache_dir)
+                check(label, False)
+            except RuntimeError:
+                check(label, True)
+            _build_dataset(data_dir)
+
+        # 13. Scalar-struct grammar also protects an already valid cache. A
+        # duplicated case_info struct cannot be silently reduced with [0, 0].
+        _build_dataset(data_dir)
+        ci_path = os.path.join(data_dir, "case_info.mat")
+        ci_raw = sio.loadmat(ci_path)["case_info"]
+        sio.savemat(
+            ci_path,
+            {"case_info": np.concatenate((ci_raw, ci_raw), axis=1)},
+            long_field_names=True,
+        )
+        _finalize(data_dir)
+        try:
+            get_or_create_cache(CFG, ds, cache_dir)
+            check("multi-element case_info rejected on cache fast path", False)
+        except RuntimeError:
+            check("multi-element case_info rejected on cache fast path", True)
+
+        # 14. file_digests must itself be exactly one scalar struct before any
+        # field is selected.
+        _build_dataset(data_dir)
+        fd_path = os.path.join(data_dir, "file_digests.mat")
+        fd_raw = sio.loadmat(fd_path)["file_digests"]
+        sio.savemat(
+            fd_path,
+            {"file_digests": np.concatenate((fd_raw, fd_raw), axis=1)},
+            long_field_names=True,
+        )
+        try:
+            get_or_create_cache(CFG, ds, cache_dir)
+            check("multi-element digest struct rejected on cache fast path",
+                  False)
+        except RuntimeError:
+            check("multi-element digest struct rejected on cache fast path",
+                  True)
+
+        # 15. A foreign source identity may be perfectly self-consistent across
+        # manifest, state payloads/stamps, dataset digests and marker. It remains
+        # ineligible because it does not identify the live reviewed MATLAB bytes.
+        _build_dataset(
+            data_dir,
+            generator_attestation=_foreign_generator_attestation(),
+        )
+        try:
+            get_or_create_cache(CFG, ds, cache_dir)
+            check("coherent foreign source rejected on cache fast path", False)
+        except RuntimeError:
+            check("coherent foreign source rejected on cache fast path", True)
 
         print("\nCACHE PROVENANCE: ALL PASS" if fails == 0 else
               f"\nCACHE PROVENANCE: {fails} CHECK(S) FAILED")

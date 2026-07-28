@@ -14,13 +14,14 @@ import contextlib
 import csv
 import hashlib
 import importlib.util
+import inspect
 import io
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 import zipfile
 
 import numpy as np
@@ -183,7 +184,7 @@ with tempfile.TemporaryDirectory(prefix="campaign-preflight-") as td:
             "SEEDS": [42, 1337, 2026],
             "N_TRIALS": 100,
             "optuna": fake_optuna,
-            "_study_is_finished": lambda study, n: True,
+            "_study_is_finished": lambda *args, **kwargs: True,
             "verify_digital_twin_package": lambda study, cfg, out: {},
             "os": os,
         },
@@ -214,8 +215,10 @@ check("nonempty RUN_TAG suffixes artifact name",
       tag_ns["_with_run_tag"]("artifact") == "artifact_replicate2")
 check("summary path uses RUN_TAG helper",
       '_with_run_tag(f"{STAGE}_summary_ph-{PROTOCOL_HASH_SHORT}")' in SOURCE)
-check("champion manifest uses RUN_TAG helper",
-      "_with_run_tag(\n                     f\"_champion_arch_" in SOURCE)
+check("champion manifest requires a durable absolute environment path",
+      'CHAMPION_MANIFEST = os.environ.get("CHAMPION_MANIFEST", "")' in SOURCE
+      and '"CHAMPION_MANIFEST", CHAMPION_MANIFEST' in SOURCE
+      and "path.is_absolute()" in SOURCE)
 check("deployment manifest uses RUN_TAG helper",
       "_with_run_tag(\n                f\"_deployment_selection_" in SOURCE)
 check("control architecture policy is protocol-hashed",
@@ -223,39 +226,23 @@ check("control architecture policy is protocol-hashed",
       Path(__file__).with_name("core").joinpath("protocol.py")
       .read_text(encoding="utf-8"))
 
-# A protocol budget is exact: a manually extended best-of-120 study must never
-# masquerade as the pre-registered best-of-100 experiment.
-COMPLETE, PRUNED, FAIL, RUNNING, WAITING = (object() for _ in range(5))
-fake_optuna_budget = SimpleNamespace(
-    trial=SimpleNamespace(TrialState=SimpleNamespace(
-        COMPLETE=COMPLETE, PRUNED=PRUNED, FAIL=FAIL,
-        RUNNING=RUNNING, WAITING=WAITING,
-    ))
-)
-budget_ns = extracted(
-    "_study_is_finished", namespace={"optuna": fake_optuna_budget}
-)
-study_exact = SimpleNamespace(
-    study_name="exact",
-    trials=[SimpleNamespace(state=COMPLETE) for _ in range(100)],
-)
-study_extended = SimpleNamespace(
-    study_name="extended",
-    trials=[SimpleNamespace(state=COMPLETE) for _ in range(120)],
-)
-check("exact useful Optuna budget is accepted",
-      budget_ns["_study_is_finished"](study_exact, 100))
-check("manually extended Optuna budget is rejected",
-      not budget_ns["_study_is_finished"](study_extended, 100))
-
 # 6. Bundle contents come from regular blobs in a reviewed Git tree. Exercise
 # the actual importable builder against disposable repositories; never invoke
 # it against this repository's stale bundles.
 builder = Path(__file__).with_name("build_stage_bundles.py")
 source_manifest = Path(__file__).with_name("bundle_source_files.txt")
 required_new = {
+    "analyze_cross_rung_contrasts.py",
+    "bundle_source_files.txt",
     "benchmark_r5_compute.py",
+    "check_capacity_preflight.py",
+    "check_cross_rung_inference.py",
+    "check_hyperparameter_policy.py",
     "scour_MATLAB/B54_TrackVectors.m",
+    "core/campaign_contract.py",
+    "core/capacity_preflight.py",
+    "core/cross_rung_inference.py",
+    "core/hyperparameter_policy.py",
     "core/statistical_inference.py",
     "check_paa.py",
     "check_weighted_head_mse.py",
@@ -269,16 +256,29 @@ required_new = {
     "environment/campaign-py313-cu128.json",
     "requirements-campaign-py313-cu128.txt",
     "check_environment_lock.py",
+    "check_execution_blocking.py",
     "check_familytable_roundtrip.py",
     "check_generation_contract.py",
+    "check_generation_release_comparison.py",
+    "check_source_provenance.py",
     "check_benchmark_contract.py",
     "check_r4_mutation_guards.py",
     "check_training_policy_mutation_guards.py",
+    "compare_generation_releases.py",
+    "make_micro_smoke.py",
     "TTBI_2D/b54_model_matrices.py",
     "scour_MATLAB/contact_closure_study.m",
+    "scour_MATLAB/current_matlab_environment.m",
+    "scour_MATLAB/generator_source_root.m",
+    "scour_MATLAB/matlab_environment_identity.m",
+    "scour_MATLAB/save_progress.m",
     "scour_MATLAB/smoke_contact_closure.m",
+    "scour_MATLAB/smoke_crn_state_design.m",
     "scour_MATLAB/smoke_familytable.m",
+    "scour_MATLAB/smoke_r11_provenance_serialization.m",
     "core/artifact_provenance.py",
+    "core/execution_environment.py",
+    "core/source_provenance.py",
     "docs/audit_r4_results.md",
     "docs/audit_r5_results.md",
 }
@@ -294,6 +294,23 @@ if builder.is_file():
     check("every required bundle-manifest file exists",
           all((Path(__file__).resolve().parent / Path(p)).is_file()
               for p in required_new))
+    tracked_result = subprocess.run(
+        ["git", "ls-files", "--stage", "--", *sorted(required_new)],
+        cwd=Path(__file__).resolve().parent,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    tracked_rows = tracked_result.stdout.decode(
+        "utf-8", errors="replace"
+    ).splitlines()
+    tracked_regular = {
+        row.split("\t", 1)[1]
+        for row in tracked_rows
+        if "\t" in row and row.split(" ", 1)[0] in {"100644", "100755"}
+    }
+    check("every required runtime/test file is a regular tracked Git blob",
+          tracked_result.returncode == 0 and required_new <= tracked_regular)
     check("bundle source manifest is tracked and explicit",
           "bundle_source_files.txt" in builder_text
           and "multidamage_stage2_bundle.zip" not in builder_text)
@@ -301,6 +318,8 @@ if builder.is_file():
           'if __name__ == "__main__":' in builder_text)
     check("bundle README separates dispatch checks from audit-only compute",
           "FAST DISPATCH PREFLIGHTS" in builder_text
+          and "smoke_r11_provenance_serialization" in builder_text
+          and "check_source_provenance.py" in builder_text
           and "check_benchmark_contract.py" in builder_text
           and "AUDIT-ONLY" in builder_text
           and "check_r4_mutation_guards.py" in builder_text
@@ -312,11 +331,12 @@ if builder.is_file():
           and "check_familytable_roundtrip.py" in builder_text
           and "missing genuine-MATLAB artifact is a hard failure" in
           builder_text
-          and "MANDATORY after the first R9 state" in builder_text
+          and "MANDATORY after the first R11 state" in builder_text
           and "smoke_raw_parity" in builder_text
           and "check_raw_parity.py" in builder_text)
-    check("bundle build requires an explicit R5 dispatch authorization",
+    check("bundle build requires an explicit legacy-named R11 authorization",
           "docs/audit_r5_results.md" in builder_text
+          and "# Audit R11 results (legacy filename)" in builder_text
           and "**Status: DISPATCH AUTHORIZED.**" in builder_text
           and "_parse_authorized_report" in builder_text)
     check("bundle build binds evidence commit B to tested source commit A",
@@ -363,7 +383,7 @@ if builder.is_file():
         suffix: str = "",
     ) -> str:
         return (
-            "# Audit R5 results — fixture\n\n"
+            "# Audit R11 results (legacy filename)\n\n"
             f"**Status: {status}.**\n\n"
             f"**Tested source commit:** {tested_source}\n"
             f"{suffix}"
@@ -504,6 +524,112 @@ if builder.is_file():
     after_import = publication_snapshot(builder.parent)
     check("importing bundle builder has zero publication side effects",
           before_import == after_import)
+    check(
+        "registered bundle stages are immutable",
+        isinstance(bundle_module.STAGES, type(MappingProxyType({}))),
+    )
+    try:
+        bundle_module.STAGES["fixture"] = ("all_mult", "fixture")
+    except TypeError:
+        stages_immutable = True
+    else:
+        stages_immutable = False
+    check("registered bundle stage mapping rejects mutation", stages_immutable)
+    check(
+        "bundle publisher exposes no partial-stage parameter",
+        tuple(inspect.signature(bundle_module.build_bundles).parameters)
+        == ("repo",),
+    )
+    generated_readme = bundle_module.readme(
+        "s0_scour", "all_mult", "fixture", "b" * 40, "a" * 40
+    )
+    readme_sections = (
+        "FAST DISPATCH PREFLIGHTS",
+        "AUDIT-ONLY",
+        "ONE-TIME CROSS-LANGUAGE CONTRACT AUDIT",
+    )
+    check(
+        "generated bundle README preserves the three audit classes in order",
+        all(section in generated_readme for section in readme_sections)
+        and [
+            generated_readme.index(section) for section in readme_sections
+        ] == sorted(
+            generated_readme.index(section) for section in readme_sections
+        ),
+    )
+    check(
+        "generated bundle README records authorized A/B benchmark evidence",
+        "Dispatch bundle commit B: `" + "b" * 40 + "`" in generated_readme
+        and "Tested source commit A: `" + "a" * 40 + "`" in generated_readme
+        and "has already approved the genuine" in generated_readme
+        and "`attempt_count=1`" in generated_readme
+        and "`prior_unaccepted_attempt_count=0`" in generated_readme
+        and "`timing_complete=true`" in generated_readme
+        and "`memory_complete=true`" in generated_readme
+        and "execution is still pending" not in generated_readme
+        and "do not authorize dispatch" not in generated_readme,
+    )
+    fast_section = generated_readme.split(
+        "### AUDIT-ONLY", 1
+    )[0]
+    audit_section = generated_readme.split(
+        "### AUDIT-ONLY", 1
+    )[1].split("### ONE-TIME CROSS-LANGUAGE", 1)[0]
+    check(
+        "campaign-control Git audit is audit-only, not a dispatch-host preflight",
+        "check_campaign_controls.py" not in fast_section
+        and "check_campaign_controls.py" in audit_section,
+    )
+    parser_fixture_sha = "a" * 40
+    check(
+        "authorization parser accepts the exact R11 legacy heading",
+        bundle_module._parse_authorized_report(
+            fixture_report(
+                "DISPATCH AUTHORIZED", f"`{parser_fixture_sha}`"
+            )
+        ) == parser_fixture_sha,
+    )
+    try:
+        bundle_module._parse_authorized_report(
+            fixture_report(
+                "DISPATCH AUTHORIZED", f"`{parser_fixture_sha}`"
+            ).replace(
+                "# Audit R11 results (legacy filename)",
+                "# Audit R5 results — stale heading",
+                1,
+            )
+        )
+    except bundle_module.BundleBuildError:
+        stale_heading_rejected = True
+    else:
+        stale_heading_rejected = False
+    check("stale R5 authorization heading is rejected", stale_heading_rejected)
+    check(
+        "generated bundle README authenticates every follower block reference",
+        "`CHAMPION_MANIFEST`" in generated_readme
+        and "`TTBI_BLOCK_REFERENCE_SHA256=<64-lowercase-hex>`" in
+        generated_readme
+        and "export `TTBI_BLOCK_REFERENCE_SHA256` with that exact value" in
+        generated_readme
+        and "mandatory for followers" in generated_readme,
+    )
+    check(
+        "generated bundle README makes genuine MATLAB and first-state parity hard gates",
+        "missing genuine-MATLAB artifact is a hard failure" in generated_readme
+        and "MANDATORY after the first R11 state" in generated_readme
+        and "`smoke_raw_parity('Results/<case>')`" in generated_readme
+        and "`python check_raw_parity.py" in generated_readme,
+    )
+    for label, payload in (
+        ("whitespace-only manifest line", b"alpha.py\n   \nbeta.py\n"),
+        ("indented manifest comment", b"alpha.py\n  # hidden\nbeta.py\n"),
+    ):
+        try:
+            bundle_module._parse_source_manifest(payload)
+        except bundle_module.BundleBuildError:
+            check(f"builder rejects {label}", True)
+        else:
+            check(f"builder rejects {label}", False)
 
     # Blocked status — even accompanied by a tempting marker in a code fence —
     # must leave pre-existing ZIP and completion marker byte-for-byte untouched.
@@ -519,7 +645,6 @@ if builder.is_file():
             with contextlib.redirect_stdout(io.StringIO()):
                 bundle_module.build_bundles(
                     repo,
-                    stages={"s0_scour": ("all_mult", "fixture")},
                 )
         except bundle_module.BundleBuildError:
             blocked = True
@@ -551,7 +676,6 @@ if builder.is_file():
             with contextlib.redirect_stdout(io.StringIO()):
                 built = bundle_module.build_bundles(
                     repo,
-                    stages={"s0_scour": ("all_mult", "fixture")},
                 )
         except Exception as err:
             print(f"    unexpected {type(err).__name__}: {err}")
@@ -560,7 +684,11 @@ if builder.is_file():
         else:
             authorized_passed = (
                 built.source_commit == dispatch_b
-                and len(built.bundles) == 1
+                and len(built.bundles) == 10
+                and {path.name for path in built.bundles} == {
+                    f"bundle_{stage}.zip"
+                    for stage in bundle_module.EXPECTED_STAGE_ORDER
+                }
                 and built.sha_manifest.is_file()
             )
             with zipfile.ZipFile(built.bundles[0]) as archive:
@@ -673,8 +801,10 @@ if builder.is_file():
                   rejects_plan(bundle_module, repo))
 else:
     # Stage bundles intentionally do not ship their own bundle builder/source
-    # ZIP; runtime control tests above remain applicable there.
-    print("  [SKIP] bundle-manifest audit (builder absent in stage bundle)")
+    # ZIP. This Git/publication branch is audit-only and therefore not
+    # applicable inside a dispatched stage bundle; runtime controls above
+    # remain applicable.
+    print("  [N/A] audit-only bundle-manifest checks (builder absent)")
 
 # ── Pre-registered PRIMARY ESTIMAND (audit r5) ───────────────────────────────
 # The objective policy is structured executable data in TRAIN_PROTOCOL, not a

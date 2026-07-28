@@ -1,5 +1,9 @@
 # Audit r5 handoff — independent verification of the R4 commits
 
+> **HISTORICAL HANDOFF — SUPERSEDED BY R11.** This preserves the R5 review
+> record. Open items described below have since been redesigned under R11; this
+> file does not authorize generation, ablation, bundle dispatch or paper claims.
+
 Audience: the external auditor (Codex), round 5.
 Baseline audited: `f805fbe`, `a91f2f2`, `c0ead72` (i.e. `6f61fa0..c0ead72`,
 +5870/−523 across 36 files), plus `docs/audit_r4_results.md`.

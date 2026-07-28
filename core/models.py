@@ -101,7 +101,7 @@ class SpaceAwareModularNetwork(nn.Module):
 
     Architecture flags (all bool, all default False):
         use_space2vec  - prepend spatial embedding before CNN.
-        use_lstm       - insert a bidirectional LSTM after CNN.
+        use_lstm       - insert a unidirectional LSTM after CNN.
         use_nhits      - replace global-average-pool with multi-rate pool.
 
     Args:

@@ -1,5 +1,12 @@
 # Paper 1 — Related work: the Fernandes line (verified against the PDFs)
 
+> **NON-AUTHORITATIVE HISTORICAL DRAFT.** The primary-source summaries below
+> remain useful, but every “this work”, architecture, novelty, sensor-economy
+> and result claim predates R11 and is superseded. Rebuild those sections from
+> the executed R11 protocol and results. The current block is
+> `MultiRatePooling1D` (N-HiTS-inspired), not N-HiTS, and no current `2 ≈ 8`
+> result exists before the campaign runs.
+
 Drafted 2026-07-09 from the primary sources in `papers/` (extracted with `pdftotext`).
 This is the §3 "related work + delta" material for `docs/paper1_outline.md`, with the
 Table-1 cells now verified. **Note on framing:** Fernandes, Lopez, Ribeiro, Miguel et al.
@@ -129,12 +136,15 @@ roughness/fusion result; fold the confirmed items into §3 and cite the primary 
   FRA class per scenario with per-passage speed/mass/suspension variation. ⇒ our **per-STATE**
   profile draw is the literature-consistent choice; the first pilot's per-passage class+phase
   redraw is the outlier (and the collapse cause).
-- **Physical pass-to-pass profile stability.** EN 13848-2 track-recording repeatability ≤0.5 mm
-  (D1 band) and MGT-scale settlement models (Sato; Shenton) ⇒ a track does not change class
-  between trains; per-passage class redraw over {4,5,6} is physically indefensible.
-- **FRA class vs speed.** Class 4 ≈ roughest geometry permissible at 70–90 km/h; classes 5–6 are
-  premium/high-speed track ⇒ fix at FRA 4 as the realistic worst case for a scour-prone regional
-  line.
+- **Physical pass-to-pass profile persistence.** The fixed-scenario literature
+  above and MGT-scale settlement models (Sato; Shenton) support holding the
+  physical profile over repeated passages. EN 13848-2 repeatability is a
+  measurement-system property and is not evidence for physical persistence.
+- **FRA class benchmark.** FRA class 4 is the campaign's deliberately rough
+  controlled benchmark, not “the roughest legally permissible” at every speed;
+  that legal claim depends on track class and service category. Classes 5–6
+  represent progressively tighter geometry. State the benchmark choice and its
+  limitation rather than inferring a route's legal/empirical class.
 - **Suspension filtering vs unsprung tracing (why sprung channels collapse under roughness).**
   Sprung masses (car body ~1–3 Hz, bogie) are low-pass isolated from the rail; strong per-pass
   roughness drives them into their own inertial resonance and masks the quasi-static scour

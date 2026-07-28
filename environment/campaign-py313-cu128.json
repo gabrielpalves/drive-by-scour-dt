@@ -1,11 +1,22 @@
 {
-  "schema": "ttbi-campaign-environment-v1",
+  "schema": "ttbi-campaign-environment-v2",
   "python": "3.13.3",
   "platform_system": "Windows",
   "cuda_required": true,
   "torch_cuda": "12.8",
+  "cudnn_runtime": 90701,
   "cublas_workspace_config": ":4096:8",
-  "matlab_release": "R2025b",
+  "matlab_environment": {
+    "release": "R2025b",
+    "version": "25.2.0.3177638 (R2025b) Update 5",
+    "arch": "win64",
+    "blas": "Intel(R) oneAPI Math Kernel Library Version 2024.1-Product Build 20240215 for Intel(R) 64 architecture applications (CNR branch AVX2)",
+    "lapack": "Intel(R) oneAPI Math Kernel Library Version 2024.1-Product Build 20240215 for Intel(R) 64 architecture applications (CNR branch AVX2) supporting Linear Algebra PACKage (LAPACK 3.11.0)",
+    "matlab_product_version": "25.2",
+    "statistics_toolbox_version": "25.2",
+    "parallel_toolbox_version": "25.2"
+  },
+  "matlab_environment_sha256": "958e7fe28f70577e9cb77aba0443c127d0a99726042a4618f7cce88d557fce79",
   "packages": {
     "joblib": "1.4.2",
     "matplotlib": "3.10.1",

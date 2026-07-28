@@ -75,9 +75,10 @@ elseif Calc.Profile.Type == 1
     % ---- Generating Output ----
     % Profile elevation. If a phase_seed is set (per-STATE profile lock,
     % 2026-07-12 EOV design review), the random phases come from a stream
-    % seeded once per damage state -> every passage of that state rides the
-    % SAME track realization (EN 13848-2: pass-to-pass geometry repeatability
-    % <=0.5 mm @95%). The caller's RNG stream is saved/restored so all other
+    % seeded once per damage state -> every passage of that persistent
+    % scenario rides the SAME physical track realization. This is a scenario
+    % persistence assumption, not an inference from EN 13848-2 measurement
+    % repeatability. The caller's RNG stream is saved/restored so all other
     % per-passage draws are unaffected.
     if isfield(Calc.Profile,'phase_seed') && ~isempty(Calc.Profile.phase_seed)
         rng_state_ = rng;
@@ -138,11 +139,11 @@ if profile_intensity ~= 1
     Calc.Profile.h = Calc.Profile.h * profile_intensity;
 end
 
-% ---- Per-passage profile jitter (2026-07-12 EOV design review) ----
-% Additive white noise on top of the (per-state locked) realization:
-% pass-to-pass metrological repeatability / minor wheel wander (EN 13848-2
-% D1 longitudinal-level repeatability <=0.5 mm @95%). Drawn from the CURRENT
-% per-passage RNG stream, so it DIFFERS passage to passage by construction.
+% ---- Dormant compatibility hook: per-passage profile jitter ---------------
+% Every campaign preset sets jitter_sd_m=0. EN 13848-2 repeatability is a
+% measurement-system property and does not justify physical white roughness.
+% If a future physical perturbation is introduced, it must be separately
+% justified, band-limited and versioned rather than enabled through this hook.
 if isfield(Calc.Profile,'jitter_sd_m') && Calc.Profile.jitter_sd_m > 0
     Calc.Profile.h = Calc.Profile.h + ...
         Calc.Profile.jitter_sd_m * randn(size(Calc.Profile.h));

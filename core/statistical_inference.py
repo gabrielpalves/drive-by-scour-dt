@@ -35,14 +35,11 @@ class GroupedFold:
 def finalist_cv_strata(strata_by_state: Sequence[str]) -> list[str]:
     """Return the pre-registered coarsening used by finalist repeated CV.
 
-    The canonical outer split uses ``joint|crack{0,1}|sev{0,1,2}`` strata.  At
-    high output dimension the lowest equal-width severity bin is structurally
-    sparse (sometimes one state), so demanding all six joint cells in every
-    five-fold validation partition is mathematically impossible.  Repeated CV
-    therefore preserves family/anchor strata and joint crack status, while
-    coarsening only the joint severity suffix. Severity remains randomized
-    within each crack stratum across deterministic repeats; it is not used to
-    choose models or touch the outer test.
+    The canonical R11 outer split uses
+    ``joint|latentcrack{0,1}|scoursev{0,1,2}`` strata.  Repeated CV preserves
+    family/anchor strata and latent joint crack status while coarsening only the
+    joint scour-severity suffix.  Neither active crack nor bearing status may
+    enter this key because those mechanisms change across paired campaign rungs.
     """
 
     result: list[str] = []
@@ -50,10 +47,17 @@ def finalist_cv_strata(strata_by_state: Sequence[str]) -> list[str]:
         key = str(raw)
         parts = key.split("|")
         if parts[0] == "joint":
-            crack = [part for part in parts[1:] if part.startswith("crack")]
-            if len(crack) != 1 or crack[0] not in ("crack0", "crack1"):
+            crack = [
+                part for part in parts[1:]
+                if part.startswith("latentcrack")
+            ]
+            if (
+                len(crack) != 1
+                or crack[0] not in ("latentcrack0", "latentcrack1")
+            ):
                 raise ValueError(
-                    f"malformed joint stratum {key!r}; expected a crack0/1 tag"
+                    f"malformed joint stratum {key!r}; expected a "
+                    "latentcrack0/1 tag"
                 )
             key = f"joint|{crack[0]}"
         result.append(key)

@@ -29,6 +29,7 @@ AUDIT_REPORT_NAME = "docs/audit_r5_results.md"
 DRIVER = "comprehensive_ablation_multidamage.py"
 A00 = "scour_MATLAB/A00_Run.m"
 EXPECTED_AUDIT_STATUS = "**Status: DISPATCH AUTHORIZED.**"
+EXPECTED_AUDIT_HEADING = "# Audit R11 results (legacy filename)"
 
 
 class BundleBuildError(RuntimeError):
@@ -39,20 +40,38 @@ class BundleBuildError(RuntimeError):
 # format + the new EOV design), so every stage is a GEN stage and every stage
 # ablates with `all_mult` = channel-symmetric Gaussian multiplicative noise
 # (pointwise sigma = 5% of |signal|) on EVERY channel,
-# injected at LOAD time onto noise-free data. One factor per rung.
-STAGES = {
+# injected at LOAD time onto noise-free data. The controlled L60 contrast graph
+# is s0->s11->s13 and s0->s12->s13->s14->s15->s16. The L99.6 stages are
+# blockwise scale/stress contrasts rather than a one-factor sequence.
+STAGES = MappingProxyType({
     # id                (noise mode, one-line what-it-adds)
     "s0_scour":       ("all_mult", "scour only - baseline + architecture selection"),
     "s11_bear":       ("all_mult", "+ bearing (HEAD)"),
     "s12_crack":      ("all_mult", "+ crack (nuisance, no bearing)"),
-    "s13_bearcrack":  ("all_mult", "+ bearing + crack = all BRIDGE damages"),
+    "s13_bearcrack":  ("all_mult", "+ bearing + crack = three modeled bridge-condition mechanisms (with scour)"),
     "s14_prof":       ("all_mult", "+ rail profile FRA-4 per-state = the ROUGHNESS rung"),
     "s15_track":      ("all_mult", "+ track-layer damage (ballast/hanging sleepers/pads)"),
-    "s16_all":        ("all_mult", "+ wheel OOR (polygonization; flats disabled) = ALL damages"),
-    "s21_scour4":     ("all_mult", "4-span L99.6, scour only"),
-    "s22_bearcrack4": ("all_mult", "4-span, + bearing + crack = all BRIDGE damages"),
-    "s23_all4":       ("all_mult", "4-span, all damages"),
-}
+    "s16_all":        ("all_mult", "+ wheel OOR (polygonization; flats disabled) = all modeled vertical-pathway EOVs"),
+    "s21_scour4":     ("all_mult", "L99.6 scale block: 4-span, scour only"),
+    "s22_bearcrack4": ("all_mult", "L99.6 bridge-condition stress block: + bearing + crack (three modeled mechanisms with scour)"),
+    "s23_all4":       ("all_mult", "L99.6 EOV stress block: all modeled vertical-pathway EOVs"),
+})
+EXPECTED_STAGE_ORDER = (
+    "s0_scour",
+    "s11_bear",
+    "s12_crack",
+    "s13_bearcrack",
+    "s14_prof",
+    "s15_track",
+    "s16_all",
+    "s21_scour4",
+    "s22_bearcrack4",
+    "s23_all4",
+)
+if tuple(STAGES) != EXPECTED_STAGE_ORDER:
+    raise RuntimeError("registered bundle stage order is incomplete or drifted")
+
+
 def set_a00_stage(t, stage):
     t2, n = re.subn(r"^STAGE = '[^']*';", f"STAGE = '{stage}';", t, count=1, flags=re.M)
     if n != 1:
@@ -81,80 +100,173 @@ def set_driver_noise(t, mode):
         )
     return t2
 
-def readme(stage, mode, adds, source_commit):
+def readme(
+    stage,
+    mode,
+    adds,
+    source_commit,
+    tested_source_commit,
+):
     return "\n".join([
-        f"# Bundle: {stage}  —  {adds}", "",
-        f"Reviewed source commit: `{source_commit}`.", "",
-        "Self-contained: MATLAB generator + Python ablation, both PRESET for this",
-        "stage. Extract into the repo root on the Lab PC. No editing needed.", "",
-        "## 0. AUDIT R5 — read first",
-        "- Extract into a FRESH working copy; do NOT extract over an old run. A00",
-        "  writes a gen_schema and ABORTS if you resume a folder from other code.",
-        "- FAST DISPATCH PREFLIGHTS (run on every campaign PC before generation):",
-        "  MATLAB: `smoke_audit`, `smoke_stage3`, `smoke_geometry`;",
-        "  Python: `python check_split_grouping.py`, `python check_loader_provenance.py`,",
-        "  `python check_cache_provenance.py`, `python check_protocol_hash.py`,",
-        "  `python check_generation_contract.py`, `python check_benchmark_contract.py`,",
-        "  `python check_paa.py`, `python check_weighted_head_mse.py`,",
-        "  `python check_sensor_noise_pairing.py`, `python check_campaign_controls.py`,",
-        "  `python check_statistical_inference.py`, `python check_artifact_provenance.py`,",
-        "  `python check_environment_lock.py`, `python check_b54_overlap_parity.py`.",
-        "  Also run MATLAB `smoke_contact_closure` before the closure study.",
-        "  All must print ALL PASS. MATLAB must be available to the normal B54 parity",
-        "  command; `--allow-python-only` is not a valid dispatch preflight.",
-        "- AUDIT-ONLY (already run once on the reviewed source commit):",
-        "  `python check_r4_mutation_guards.py`,",
-        "  `python check_training_policy_mutation_guards.py`, and the heavy",
-        "  `python benchmark_r5_compute.py`. They ship for review/reproducibility,",
-        "  but are not per-PC preflights. The benchmark needs its immutable legacy",
-        "  fixture and writes only below `.audit_tmp`; never use it for selection.",
-        "  The commit-bound evidence and dispatch verdict are in",
-        "  `docs/audit_r5_results.md`.",
-        "- ONE-TIME CROSS-LANGUAGE CONTRACT AUDIT (reviewed source, pre-dispatch):",
-        "  run MATLAB `smoke_familytable`, then from the repo root run Python",
-        "  `python check_familytable_roundtrip.py`. The normal Python command must",
-        "  pass; a missing genuine-MATLAB artifact is a hard failure, not a skip.",
-        "- Run STAGE s0_scour FIRST: it selects the architecture and writes",
-        "  results/_champion_arch_<schema>_ph-<hash>.json; every later rung reads it",
-        "  and errors if it is missing (no hardcoded champion anymore). On a DIFFERENT",
-        "  PC, copy that complete JSON and point CHAMPION_MANIFEST at it. Bare",
-        "  architecture/pair overrides are rejected because they lack selection lineage.",
-        "- PROTOCOL HASH (2026-07-19): every study/summary/manifest name carries a",
-        "  SHA-256 of the full protocol (dataset fingerprint, split, seeds, trials,",
-        "  pruner, search space, noise, targets). If ANY of those change, names",
-        "  change and old studies are orphaned — never resumed. The exact hashed",
-        "  descriptor is written to the summary dir as protocol_descriptor.json.",
-        "- Study/DB/cache dirs are STAGE-prefixed, so rungs never cross-contaminate.", "",
-        "## 1. MATLAB — generate the data (noise-free, RAW format)",
-        f"Open `scour_MATLAB/A00_Run.m` and RUN it. `STAGE` is already `{stage}` and",
-        "`use_signal_noise = false` — measurement noise is added later, at LOAD time.",
-        "D01 saves the RAW, un-interpolated TIME-domain signal plus the space/crop",
-        "parameters; Python rebuilds the space window at load time (Option B), so the",
-        "noise model can change forever without regenerating.",
-        "Output -> `scour_MATLAB/Results/<stage>_L<len>_st<N>/`; move it under `data/`.",
-        "Folder names are SHORT now (Windows MAX_PATH); the full descriptor lives in",
-        "`case_info.case_desc` / `case_info.txt`.", "",
-        "## 2. MANDATORY after the first R9 state: verify the raw-data transform",
-        "After the FIRST state exists, in MATLAB:  `smoke_raw_parity('Results/<case>')`",
-        "then:  `python check_raw_parity.py \"scour_MATLAB/Results/<case>\"`",
-        "Must print PARITY PASS (max|MATLAB-Python| < 1e-12) before the long run.", "",
-        "## 3. Python — ablate",
-        "`python comprehensive_ablation_multidamage.py` (STAGE + SENSOR_NOISE preset).",
-        f"Noise: `{mode}` = zero-mean Gaussian multiplicative noise on EVERY channel",
-        "with pointwise sigma = 5% of |signal|, injected at load time onto the",
-        "noise-free data. 100 useful Optuna trials x 3 seeds per configuration;",
-        "pair search, controls, finalist CV and the outer-test firewall are fixed",
-        "by the hash-carried protocol described in README_CAMPAIGN.md.",
-        f"summary -> `results/{stage}_summary_ph-<hash>/` (+ leaderboards +",
-        "`protocol_descriptor.json`).", "",
-        "## Heads vs nuisances",
-        "HEADS = scour (per pier) + bearing (per abutment) ONLY. Crack, rail profile,",
-        "track-layer and wheel damage are NUISANCES: randomized, logged, never",
-        "estimated — the network must be INVARIANT to them.", "",
-        "## Requirements",
-        "Use Python 3.13.3 and install `requirements-campaign-py313-cu128.txt`.",
-        "The driver hard-fails before creating a study if the exact hash-carried",
-        "software/CUDA lock does not match. Everything is resumable.", ""])
+        f"# R11 bundle: {stage} — {adds}", "",
+        f"Dispatch bundle commit B: `{source_commit}`.",
+        f"Tested source commit A: `{tested_source_commit}`.", "",
+        "This bundle was publishable only after the commit-bound audit in",
+        "`docs/audit_r5_results.md` authorized that exact tested source and the",
+        "report-only A→B lineage. That included report is the sole dispatch",
+        "authority; its benchmark and host-qualification gates are approved.",
+        "Verify this ZIP",
+        "against `bundle_sha256.txt`, then extract it into a FRESH workspace.",
+        "Never overlay or resume a pre-R11 data/results folder.", "",
+        "## 1. FAST DISPATCH PREFLIGHTS",
+        "Use the exact registered MATLAB R2025b Update 5 stack and Python 3.13.3",
+        "environment. Run MATLAB `smoke_audit`, `smoke_crn_state_design`,",
+        "`smoke_damage_toggles`, `smoke_stage3`, `smoke_geometry`,",
+        "`smoke_r11_provenance_serialization`, and `smoke_contact_closure`.",
+        "Run the no-argument Python preflights:",
+        "`check_split_grouping.py`, `check_loader_provenance.py`,",
+        "`check_cache_provenance.py`, `check_protocol_hash.py`,",
+        "`check_generation_contract.py`, `check_benchmark_contract.py`,",
+        "`check_source_provenance.py`,",
+        "`check_paa.py`, `check_weighted_head_mse.py`,",
+        "`check_sensor_noise_pairing.py`,",
+        "`check_statistical_inference.py`, `check_artifact_provenance.py`,",
+        "`check_environment_lock.py`,",
+        "`check_hyperparameter_policy.py`, `check_capacity_preflight.py`,",
+        "`check_execution_blocking.py`, and `check_cross_rung_inference.py`.",
+        "Every listed preflight must be green on the intended host. A skip is",
+        "not a pass.", "",
+        "### AUDIT-ONLY (commit-A evidence; do not repeat per dispatch host)",
+        "`check_campaign_controls.py`,",
+        "`check_generation_release_comparison.py`,",
+        "`check_r4_mutation_guards.py`,",
+        "`check_training_policy_mutation_guards.py`, and",
+        "`benchmark_r5_compute.py` are one-time commit-A audit gates.",
+        "The included commit-B audit report has already approved the genuine",
+        "eight-channel R11 benchmark against the tested commit A: one current-shape",
+        "100-trial anchor study with zero Optuna FAIL/OOM and no Optuna-trial",
+        "retry/replacement, plus one clean shared finalist-CV refit with",
+        "`attempt_count=1`, `prior_unaccepted_attempt_count=0`,",
+        "`timing_complete=true`, and `memory_complete=true`.",
+        "Never reuse benchmark fixtures or studies for scientific selection.", "",
+        "### ONE-TIME CROSS-LANGUAGE CONTRACT AUDIT",
+        "For each authorized MATLAB environment, run MATLAB",
+        "`smoke_b54_overlap_parity` and `smoke_familytable`, then run Python",
+        "`check_b54_overlap_parity.py` and `check_familytable_roundtrip.py` against",
+        "those fresh outputs. A missing genuine-MATLAB artifact is a hard failure;",
+        "a Python-only reconstruction or skip is not dispatch evidence.",
+        "Raw parity is separate and MANDATORY after the first R11 state: once",
+        "`0001.mat` is complete, run MATLAB `smoke_raw_parity('Results/<case>')`",
+        "and then `python check_raw_parity.py \"scour_MATLAB/Results/<case>\"`.",
+        "Stop generation immediately unless both report PARITY PASS.", "",
+        "Verify that this physical MATLAB PC is represented in the commit-B",
+        "qualification evidence. Before authorization, every intended generation",
+        "PC must have used one stable unique `TTBI_QUALIFICATION_HOST_ID` and",
+        "fresh transient scripts generated from commit A for at least",
+        "`s0_scour`, `s16_all`, and `s23_all4`. Each host must execute the exact",
+        "source-bound script bytes; never copy or forge a host receipt.",
+        "Each run must retain its authenticated `qualification_host_receipt.json`,",
+        "and the required corresponding host/environment pairs must have accepted",
+        "`matlab-environment-qualification-receipt-v4` comparator receipts.",
+        "CPU equality is not required; equal MATLAB-environment digests are",
+        "eligible only with distinct authenticated host IDs. Host identity is not",
+        "part of production `gen_schema` or `gen_fingerprint`. If this PC is not",
+        "covered by that evidence, do not generate; return to the audit gate.", "",
+        "## 2. Generate noise-free raw data",
+        f"Open `scour_MATLAB/A00_Run.m` and run it; `STAGE` is preset to `{stage}`.",
+        "The generator writes raw un-interpolated time histories plus crop metadata,",
+        "50 passages/state, semantic StateUIDs, named CRN streams, contact logs,",
+        "the exact MATLAB stack, and reviewed source/asset roots.",
+        "The modeled input comprises five vertical-acceleration and three pitch-",
+        "angular-velocity response channels; these are not eight accelerometers.",
+        "Every L60 rung has 450 fixed-family states; every L99.6 rung has 475.",
+        "Qualification output is micro-only and the campaign loader rejects it.",
+        "A00 caps the process pool at four workers; do not alter the cap or any",
+        "fingerprinted campaign value.",
+        "Output -> `scour_MATLAB/Results/<stage>_L<len>_st<N>/`; move the complete",
+        "authenticated folder under `data/`.", "",
+        "A00 does not pause and parfor may finish states out of order. Wait for",
+        "the complete `0001.mat`, then run MATLAB",
+        "`smoke_raw_parity('Results/<case>')`, then",
+        "`python check_raw_parity.py \"scour_MATLAB/Results/<case>\"`.",
+        "The MATLAB smoke writes `matlab_ref_parity.mat`, which Python consumes,",
+        "so run the two checks sequentially while A00 continues. Stop A00",
+        "immediately if either fails; do not admit later output until both report",
+        "PARITY PASS.", "",
+        "## 3. Configure the physical execution block",
+        "Before an anchor starts, set all three path variables to durable ABSOLUTE",
+        "paths outside this disposable workspace:",
+        "  `TTBI_EXECUTION_RECEIPT_DIR` — block receipt/capacity directory;",
+        "  `TTBI_HYPERPARAMETER_MANIFEST` — block full-array HPO manifest;",
+        "  `CHAMPION_MANIFEST` — block reference architecture/pair manifest.",
+        "After the anchor finalizes the block reference, it prints the canonical",
+        "`TTBI_BLOCK_REFERENCE_SHA256=<64-lowercase-hex>` value. For every",
+        "follower, export `TTBI_BLOCK_REFERENCE_SHA256` with that exact value in",
+        "addition to the same three absolute paths. This fourth variable is",
+        "mandatory for followers; never infer, truncate, copy across blocks, or",
+        "manually recompute it.",
+        "L60 is anchored independently at `s0_scour`; L99 is anchored independently",
+        "at `s21_scour4`. Complete the block anchor before its followers. Never",
+        "copy the L60 champion, HPO manifest, or receipt into the L99 block.",
+        "Relative paths, symlinks, cross-block artifacts, and mismatched runtime or",
+        "protocol hashes fail closed.",
+        "Run all seven L60 Python ablations on one exact physical host/GPU/runtime",
+        "and all three L99 ablations on one exact host/GPU/runtime (which may differ",
+        "from L60). Do not distribute one Python block across machines.", "",
+        "Before any study, the GPU must pass the durable capacity preflight for",
+        "the largest registered point of all four architectures. Its threshold is",
+        "total VRAM minus this process's peak reserved memory, not system-wide free",
+        "VRAM, so use an otherwise idle/exclusive GPU. OOM and every Optuna FAIL",
+        "state are fatal; Optuna-trial retry and replacement are forbidden.", "",
+        "## 4. Run the Python ablation",
+        "`python comprehensive_ablation_multidamage.py`",
+        "(STAGE and SENSOR_NOISE are preset in this bundle).",
+        "At each block anchor, free HPO runs ONLY on the full eight-DOF input:",
+        "4 architectures x 3 seeds x 100 trials, with the registered pruner.",
+        "The anchor calibration itself is its non-selectable full-array control;",
+        "it is not duplicated as a singleton. Every response-channel candidate, non-anchor",
+        "full-array control, and follower runs one exact singleton Optuna trial",
+        "from the authenticated per-architecture/per-seed anchor parameters,",
+        "with no pruner.",
+        "Each anchor also runs 8 single channels x 4 architectures x 3 seeds as",
+        "a frozen diagnostic; it cannot select the block reference, which comes",
+        "from the complete 4-architecture x 28-two-channel matrix.",
+        "`s16_all` and `s23_all4` additionally reopen 4 architectures x 28 pairs",
+        "x 3 seeds as exploratory deployment selections. Those candidates remain",
+        "frozen singletons; their separate winner never overwrites a block reference.",
+        "The complete ten-rung design has 1,620–1,638 studies (designed/carried",
+        "pair deduplication at six frozen rungs determines the range) but only",
+        "3,996–4,014 actual trials. Selection uses inner validation; diagnostic",
+        "5-fold x 2-repeat finalist CV runs only at s0/s16/s21/s23 and uses",
+        "development states only; the immutable outer test is opened only after",
+        "winner/comparator freeze. Registered within-rung MSE intervals use 2,000",
+        "state-first draws (seed 42). Localisation is a passage-level point estimate",
+        "for max true scour >5 percentage points, with no registered state-level CI.",
+        f"Summary -> `results/{stage}_summary_ph-<hash>/`.", "",
+        "## 5. Observation-model and claim boundary",
+        f"`{mode}` adds pointwise zero-mean Gaussian multiplicative noise with",
+        "sigma = 5% of |signal| to every selected channel at load time, keyed by",
+        "global DOF. This is a symmetric relative-noise stress—not a datasheet",
+        "model or sensor-hardware comparison. Claims are limited to modeled",
+        "response-channel/DOF subsets under this registered policy. Physical sensor",
+        "count, packaging, mounting, and hardware placement are not identified.",
+        "Scour labels are support-stiffness loss, not physical scour depth. Crack",
+        "is a uniform damaged-element EI block, not Sinha. Hanging sleepers use",
+        "linear support removal without gap/void-depth nonlinearity. Each rung",
+        "re-trains its model, so cross-rung differences are achievable performance",
+        "under retraining, not zero-shot OOD robustness.", "",
+        "## 6. L60 cross-rung analysis",
+        "After all seven L60 summaries exist, run",
+        "`analyze_cross_rung_contrasts.py` with every exact summary plus explicit",
+        "canonical external L60 champion, HPO-manifest, and execution-receipt",
+        "paths. Its primary population is the paired outer-test joint StateUIDs.",
+        "It uses 100,000 state-first paired bootstrap draws and reports pointwise",
+        "95% plus Bonferroni familywise intervals over exactly seven edges.",
+        "Those bands are finite-design empirical-state uncertainty conditional on",
+        "the registered anchors/LHS, not field-population coverage.",
+        "L99.6 remains a separate blockwise scale/stress analysis.", "",
+        "See `README_CAMPAIGN.md` and `docs/paper1_methodology.md` for the complete",
+        "registered interpretation and publication limits.", ""])
 
 class TreeEntry(NamedTuple):
     mode: str
@@ -255,7 +367,10 @@ def _parse_source_manifest(data: bytes) -> tuple[str, ...]:
         *(f"LPT{i}" for i in range(1, 10)),
     }
     for line_number, line in enumerate(text.splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith("#"):
+        # Keep this grammar identical to core.source_provenance and MATLAB's
+        # generator_source_root: only empty lines and column-zero comments are
+        # ignorable; whitespace-only/indented comments are non-canonical.
+        if line == "" or line.startswith("#"):
             continue
         if line != line.strip():
             raise BundleBuildError(
@@ -346,13 +461,14 @@ def _parse_authorized_report(audit_report: str) -> str:
     lines = audit_report.splitlines()
     if (
         len(lines) < 5
-        or not lines[0].startswith("# Audit R5 results")
+        or lines[0] != EXPECTED_AUDIT_HEADING
         or lines[1] != ""
         or lines[2] != EXPECTED_AUDIT_STATUS
         or lines[3] != ""
     ):
         raise BundleBuildError(
-            "Refusing to build dispatch bundles: the R5 report must place "
+            "Refusing to build dispatch bundles: the legacy-named R11 report "
+            f"must begin with {EXPECTED_AUDIT_HEADING!r} and place "
             f"{EXPECTED_AUDIT_STATUS!r} exactly on line 3 of its document "
             "header (not in prose or a code fence)."
         )
@@ -372,9 +488,9 @@ def _parse_authorized_report(audit_report: str) -> str:
         or tested_lines != [lines[4]]
     ):
         raise BundleBuildError(
-            "Refusing to build dispatch bundles: the R5 header must contain "
-            "one unique status and one unique tested-source line with a "
-            "40-character lowercase Git SHA."
+            "Refusing to build dispatch bundles: the legacy-named R11 header "
+            "must contain one unique status and one unique tested-source line "
+            "with a 40-character lowercase Git SHA."
         )
     return tested_match.group(1)
 
@@ -517,15 +633,17 @@ def _write_stage_zip(
         archive.writestr(
             _zip_info("README_BUNDLE.md"),
             readme(
-                stage, mode, adds, plan.source_commit
+                stage,
+                mode,
+                adds,
+                plan.source_commit,
+                plan.tested_source_commit,
             ).encode("utf-8"),
         )
 
 
 def build_bundles(
     repo: str | os.PathLike[str] = REPO,
-    *,
-    stages: Mapping[str, tuple[str, str]] = STAGES,
 ) -> BundleBuildResult:
     """Build and atomically publish a commit-bound complete bundle set."""
     # Crucially, every authorization/source gate completes before even a
@@ -533,9 +651,15 @@ def build_bundles(
     # side effects.
     plan = prepare_bundle_plan(repo)
     repo = plan.repo
-    stage_items = tuple(stages.items())
-    if not stage_items:
-        raise BundleBuildError("At least one stage is required.")
+    stage_items = tuple(STAGES.items())
+    if (
+        len(stage_items) != len(EXPECTED_STAGE_ORDER)
+        or tuple(stage for stage, _ in stage_items) != EXPECTED_STAGE_ORDER
+    ):
+        raise BundleBuildError(
+            "Refusing partial bundle publication: the registered ten-stage "
+            "bundle set is incomplete or reordered."
+        )
 
     sha_manifest = repo / "bundle_sha256.txt"
     invalid_manifest = repo / (

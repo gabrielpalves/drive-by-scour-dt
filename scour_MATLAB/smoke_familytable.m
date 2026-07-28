@@ -1,93 +1,232 @@
 function smoke_familytable()
-% smoke_familytable — Feature A (2026-07-19) MATLAB<->Python contract smoke.
+%SMOKE_FAMILYTABLE Real MATLAB-to-Python smoke for the R11 state contract.
 %
-% Validates, with REAL MATLAB save/load (not scipy approximations), every type
-% assumption the new family machinery relies on:
-%   1. damage_states.mat family arrays (cellstr / double / logical) survive a
-%      save/load round trip with the exact types the A00 code writes;
-%   2. the resume-scan equality checks (isequal on scour_vector /
-%      bearing_fixity rows, strcmp on char(state_family)) hold after a real
-%      save/load of a data struct — i.e. a LEGITIMATE resume can never
-%      false-positive abort on type/orientation drift;
-%   3. jsonencode of an fp_cfg carrying cell-of-char + logical arrays is
-%      deterministic and well-formed (the fingerprint's stability).
-% It then leaves Results/_smoke_familytable/damage_states.mat on disk for the
-% PYTHON side of the contract: run
-%     python check_familytable_roundtrip.py
-% afterwards — it reads this file with core.dataset.read_state_table and
-% asserts the REAL MATLAB cell encoding parses (the Python check fixtures use
-% scipy-written cells, which encode differently).
-%
-% Prints PASS lines and hard-errors on any failure (same style as smoke_audit).
+% This deliberately keeps the small eight-row family inventory used by the
+% original smoke, but writes every field required by
+% core.dataset.read_state_table.  The Python half independently recomputes
+% every SHA-derived root/named stream seed, so agreement cannot come from row
+% order or from trusting values embedded in this fixture.
 
 out_dir = fullfile('Results', '_smoke_familytable');
-if ~exist(out_dir, 'dir'), mkdir(out_dir); end
+if ~exist(out_dir, 'dir')
+    mkdir(out_dir);
+end
 
-% ---- 1. Family table with EXACTLY A00's construction types ---------------
+% ---- Fixed eight-row semantic family fixture -----------------------------
 n_supp = 4;
-StateFamily  = [repmat({'target_healthy'}, 2, 1);
-                repmat({'scour_only'},     2, 1);
-                repmat({'bearing_only'},   1, 1);
-                repmat({'nuisance_only'},  1, 1);
-                repmat({'joint'},          2, 1)];
-AnchorTarget = [0; 0; 2; 3; 1; 0; 0; 0];
-AnchorLevel  = [0; 0; 1; 2; 1; 0; 0; 0];
-CrackOn      = logical([0; 0; 0; 0; 0; 1; 1; 0]);
-n_states     = numel(StateFamily);
-DamageStates  = zeros(n_states, n_supp);
-DamageStates(3, 2) = 0.15;  DamageStates(4, 3) = 0.30;   % scour_only rows
-DamageStates(7, 2:3) = [0.10 0.40];                      % a joint row
-BearingFixity = zeros(n_states, 2);
-BearingFixity(5, 1) = 0.2375;                            % bearing_only row
-BearingStates = BearingFixity * 1e9;                     % k_r stand-in
-k_ref_bear = 2.31e9; scour_supports = [2 3];             %#ok<NASGU>
-save(fullfile(out_dir, 'damage_states.mat'), 'DamageStates', 'BearingStates', ...
-    'BearingFixity', 'k_ref_bear', 'scour_supports', ...
-    'StateFamily', 'AnchorTarget', 'AnchorLevel', 'CrackOn');
+n_states = 8;
+Npass = 3;
+damage_seed = 1;
+L_bridge = 60;
+num_spans = 3;
+scour_supports = [2 3];
+random_stream_schedule_version = 'uid-named-substreams-v2';
+state_stream_names = ...
+    {'operations','crack','profile-state','track','profile-phase'};
+passage_stream_names = {'profile-passage','oor-passage'};
 
-% Round trip in MATLAB itself: the resume scan loads these same arrays.
+StateFamily = [repmat({'target_healthy'}, 2, 1); ...
+               repmat({'scour_only'},     2, 1); ...
+               repmat({'bearing_only'},   1, 1); ...
+               repmat({'nuisance_only'},  1, 1); ...
+               repmat({'joint'},          2, 1)];
+AnchorTarget = [0; 0; 2; 3; 1; 0; 0; 0];
+AnchorLevel = [0; 0; 1; 2; 1; 0; 0; 0];
+
+DamageStates = zeros(n_states, n_supp);
+DamageStates(3, 2) = 0.15;
+DamageStates(4, 3) = 0.30;
+DamageStates(7, 2:3) = [0.10 0.40];
+DamageStates(8, 2:3) = [0.05 0.10];
+
+LatentBearingFixity = zeros(n_states, 2);
+LatentBearingFixity(5, 1) = 0.2375;
+LatentBearingFixity(7, :) = [0.10 0.40];
+LatentBearingFixity(8, :) = [0.30 0.20];
+BearingFixity = LatentBearingFixity;  % active-bearing R11 rung
+
+LatentCrackOn = logical([0; 0; 0; 0; 0; 1; 1; 0]);
+CrackOn = LatentCrackOn;              % active-crack R11 rung
+
+StateUID = cell(n_states, 1);
+StateUID{1} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+    'target_healthy', 0, 0, 1);
+StateUID{2} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+    'target_healthy', 0, 0, 2);
+StateUID{3} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+    'scour_only', 2, 1, 1);
+StateUID{4} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+    'scour_only', 3, 2, 1);
+StateUID{5} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+    'bearing_only', 1, 1, 1);
+StateUID{6} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+    'nuisance_only', 0, 0, 1);
+% Joint UIDs carry their stable joint-design level, while the family table's
+% AnchorLevel remains zero because joint rows are not controlled anchors.
+StateUID{7} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+    'joint', 0, 1, 1);
+StateUID{8} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+    'joint', 0, 2, 1);
+
+StateSeedID = local_state_seed_ids(StateUID, damage_seed);
+[StateNamedStreamSeedID, PassageNamedStreamSeedID] = ...
+    local_named_stream_seed_ids(StateSeedID, StateUID, Npass, ...
+        random_stream_schedule_version, state_stream_names, ...
+        passage_stream_names);
+% MATLAB reshape is column-major.  Python authenticates this against
+% expected_passage_named.reshape(n_states, -1, order="F").
+PassageNamedStreamSeedIDFlat = reshape( ...
+    PassageNamedStreamSeedID, n_states, []);
+
+k_ref_bear = 2.31e9;
+BearingStates = BearingFixity * k_ref_bear;
+save(fullfile(out_dir, 'damage_states.mat'), ...
+    'DamageStates', 'BearingStates', 'BearingFixity', ...
+    'LatentBearingFixity', 'k_ref_bear', 'scour_supports', ...
+    'StateFamily', 'AnchorTarget', 'AnchorLevel', ...
+    'StateUID', 'StateSeedID', 'LatentCrackOn', 'CrackOn', ...
+    'StateNamedStreamSeedID', 'PassageNamedStreamSeedID', ...
+    'PassageNamedStreamSeedIDFlat', ...
+    'random_stream_schedule_version', 'state_stream_names', ...
+    'passage_stream_names');
+
+% read_state_table authenticates damage_seed from the canonical generator
+% JSON in case_info, never from a row/DC-derived fallback.
+generation_config_json = jsonencode(struct('damage_seed', damage_seed));
+case_info = struct( ...
+    'generation_config_json', generation_config_json, ...
+    'damage_seed', damage_seed);
+save(fullfile(out_dir, 'case_info.mat'), 'case_info');
+
+% ---- MATLAB's own save/load contract -------------------------------------
 S = load(fullfile(out_dir, 'damage_states.mat'));
 assert(iscellstr(S.StateFamily) && isequal(S.StateFamily, StateFamily), ...
-    'StateFamily did not survive save/load as an identical cellstr');   %#ok<ISCLSTR>
+    'StateFamily did not survive save/load as an identical cellstr'); %#ok<ISCLSTR>
+assert(iscellstr(S.StateUID) && isequal(S.StateUID, StateUID), ...
+    'StateUID did not survive save/load as an identical cellstr'); %#ok<ISCLSTR>
+assert(islogical(S.LatentCrackOn) && ...
+    isequal(S.LatentCrackOn, LatentCrackOn), ...
+    'LatentCrackOn did not survive save/load as logical');
 assert(islogical(S.CrackOn) && isequal(S.CrackOn, CrackOn), ...
-    'CrackOn did not survive save/load as an identical logical vector');
-assert(isequal(S.DamageStates, DamageStates) && isequal(S.BearingFixity, BearingFixity), ...
-    'damage matrices changed in the round trip');
-fprintf('[PASS] damage_states.mat family arrays round-trip exactly\n');
+    'CrackOn did not survive save/load as logical');
+assert(isa(S.StateSeedID, 'uint32') && ...
+    isequal(S.StateSeedID, StateSeedID), ...
+    'StateSeedID did not survive save/load as uint32');
+assert(isequal(S.DamageStates, DamageStates) && ...
+    isequal(S.LatentBearingFixity, LatentBearingFixity) && ...
+    isequal(S.BearingFixity, BearingFixity), ...
+    'physical/latent state matrices changed in the round trip');
+assert(isequal(S.PassageNamedStreamSeedIDFlat, ...
+    reshape(S.PassageNamedStreamSeedID, n_states, [])), ...
+    'passage named-stream flat layout is not MATLAB column-major');
+fprintf('[PASS] complete R11 damage_states.mat round-trips in MATLAB\n');
 
-% ---- 2. Resume-check equalities on a REAL saved data struct --------------
-% Mirrors save_progress: `data` struct + top-level provenance vars, then the
-% exact comparisons the A00 resume scan performs.
-dc_idx = 3;                                   % pretend this is state 0003.mat
+% ---- Resume-check equality on one real saved data struct -----------------
+dc_idx = 3;
 data = struct();
-data.scour_vector   = DamageStates(dc_idx, :);   % 1 x n_supp row, as in A00
-data.bearing_fixity = BearingFixity(dc_idx, :);  % 1 x 2 row
+data.scour_vector = DamageStates(dc_idx, :);
+data.bearing_fixity = BearingFixity(dc_idx, :);
 data.bearing_vector = BearingStates(dc_idx, :);
 data.scour_supports = scour_supports;
-data.state_family   = StateFamily{dc_idx};       % char row vector
+data.state_family = StateFamily{dc_idx};
+data.state_uid = StateUID{dc_idx};
+data.state_seed_id = StateSeedID(dc_idx);
 fstate = fullfile(out_dir, 'state_roundtrip.mat');
 save(fstate, 'data');
-D = load(fstate); d_ = D.data;
-assert(isequal(d_.scour_vector,   DamageStates(dc_idx, :)),  'scour row isequal failed');
-assert(isequal(d_.bearing_fixity, BearingFixity(dc_idx, :)), 'fixity row isequal failed');
-assert(isequal(d_.bearing_vector, BearingStates(dc_idx, :)), 'k_r row isequal failed');
-assert(isequal(d_.scour_supports, scour_supports),           'scour_supports isequal failed');
-assert(strcmp(char(d_.state_family), StateFamily{dc_idx}),   'state_family strcmp failed');
-fprintf('[PASS] resume-scan equality checks hold after a real save/load\n');
+D = load(fstate);
+d_ = D.data;
+assert(isequal(d_.scour_vector, DamageStates(dc_idx, :)), ...
+    'scour row isequal failed');
+assert(isequal(d_.bearing_fixity, BearingFixity(dc_idx, :)), ...
+    'fixity row isequal failed');
+assert(isequal(d_.bearing_vector, BearingStates(dc_idx, :)), ...
+    'bearing row isequal failed');
+assert(isequal(d_.scour_supports, scour_supports), ...
+    'scour_supports isequal failed');
+assert(strcmp(char(d_.state_family), StateFamily{dc_idx}), ...
+    'state_family strcmp failed');
+assert(strcmp(char(d_.state_uid), StateUID{dc_idx}), ...
+    'state_uid strcmp failed');
+assert(isequal(d_.state_seed_id, StateSeedID(dc_idx)), ...
+    'state_seed_id isequal failed');
+fprintf('[PASS] resume identity checks survive a real MATLAB save/load\n');
 
-% ---- 3. jsonencode determinism with cell + logical fingerprint fields ----
-fp_cfg = struct('schema', 'smoke', 'n_states', n_states);
-fp_cfg.StateFamily  = StateFamily;
-fp_cfg.AnchorTarget = AnchorTarget;
-fp_cfg.AnchorLevel  = AnchorLevel;
-fp_cfg.CrackOn      = CrackOn;
-j1 = jsonencode(fp_cfg); j2 = jsonencode(fp_cfg);
-assert(ischar(j1) || isstring(j1), 'jsonencode did not return text');
-assert(strcmp(j1, j2), 'jsonencode is not deterministic for the same struct');
-assert(contains(j1, '"target_healthy"') && contains(j1, 'true'), ...
-    'jsonencode dropped the cellstr or logical content');
-fprintf('[PASS] jsonencode(fp_cfg with cellstr+logical) deterministic + well-formed\n');
+% ---- JSON determinism for representative R11 fields ----------------------
+fp_cfg = struct( ...
+    'schema', 'smoke-r11', ...
+    'damage_seed', damage_seed, ...
+    'StateFamily', {StateFamily}, ...
+    'StateUID', {StateUID}, ...
+    'StateSeedID', StateSeedID, ...
+    'LatentBearingFixity', LatentBearingFixity, ...
+    'LatentCrackOn', LatentCrackOn, ...
+    'random_stream_schedule_version', random_stream_schedule_version, ...
+    'state_stream_names', {state_stream_names}, ...
+    'passage_stream_names', {passage_stream_names});
+j1 = jsonencode(fp_cfg);
+j2 = jsonencode(fp_cfg);
+assert((ischar(j1) || isstring(j1)) && strcmp(j1, j2), ...
+    'jsonencode is not deterministic for the same R11 struct');
+assert(contains(j1, '"uid-named-substreams-v2"') && ...
+    contains(j1, '"target_healthy"') && contains(j1, 'true'), ...
+    'jsonencode dropped an R11 identity/latent field');
+fprintf('[PASS] representative R11 generation JSON is deterministic\n');
 
 fprintf('\nsmoke_familytable: ALL PASS\n');
-fprintf('Now run:  python check_familytable_roundtrip.py  (Python side of the contract)\n');
+fprintf('Now run the pinned Python check_familytable_roundtrip.py.\n');
+end
+
+function uid = local_state_uid(L_bridge, num_spans, scour_supports, ...
+        family, target, level, replica)
+uid = sprintf(['ttbi-state-v1|Lmm=%06d|spans=%d|scour=%s|' ...
+    'family=%s|target=%02d|level=%04d|rep=%03d'], ...
+    round(1000 * L_bridge), num_spans, sprintf('%02d', scour_supports), ...
+    family, target, level, replica);
+end
+
+function ids = local_state_seed_ids(state_uids, damage_seed)
+ids = zeros(numel(state_uids), 1, 'uint32');
+for row = 1:numel(state_uids)
+    ids(row) = local_seed32(sprintf( ...
+        'ttbi-state-seed-v1|damage_seed=%.0f|%s', ...
+        damage_seed, state_uids{row}));
+end
+assert(~any(ids == 0) && numel(unique(ids)) == numel(ids), ...
+    'StateSeedID contains zero/collision');
+end
+
+function [state_seeds, passage_seeds] = local_named_stream_seed_ids( ...
+        roots, uids, Npass, schedule, state_names, passage_names)
+state_seeds = zeros(numel(uids), numel(state_names), 'uint32');
+passage_seeds = zeros( ...
+    numel(uids), Npass, numel(passage_names), 'uint32');
+for row = 1:numel(uids)
+    for stream = 1:numel(state_names)
+        state_seeds(row, stream) = local_seed32(sprintf( ...
+            '%s|root=%u|uid=%s|stream=%s', ...
+            schedule, roots(row), uids{row}, state_names{stream}));
+    end
+    for pass = 1:Npass
+        for stream = 1:numel(passage_names)
+            passage_seeds(row, pass, stream) = local_seed32(sprintf( ...
+                '%s|root=%u|uid=%s|stream=%s|pass=%05d', ...
+                schedule, roots(row), uids{row}, ...
+                passage_names{stream}, pass));
+        end
+    end
+end
+all_ids = [roots(:); state_seeds(:); passage_seeds(:)];
+assert(~any(all_ids == 0) && numel(unique(all_ids)) == numel(all_ids), ...
+    'named stream table contains zero/collision');
+end
+
+function seed = local_seed32(key)
+h = local_sha256(key);
+seed = uint32(hex2dec(h(1:8)));
+end
+
+function h = local_sha256(text)
+md = java.security.MessageDigest.getInstance('SHA-256');
+raw = md.digest(reshape(uint8(text), [], 1));
+h = lower(sprintf('%02x', typecast(int8(raw), 'uint8')));
 end

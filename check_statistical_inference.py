@@ -125,27 +125,28 @@ check("round-robin assignment balances every stratum within one state",
       ))
 
 # Exact failure mode from the R8 multi-head design: equal-width MAX-severity
-# bins can contain only 1-4 joint states. CV coarsens severity but retains crack
-# activation, producing viable, pre-registered strata without consulting outer
-# outcomes.
+# bins can contain only 1-4 joint states. CV coarsens scour severity but retains
+# the latent (cross-rung invariant) crack draw, producing viable registered
+# strata without consulting outer outcomes or active mechanism toggles.
 sparse_joint = (
-    ["target_healthy"] * 12
-    + ["nuisance_only"] * 6
-    + ["joint|crack0|sev0"] * 4
-    + ["joint|crack0|sev1"] * 35
-    + ["joint|crack0|sev2"] * 161
-    + ["joint|crack1|sev1"] * 12
-    + ["joint|crack1|sev2"] * 38
+    ["target_healthy"] * 50
+    + ["nuisance_only"] * 50
+    + ["joint|latentcrack0|scoursev0"] * 4
+    + ["joint|latentcrack0|scoursev1"] * 35
+    + ["joint|latentcrack0|scoursev2"] * 161
+    + ["joint|latentcrack1|scoursev1"] * 12
+    + ["joint|latentcrack1|scoursev2"] * 38
 )
 coarse_joint = finalist_cv_strata(sparse_joint)
-check("CV coarsens sparse joint severity but preserves crack status",
+check("CV coarsens sparse joint severity but preserves latent crack status",
       set(coarse_joint) == {
-          "target_healthy", "nuisance_only", "joint|crack0", "joint|crack1"
+          "target_healthy", "nuisance_only",
+          "joint|latentcrack0", "joint|latentcrack1"
       }
-      and coarse_joint.count("joint|crack0") == 200
-      and coarse_joint.count("joint|crack1") == 50)
+      and coarse_joint.count("joint|latentcrack0") == 200
+      and coarse_joint.count("joint|latentcrack1") == 50)
 raises("malformed joint CV stratum rejected",
-       lambda: finalist_cv_strata(["joint|sev0"]), ValueError)
+       lambda: finalist_cv_strata(["joint|scoursev0"]), ValueError)
 
 
 print("\n--- driver firewall and fixed-fold integration ---")
@@ -482,6 +483,7 @@ def _alignment_fixture_rows():
                     "architecture": architecture,
                     "dofs": dofs,
                     "state": state,
+                    "state_uid": f"fixture-uid-{state}",
                     "family": "fixture",
                     "repeat": 0,
                     "seed": seed,

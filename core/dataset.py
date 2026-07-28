@@ -16,8 +16,10 @@ directly via digital_twin/physics.py rather than reading pre-recorded .mat files
 import hashlib
 import hmac
 import json
+import math
 import os
 import pickle
+from pathlib import Path
 import re
 import threading
 import time
@@ -27,6 +29,21 @@ import numpy as np
 import scipy.io as sio
 import torch
 from sklearn.model_selection import train_test_split
+
+from core.campaign_contract import (
+    EXPECTED_GENERATION_BEHAVIOR_VERSION,
+    EXPECTED_GEN_SCHEMA,
+    campaign_stage_contract,
+    generation_config_expectations,
+)
+from core.environment import (
+    load_environment_lock,
+    matlab_environment_descriptor,
+)
+from core.source_provenance import (
+    generator_source_root,
+    python_runtime_source_root,
+)
 
 
 def _sha256_file(path: str, chunk: int = 1 << 20) -> str:
@@ -45,6 +62,7 @@ def _sha256_file(path: str, chunk: int = 1 << 20) -> str:
 # launched by one process from hashing the same dataset concurrently.
 _SOURCE_VERIFY_LOCK = threading.Lock()
 _SOURCE_VERIFY_CACHE: dict[str, tuple[str, tuple]] = {}
+_UNSET = object()
 
 
 def _unique_tmp(path: str) -> str:
@@ -177,7 +195,28 @@ _CROP_RAGGED_TOL = 4        # max samples the per-passage crop may differ by
 # by A00) AND a gen_fingerprint matching its manifest. Loading a file without
 # them, or with a different value, aborts — so pre-audit or R2/R3 data can never
 # silently enter the pipeline. Must equal A00_Run.m's gen_schema exactly.
-_EXPECTED_GEN_SCHEMA = 'audit-2026-07-25-r9'
+_EXPECTED_GEN_SCHEMA = EXPECTED_GEN_SCHEMA
+_EXPECTED_GENERATION_BEHAVIOR_VERSION = (
+    EXPECTED_GENERATION_BEHAVIOR_VERSION
+)
+_ENVIRONMENT_LOCK_PATH = (
+    Path(__file__).resolve().parents[1]
+    / 'environment'
+    / 'campaign-py313-cu128.json'
+)
+_CAMPAIGN_ENVIRONMENT_LOCK = load_environment_lock(_ENVIRONMENT_LOCK_PATH)
+_EXPECTED_MATLAB_ENVIRONMENT = (
+    _CAMPAIGN_ENVIRONMENT_LOCK['spec']['matlab_environment']
+)
+_EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR = matlab_environment_descriptor(
+    _EXPECTED_MATLAB_ENVIRONMENT
+)
+_EXPECTED_MATLAB_ENVIRONMENT_SHA256 = (
+    _CAMPAIGN_ENVIRONMENT_LOCK['spec']['matlab_environment_sha256']
+)
+# Kept as a reviewer-readable compatibility symbol, but deliberately derived
+# from the authenticated full environment descriptor rather than duplicated.
+_EXPECTED_MATLAB_RELEASE = _EXPECTED_MATLAB_ENVIRONMENT['release']
 
 # ── PROTOCOL CONSTANTS (unified protocol_hash, 2026-07-19) ────────────────────
 # Single source of truth: the split/preprocessing code BELOW reads these same
@@ -191,9 +230,10 @@ N_SEGMENTS      = 512    # PAA segment count (TTBIPreprocessor)
 NOISE_RNG_SEED  = 42     # load-time sensor-noise RNG (deterministic rebuilds)
 LOAD_N_PASSAGES = 200    # passage cap requested from the loader (manifest npass
                          # is authoritative; the loader enforces exact ==)
-CACHE_SCHEMA_TAG = "_gs6"  # cache-contract tag appended to every cache stem
-                           # (unchanged at R9: feature transform is unchanged;
-                           # source-schema/fingerprint sidecars orphan R8 data)
+CACHE_SCHEMA_TAG = "_gs7"  # R11: semantic StateUID/StateSeedID identity,
+                           # UID-stable cross-rung split, and UID-bound cache
+                           # provenance.  Pre-gs7 scalers used row-sensitive
+                           # assignments and must never be reused.
 
 
 # ── Feature A (2026-07-19): state families + stratified grouped split ────────
@@ -205,10 +245,10 @@ CACHE_SCHEMA_TAG = "_gs6"  # cache-contract tag appended to every cache stem
 # for the empty-probe case; now it is a structural guarantee).
 STATE_FAMILIES = ('target_healthy', 'scour_only', 'bearing_only',
                   'nuisance_only', 'joint')
-# Deterministic per-stratum assignment pattern = EXACTLY 60/20/20. Order is
-# deliberate: a 1-state stratum goes to TRAIN (a family the model never trained
-# on must not appear only at test), a 2-state stratum spans train+test, 3+
-# spans all three partitions.
+# Deterministic per-stratum assignment pattern = EXACTLY 60/20/20.  R11 applies
+# it to a seeded permutation of lexicographically sorted *semantic UIDs*, never
+# row/DC indices.  Therefore corresponding L60 states retain their partition
+# after a rung inserts bearing-only or nuisance-only rows.
 STRATIFY_PATTERN = ('train', 'test', 'val', 'train', 'train')
 N_JOINT_SEV_BINS = 3     # joint-block severity bins (max normalized head)
 
@@ -219,15 +259,18 @@ def split_protocol() -> dict:
     Every entry is a constant `canonical_grouped_splits` itself uses — this
     function must never describe anything the code does not read."""
     return {
-        "splitter":   "family-STRATIFIED deterministic split, grouped by damage "
-                      "STATE (Feature A 2026-07-19; replaces GroupShuffleSplit)",
+        "splitter":   "semantic-UID-stable family-STRATIFIED deterministic "
+                      "split, grouped by generated damage STATE",
         "layout":     "3-way train/inner-val/outer-test; inner-val = HPO+selection, "
                       "outer-test = reported metrics only",
         "seed":       SPLIT_SEED,
         "test_frac":  SPLIT_TEST_FRAC,
         "val_frac":   SPLIT_VAL_FRAC,
         "pattern":    list(STRATIFY_PATTERN),
-        "strata":     "family | family+anchor_target | joint+crack_on+sev_bin",
+        "identity":   "StateUID (row/DC-independent); sorted inside each stratum "
+                      "before the seeded permutation",
+        "strata":     "family | anchor family+target+level | "
+                      "joint+latent_crack_on+scour_severity_bin",
         "n_joint_sev_bins": N_JOINT_SEV_BINS,
         "families":   list(STATE_FAMILIES),
     }
@@ -255,7 +298,7 @@ PREPROC_PROTOCOL = {
         "SHA-256 every file_digests entry before protocol/cache reuse; "
         "memoized only while size+mtime+ctime are unchanged; always hash "
         "case_info.mat and damage_states.mat into the protocol identity "
-        "(including legacy state-only digest tables); re-read current identity "
+        "under the exact R11 source-digests-v2 scope; re-read current identity "
         "at every cache entry and require equality with the study descriptor",
 }
 
@@ -453,22 +496,21 @@ def _load_multi_output(
         raise RuntimeError(
             f"{dataset_path}: manifest gen_schema={exp_schema!r} != expected "
             f"{_EXPECTED_GEN_SCHEMA!r} — regenerate with the current A00.")
+    manifest_generation = _validate_campaign_generation_metadata(dataset_path)
+    manifest_release = manifest_generation["matlab_release"]
+    manifest_qualification = manifest_generation[
+        "release_qualification_run"
+    ]
     # Completion marker must EXIST and its CONTENT must match the manifest (audit
     # R7 P3): A00 writes the schema + fingerprint into it, so a stale marker from a
     # different run (or a hand-written empty file) is rejected, not trusted.
-    marker = os.path.join(dataset_path, '_GENERATION_COMPLETE')
-    if not os.path.exists(marker):
-        raise RuntimeError(
-            f"{dataset_path}: no _GENERATION_COMPLETE marker — generation did "
-            f"not finish (or was interrupted). Do not train on a partial run.")
-    with open(marker) as _mfh:
-        mk = [ln.strip() for ln in _mfh.read().splitlines() if ln.strip()]
+    mk = list(_read_completion_marker(dataset_path))
     # marker = schema, fingerprint, ROOT source-digest (audit R7.1 P4).
-    if mk[:2] != [exp_schema, exp_fp] or len(mk) < 3:
+    if mk[:2] != [exp_schema, exp_fp]:
         raise RuntimeError(
             f"{dataset_path}: _GENERATION_COMPLETE content {mk[:3]} != manifest "
             f"[{exp_schema!r}, {exp_fp!r}, <root-digest>] — stale/foreign/old "
-            f"marker (R7 needs the source root digest as line 3). Regenerate.")
+            f"marker (exactly three nonempty lines are required). Regenerate.")
     marker_root = mk[2]
     # Source content integrity (audit R7.1 P4): file_digests.mat is MANDATORY; its
     # root must equal the marker's, and each state file's bytes must hash to its
@@ -546,7 +588,10 @@ def _load_multi_output(
                 f"{src_digests[fname][:12]}… — corrupt or overwritten state file.")
         # No blanket exception swallow (audit R4): any failure on a state file is
         # fatal — a corrupt/foreign file must stop the run, not be skipped.
-        data_struct = sio.loadmat(fp)['data'][0, 0]
+        loaded_state = sio.loadmat(fp)
+        if 'data' not in loaded_state:
+            raise KeyError(f"{fname}: no data payload.")
+        data_struct = loaded_state['data'][0, 0]
         names = data_struct.dtype.names or ()
         if 'scour_vector' not in names:
             raise KeyError(
@@ -573,6 +618,42 @@ def _load_multi_output(
                 f"{fname}: gen_fingerprint differs from the manifest — this file "
                 f"was generated with a DIFFERENT configuration (mixed dataset). "
                 f"Do not train on it.")
+        _validate_state_generation_metadata(
+            loaded_state,
+            data_struct,
+            names,
+            manifest_generation,
+            expected_schema=exp_schema,
+            expected_fingerprint=exp_fp,
+            expected_state_uid=state_table["state_uid"][idx],
+            expected_state_seed_id=int(state_table["state_seed_id"][idx]),
+            expected_random_stream_schedule_version=
+                state_table["random_stream_schedule_version"],
+            owner=fname,
+        )
+        frelease = (str(np.ravel(data_struct['matlab_release'])[0])
+                    if 'matlab_release' in names else None)
+        fcampaign_release = (
+            str(np.ravel(data_struct['campaign_matlab_release'])[0])
+            if 'campaign_matlab_release' in names else None
+        )
+        fqualification = (
+            _coerce_matlab_logical(
+                data_struct['release_qualification_run'],
+                f"{fname}: data.release_qualification_run",
+            )
+            if 'release_qualification_run' in names else None
+        )
+        if (frelease != manifest_release
+                or fcampaign_release != _EXPECTED_MATLAB_RELEASE
+                or fqualification is not manifest_qualification):
+            raise RuntimeError(
+                f"{fname}: per-state MATLAB release/qualification provenance "
+                f"({frelease!r}, {fcampaign_release!r}, {fqualification!r}) "
+                f"does not match the campaign manifest/policy "
+                f"({manifest_release!r}, {_EXPECTED_MATLAB_RELEASE!r}, "
+                f"{manifest_qualification!r}). Regenerate; never mix or "
+                f"restamp state files.")
         # Family identity (Feature A): the file must declare its state_family
         # AND it must equal the table row for this index.
         if 'state_family' not in names:
@@ -585,6 +666,148 @@ def _load_multi_output(
                 f"{fname}: state_family {ffam!r} != table row "
                 f"{state_table['family'][idx]!r} — renamed/mislabelled state "
                 f"file (payload does not belong at index {idx + 1}).")
+        # R11 semantic identity / CRN alignment.  Numbered filenames are merely
+        # storage rows; scientific pairing is keyed by the generator-issued UID
+        # and stream.  Require every per-file value and compare it with the exact
+        # row of damage_states.mat before reading a single signal.
+        identity_fields = (
+            'state_uid', 'state_seed_id', 'latent_bearing_fixity',
+            'random_stream_schedule_version', 'state_named_stream_seed_id',
+            'passage_named_stream_seed_id', 'latent_crack_on', 'crack_on',
+            'bearing_fixity',
+            'scour_supports',
+        )
+        missing_identity = [
+            field for field in identity_fields if field not in names
+        ]
+        if missing_identity:
+            raise RuntimeError(
+                f"{fname}: missing semantic-state field(s) {missing_identity} — "
+                "pre-R11/partial payload; regenerate."
+            )
+        uid_values = np.ravel(np.asarray(data_struct['state_uid']))
+        if (
+            uid_values.size != 1
+            or not isinstance(uid_values[0], (str, np.str_))
+        ):
+            raise RuntimeError(f"{fname}: state_uid must be exactly one text scalar.")
+        file_uid = str(uid_values[0])
+        if file_uid != state_table['state_uid'][idx]:
+            raise RuntimeError(
+                f"{fname}: state_uid {file_uid!r} != table row UID "
+                f"{state_table['state_uid'][idx]!r} — renamed/swapped state file."
+            )
+        seed_values = np.ravel(
+            np.asarray(data_struct['state_seed_id'], dtype=np.float64)
+        )
+        if (
+            seed_values.size != 1
+            or not np.isfinite(seed_values[0])
+            or seed_values[0] != np.floor(seed_values[0])
+            or not (1 <= seed_values[0] <= np.iinfo(np.uint32).max)
+        ):
+            raise RuntimeError(
+                f"{fname}: state_seed_id must be one positive uint32-compatible "
+                "integer."
+            )
+        file_seed_id = int(seed_values[0])
+        if file_seed_id != int(state_table['state_seed_id'][idx]):
+            raise RuntimeError(
+                f"{fname}: state_seed_id {file_seed_id} != table row stream "
+                f"{int(state_table['state_seed_id'][idx])} — misaligned state."
+            )
+        file_schedule = _matlab_text_scalar(
+            data_struct["random_stream_schedule_version"],
+            f"{fname}: data.random_stream_schedule_version",
+        )
+        file_state_named = np.asarray(
+            data_struct["state_named_stream_seed_id"], dtype=np.float64
+        )
+        file_passage_named = np.asarray(
+            data_struct["passage_named_stream_seed_id"], dtype=np.float64
+        )
+        if (
+            file_schedule
+            != state_table["random_stream_schedule_version"]
+            or file_state_named.shape
+            != (1, len(state_table["state_stream_names"]))
+            or file_passage_named.shape
+            != (
+                exp_npass,
+                len(state_table["passage_stream_names"]),
+            )
+            or not np.all(np.isfinite(file_state_named))
+            or not np.all(np.isfinite(file_passage_named))
+            or np.any(file_state_named < 1)
+            or np.any(file_passage_named < 1)
+            or np.any(file_state_named > np.iinfo(np.uint32).max)
+            or np.any(file_passage_named > np.iinfo(np.uint32).max)
+            or not np.all(file_state_named == np.floor(file_state_named))
+            or not np.all(file_passage_named == np.floor(file_passage_named))
+            or not np.array_equal(
+                file_state_named.astype(np.uint32).ravel(),
+                state_table["state_named_stream_seed_id"][idx],
+            )
+            or not np.array_equal(
+                file_passage_named.astype(np.uint32),
+                state_table["passage_named_stream_seed_id"][idx],
+            )
+        ):
+            raise RuntimeError(
+                f"{fname}: named RNG schedule/stream IDs are malformed or "
+                "differ from damage_states.mat."
+            )
+        file_latent_bearing = np.ravel(
+            np.asarray(data_struct['latent_bearing_fixity'], dtype=float)
+        )
+        if (
+            file_latent_bearing.shape != (2,)
+            or not np.all(np.isfinite(file_latent_bearing))
+            or np.any(file_latent_bearing < 0.0)
+            or np.any(file_latent_bearing > 1.0)
+            or not np.array_equal(
+                file_latent_bearing,
+                state_table['latent_bearing_fixity'][idx],
+            )
+        ):
+            raise RuntimeError(
+                f"{fname}: latent_bearing_fixity is malformed or differs from "
+                "the damage_states.mat row."
+            )
+        file_latent_crack = _strict_binary_vector(
+            data_struct['latent_crack_on'],
+            f"{fname}: data.latent_crack_on",
+        )
+        file_active_crack = _strict_binary_vector(
+            data_struct['crack_on'], f"{fname}: data.crack_on"
+        )
+        if file_latent_crack.size != 1 or file_active_crack.size != 1:
+            raise RuntimeError(
+                f"{fname}: latent_crack_on/crack_on must be scalar logicals."
+            )
+        if (
+            bool(file_latent_crack[0])
+            != bool(state_table['latent_crack_on'][idx])
+            or bool(file_active_crack[0])
+            != bool(state_table['crack_on'][idx])
+        ):
+            raise RuntimeError(
+                f"{fname}: latent/active crack flags differ from the "
+                "damage_states.mat row."
+            )
+        file_supports = np.ravel(
+            np.asarray(data_struct['scour_supports'], dtype=float)
+        )
+        if (
+            not np.all(np.isfinite(file_supports))
+            or not np.all(file_supports == np.floor(file_supports))
+            or file_supports.astype(int).tolist()
+            != [int(value) for value in target_supports]
+        ):
+            raise RuntimeError(
+                f"{fname}: scour_supports {file_supports.tolist()} != registered "
+                f"targets {[int(value) for value in target_supports]}."
+            )
         # Scour label sanity (audit R6 C4 + R7 P4). Validate the FULL vector's
         # finiteness (a NaN in ANY support — even one we don't select — signals a
         # corrupt solve), then bound the SELECTED labels to the physical scour
@@ -594,6 +817,16 @@ def _load_multi_output(
         # signals a corrupt solve. Finiteness + [0, dano_max%] on the whole vector.
         full_scour = np.ravel(data_struct['scour_vector']).astype(float)
         full_scour_pct = full_scour * 100.0
+        if (
+            full_scour.shape != state_table['damage_states'][idx].shape
+            or not np.array_equal(
+                full_scour, state_table['damage_states'][idx]
+            )
+        ):
+            raise RuntimeError(
+                f"{fname}: scour_vector does not exactly match row {idx + 1} "
+                "of DamageStates — renamed/misaligned state payload."
+            )
         if (not np.all(np.isfinite(full_scour))
                 or np.any(full_scour_pct < 0.0)
                 or np.any(full_scour_pct > scour_max_pct + _SCOUR_EPS)):
@@ -602,6 +835,18 @@ def _load_multi_output(
                 f"[0, {scour_max_pct:.3g}] % (dano_max) in some support — corrupt "
                 f"or foreign state. Regenerate this state.")
         slabel = full_scour[tgt0] * 100.0
+        full_fix = np.ravel(data_struct['bearing_fixity']).astype(float)
+        if (
+            full_fix.shape != (2,)
+            or not np.all(np.isfinite(full_fix))
+            or np.any(full_fix < 0.0)
+            or np.any(full_fix > 1.0)
+            or not np.array_equal(full_fix, state_table['bearing_fixity'][idx])
+        ):
+            raise RuntimeError(
+                f"{fname}: bearing_fixity is malformed or does not exactly "
+                f"match row {idx + 1} of BearingFixity."
+            )
         if bidx is not None:
             # R7 requires the fixity label (audit R7 P4): the legacy raw-k_r
             # `bearing_vector` fallback is dropped — no r6/r7 data lacks fixity, so
@@ -611,12 +856,6 @@ def _load_multi_output(
                     f"{fname}: bearing heads requested but no data.bearing_fixity "
                     f"— the R7 schema requires the fixity label. Regenerate with "
                     f"the current A00 (bearing_mode='target').")
-            full_fix = np.ravel(data_struct['bearing_fixity']).astype(float)
-            # Range-check the WHOLE fixity vector (audit R7.1 P5), not just bidx.
-            if not np.all(np.isfinite(full_fix)) or np.any(full_fix < 0.0) or np.any(full_fix > 1.0):
-                raise RuntimeError(
-                    f"{fname}: bearing_fixity {full_fix.tolist()} non-finite or "
-                    f"outside [0, 1] in some support — corrupt state. Regenerate.")
             bvec = full_fix[bidx]
             bearing_is_fixity = True
 
@@ -836,59 +1075,1040 @@ def _load_multi_output(
     return X, y, groups
 
 
+def _load_scalar_mat_struct(
+    path: str,
+    variable: str,
+    owner: str,
+    *,
+    missing_ok: bool = False,
+):
+    """Load exactly one scalar MATLAB struct from one regular local MAT file."""
+    if not os.path.lexists(path):
+        if missing_ok:
+            return None
+        raise RuntimeError(f"{owner}: {os.path.basename(path)} is missing.")
+    if os.path.islink(path) or not os.path.isfile(path):
+        raise RuntimeError(
+            f"{owner}: {os.path.basename(path)} must be a regular local file."
+        )
+    try:
+        loaded = sio.loadmat(path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"{owner}: {os.path.basename(path)} cannot be parsed."
+        ) from exc
+    if variable not in loaded:
+        raise RuntimeError(
+            f"{owner}: {os.path.basename(path)} lacks {variable} struct."
+        )
+    raw = np.asarray(loaded[variable])
+    if raw.size != 1 or raw.dtype.names is None:
+        raise RuntimeError(
+            f"{owner}: {variable} must be exactly one scalar MATLAB struct "
+            f"(got shape {raw.shape})."
+        )
+    return np.ravel(raw)[0]
+
+
 def _read_manifest(dataset_path: str):
     """(n_states, Npass, gen_schema, gen_fingerprint) from case_info.mat, or
     (None, None, None, None) if there is no manifest (audit R4 2026-07-17).
     These drive the loader's strict completeness/provenance checks."""
     ci = os.path.join(dataset_path, 'case_info.mat')
-    if not os.path.exists(ci):
+    owner = f"{dataset_path}: case_info"
+    info = _load_scalar_mat_struct(
+        ci, "case_info", owner, missing_ok=True
+    )
+    if info is None:
         return None, None, None, None
-    info = sio.loadmat(ci)['case_info'][0, 0]
     names = info.dtype.names or ()
-    def _int(f):
-        return int(np.ravel(info[f])[0]) if f in names else None
-    def _str(f):
-        return str(np.ravel(info[f])[0]) if f in names else None
-    return (_int('n_states'), _int('passages_per_state'),
-            _str('gen_schema'), _str('gen_fingerprint'))
+    n_states = _required_mat_int(info, names, "n_states", owner)
+    n_passages = _required_mat_int(
+        info, names, "passages_per_state", owner
+    )
+    if n_states <= 0 or n_passages <= 0:
+        raise RuntimeError(
+            f"{owner}: n_states and passages_per_state must be positive "
+            "integer scalars."
+        )
+    schema = _required_mat_text(info, names, "gen_schema", owner)
+    fingerprint = _required_mat_text(
+        info, names, "gen_fingerprint", owner
+    )
+    if schema != _EXPECTED_GEN_SCHEMA:
+        raise RuntimeError(
+            f"{owner}: gen_schema={schema!r} is not the canonical current "
+            f"schema {_EXPECTED_GEN_SCHEMA!r}."
+        )
+    if re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+        raise RuntimeError(
+            f"{owner}: gen_fingerprint must be one lowercase SHA-256."
+        )
+    return n_states, n_passages, schema, fingerprint
 
 
-def _read_manifest_optional_string(dataset_path: str, field: str) -> str | None:
-    """Read an optional scalar string from case_info.mat without weakening R8."""
+def _coerce_matlab_logical(value, label: str) -> bool:
+    """Parse one MATLAB logical/numeric scalar without truthy-string coercion."""
+    arr = np.asarray(value)
+    if arr.size != 1:
+        raise RuntimeError(f"{label} must be one scalar logical (got shape {arr.shape}).")
+    item = np.ravel(arr)[0]
+    if isinstance(item, (np.bool_, bool)):
+        return bool(item)
+    if isinstance(item, (np.integer, int, np.floating, float)):
+        number = float(item)
+        if np.isfinite(number) and number in (0.0, 1.0):
+            return bool(int(number))
+    raise RuntimeError(
+        f"{label} must be MATLAB logical false/true (or numeric 0/1), "
+        f"got {item!r}.")
+
+
+def _required_mat_text(struct, names: tuple, field: str, owner: str) -> str:
+    """Read one required scalar MATLAB text field without truthy coercion."""
+    if field not in names:
+        raise RuntimeError(f"{owner}.{field} is missing.")
+    arr = np.asarray(struct[field])
+    if arr.size != 1:
+        raise RuntimeError(
+            f"{owner}.{field} must be one text scalar (got shape {arr.shape})."
+        )
+    value = str(np.ravel(arr)[0])
+    if not value or "\x00" in value or "\r" in value:
+        raise RuntimeError(
+            f"{owner}.{field} must be nonempty canonical text."
+        )
+    return value
+
+
+def _required_mat_int(struct, names: tuple, field: str, owner: str) -> int:
+    """Read one finite integer-valued MATLAB scalar."""
+    if field not in names:
+        raise RuntimeError(f"{owner}.{field} is missing.")
+    arr = np.asarray(struct[field])
+    if arr.size != 1:
+        raise RuntimeError(
+            f"{owner}.{field} must be one scalar (got shape {arr.shape})."
+        )
+    item = np.ravel(arr)[0]
+    if isinstance(item, (np.bool_, bool)) or not isinstance(
+        item, (np.integer, int, np.floating, float)
+    ):
+        raise RuntimeError(f"{owner}.{field} must be a numeric integer scalar.")
+    value = float(item)
+    if not np.isfinite(value) or not value.is_integer():
+        raise RuntimeError(f"{owner}.{field} must be a finite integer.")
+    return int(value)
+
+
+def _required_mat_number(
+    struct,
+    names: tuple,
+    field: str,
+    owner: str,
+) -> float:
+    """Read one finite MATLAB numeric scalar without accepting logicals."""
+
+    if field not in names:
+        raise RuntimeError(f"{owner}.{field} is missing.")
+    arr = np.asarray(struct[field])
+    if arr.size != 1:
+        raise RuntimeError(
+            f"{owner}.{field} must be one scalar (got shape {arr.shape})."
+        )
+    item = np.ravel(arr)[0]
+    if isinstance(item, (np.bool_, bool)) or not isinstance(
+        item, (np.integer, int, np.floating, float)
+    ):
+        raise RuntimeError(f"{owner}.{field} must be one numeric scalar.")
+    value = float(item)
+    if not np.isfinite(value):
+        raise RuntimeError(f"{owner}.{field} must be finite.")
+    return value
+
+
+def _required_mat_logical(
+    struct,
+    names: tuple,
+    field: str,
+    owner: str,
+) -> bool:
+    if field not in names:
+        raise RuntimeError(f"{owner}.{field} is missing.")
+    return _coerce_matlab_logical(struct[field], f"{owner}.{field}")
+
+
+def _strict_json_object(text: str, owner: str) -> dict:
+    """Parse one finite duplicate-free JSON object."""
+
+    def _pairs(pairs):
+        out = {}
+        for key, value in pairs:
+            if key in out:
+                raise ValueError(f"duplicate key {key!r}")
+            out[key] = value
+        return out
+
+    def _constant(value):
+        raise ValueError(f"non-finite JSON constant {value!r}")
+
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=_pairs,
+            parse_constant=_constant,
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{owner} is not strict JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{owner} must contain one JSON object.")
+    return value
+
+
+def _json_values_equal(actual, expected) -> bool:
+    """JSON equality that never treats true/false as the numbers 1/0."""
+
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is type(expected) and actual == expected
+    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+        return (
+            np.isfinite(float(actual))
+            and np.isfinite(float(expected))
+            and float(actual) == float(expected)
+        )
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _json_values_equal(a, e) for a, e in zip(actual, expected)
+        )
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            _json_values_equal(actual[key], expected[key])
+            for key in expected
+        )
+    return type(actual) is type(expected) and actual == expected
+
+
+def _parse_support_text(value: str, owner: str) -> list[int]:
+    match = re.fullmatch(r"\[(\d+(?: \d+)*)?\]", value)
+    if match is None:
+        raise RuntimeError(
+            f"{owner} must use canonical MATLAB support text such as '[2 3]'."
+        )
+    return [int(token) for token in match.group(1).split()] if match.group(1) else []
+
+
+def _read_manifest_generation_metadata(dataset_path: str) -> dict | None:
+    """Read the complete R11 generator/environment/source attestation."""
     ci = os.path.join(dataset_path, "case_info.mat")
-    if not os.path.exists(ci):
+    owner = f"{dataset_path}: case_info"
+    info = _load_scalar_mat_struct(
+        ci, "case_info", owner, missing_ok=True
+    )
+    if info is None:
         return None
-    info = sio.loadmat(ci)["case_info"][0, 0]
     names = info.dtype.names or ()
-    return str(np.ravel(info[field])[0]) if field in names else None
+    return {
+        "gen_fingerprint": _required_mat_text(
+            info, names, "gen_fingerprint", owner
+        ),
+        "generation_config_json": _required_mat_text(
+            info, names, "generation_config_json", owner
+        ),
+        "case_name": _required_mat_text(
+            info, names, "case_name", owner
+        ),
+        "stage": _required_mat_text(
+            info, names, "stage", owner
+        ),
+        "damage_mode": _required_mat_text(
+            info, names, "damage_mode", owner
+        ),
+        "L_bridge_m": _required_mat_number(
+            info, names, "L_bridge_m", owner
+        ),
+        "num_spans": _required_mat_int(
+            info, names, "num_spans", owner
+        ),
+        "num_supports": _required_mat_int(
+            info, names, "num_supports", owner
+        ),
+        "scour_supports": _parse_support_text(
+            _required_mat_text(info, names, "scour_supports", owner),
+            f"{owner}.scour_supports",
+        ),
+        "n_states": _required_mat_int(
+            info, names, "n_states", owner
+        ),
+        "passages_per_state": _required_mat_int(
+            info, names, "passages_per_state", owner
+        ),
+        "scour_dano_max_frac": _required_mat_number(
+            info, names, "scour_dano_max_frac", owner
+        ),
+        "family_counts": {
+            "target_healthy": _required_mat_int(
+                info, names, "n_target_healthy", owner
+            ),
+            "scour_only": _required_mat_int(
+                info, names, "n_scour_only", owner
+            ),
+            "bearing_only": _required_mat_int(
+                info, names, "n_bearing_only", owner
+            ),
+            "nuisance_only": _required_mat_int(
+                info, names, "n_nuisance_only", owner
+            ),
+            "joint": _required_mat_int(
+                info, names, "n_joint", owner
+            ),
+        },
+        "bearing_mode": _required_mat_text(
+            info, names, "bearing_mode", owner
+        ),
+        "bearing_label": _required_mat_text(
+            info, names, "bearing_label", owner
+        ),
+        "use_crack_eov": _required_mat_logical(
+            info, names, "use_crack_eov", owner
+        ),
+        "crack_draw": _required_mat_text(
+            info, names, "crack_draw", owner
+        ),
+        "profile_mode": _required_mat_text(
+            info, names, "profile_mode", owner
+        ),
+        "profile_draw": _required_mat_text(
+            info, names, "profile_draw", owner
+        ),
+        "profile_jitter_sd_mm": _required_mat_number(
+            info, names, "profile_jitter_sd_mm", owner
+        ),
+        "use_track_eov": _required_mat_logical(
+            info, names, "use_track_eov", owner
+        ),
+        "track_draw": _required_mat_text(
+            info, names, "track_draw", owner
+        ),
+        "track_L_app": _required_mat_number(
+            info, names, "track_L_app", owner
+        ),
+        "track_L_after": _required_mat_number(
+            info, names, "track_L_after", owner
+        ),
+        "use_oor_eov": _required_mat_logical(
+            info, names, "use_oor_eov", owner
+        ),
+        "oor_flats_enabled": _required_mat_logical(
+            info, names, "oor_flats_enabled", owner
+        ),
+        "use_signal_noise": _required_mat_logical(
+            info, names, "use_signal_noise", owner
+        ),
+        "use_vehicle_variability": _required_mat_logical(
+            info, names, "use_vehicle_variability", owner
+        ),
+        "use_speed_variability": _required_mat_logical(
+            info, names, "use_speed_variability", owner
+        ),
+        "use_temp_variability": _required_mat_logical(
+            info, names, "use_temp_variability", owner
+        ),
+        "generation_behavior_version": _required_mat_text(
+            info, names, "generation_behavior_version", owner
+        ),
+        "matlab_release": _required_mat_text(
+            info, names, "matlab_release", owner
+        ),
+        "campaign_matlab_release": _required_mat_text(
+            info, names, "campaign_matlab_release", owner
+        ),
+        "release_qualification_run": _required_mat_logical(
+            info, names, "release_qualification_run", owner
+        ),
+        "actual_matlab_environment_descriptor": _required_mat_text(
+            info, names, "actual_matlab_environment_descriptor", owner
+        ),
+        "actual_matlab_environment_sha256": _required_mat_text(
+            info, names, "actual_matlab_environment_sha256", owner
+        ),
+        "campaign_matlab_environment_descriptor": _required_mat_text(
+            info, names, "campaign_matlab_environment_descriptor", owner
+        ),
+        "campaign_matlab_environment_sha256": _required_mat_text(
+            info, names, "campaign_matlab_environment_sha256", owner
+        ),
+        "generator_source_root_sha256": _required_mat_text(
+            info, names, "generator_source_root_sha256", owner
+        ),
+        "generator_source_digest_lines": _required_mat_text(
+            info, names, "generator_source_digest_lines", owner
+        ),
+        "generator_source_file_count": _required_mat_int(
+            info, names, "generator_source_file_count", owner
+        ),
+        "qualification_source_sha256": _required_mat_text(
+            info, names, "qualification_source_sha256", owner
+        ),
+    }
+
+
+def _read_manifest_release_metadata(
+    dataset_path: str,
+) -> tuple[str | None, bool | None]:
+    """Compatibility view over the complete R11 generation attestation."""
+    metadata = _read_manifest_generation_metadata(dataset_path)
+    if metadata is None:
+        return None, None
+    return (
+        metadata["matlab_release"],
+        metadata["release_qualification_run"],
+    )
+
+
+def _validate_campaign_generation_metadata(
+    dataset_path: str,
+    *,
+    expected_stage: str | None = None,
+    expected_dataset: str | None = None,
+    expected_target_supports: list[int] | None = None,
+    expected_bearing_targets: list[str] | None | object = _UNSET,
+) -> dict:
+    """Reject data outside the locked stack and, when supplied, rung contract."""
+    metadata = _read_manifest_generation_metadata(dataset_path)
+    if metadata is None:
+        raise RuntimeError(
+            f"{dataset_path}: case_info.mat is missing; no R11 provenance."
+        )
+
+    config_json = metadata["generation_config_json"]
+    config_sha = hashlib.sha256(config_json.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(config_sha, metadata["gen_fingerprint"]):
+        raise RuntimeError(
+            f"{dataset_path}: generation_config_json hashes to {config_sha}, "
+            f"not case_info.gen_fingerprint={metadata['gen_fingerprint']}. "
+            "The configuration attestation is corrupt or was restamped."
+        )
+    generation_config = _strict_json_object(
+        config_json,
+        f"{dataset_path}: case_info.generation_config_json",
+    )
+    dynamic_expected = {
+        "schema": _EXPECTED_GEN_SCHEMA,
+        "generation_behavior_version":
+            metadata["generation_behavior_version"],
+        "campaign_matlab_release":
+            metadata["campaign_matlab_release"],
+        "campaign_matlab_environment_sha256":
+            metadata["campaign_matlab_environment_sha256"],
+        "generator_source_root_sha256":
+            metadata["generator_source_root_sha256"],
+        "qualification_source_sha256":
+            metadata["qualification_source_sha256"],
+        "STAGE": metadata["stage"],
+        "n_states": metadata["n_states"],
+        "Npass": metadata["passages_per_state"],
+    }
+    dynamic_mismatches = {
+        field: (generation_config.get(field), wanted)
+        for field, wanted in dynamic_expected.items()
+        if field not in generation_config
+        or not _json_values_equal(generation_config[field], wanted)
+    }
+    if dynamic_mismatches:
+        raise RuntimeError(
+            f"{dataset_path}: hashed generation config disagrees with its "
+            f"manifest/source contract: {dynamic_mismatches}."
+        )
+
+    sha_fields = (
+        "actual_matlab_environment_sha256",
+        "campaign_matlab_environment_sha256",
+        "generator_source_root_sha256",
+    )
+    for field in sha_fields:
+        if re.fullmatch(r"[0-9a-f]{64}", metadata[field]) is None:
+            raise RuntimeError(
+                f"{dataset_path}: case_info.{field} is not lowercase SHA-256."
+            )
+
+    digest_blob = metadata["generator_source_digest_lines"]
+    digest_rows = digest_blob.split("\n")
+    digest_names: list[str] = []
+    for row in digest_rows:
+        if row.count(":") != 1:
+            raise RuntimeError(
+                f"{dataset_path}: malformed generator source digest row "
+                f"{row!r}."
+            )
+        name, digest = row.split(":", 1)
+        parts = name.split("/")
+        if (
+            not name.startswith("scour_MATLAB/")
+            or "\\" in name
+            or any(part in {"", ".", ".."} for part in parts)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise RuntimeError(
+                f"{dataset_path}: unsafe/invalid generator digest row "
+                f"{row!r}."
+            )
+        digest_names.append(name)
+    if (
+        digest_names != sorted(digest_names)
+        or len(digest_names) != len(set(digest_names))
+        or len(digest_names) != len(
+            {name.casefold() for name in digest_names}
+        )
+        or len(digest_names) != metadata["generator_source_file_count"]
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: generator digest inventory is unsorted, "
+            "duplicate/case-colliding, or disagrees with its file count."
+        )
+    recomputed_generator_root = hashlib.sha256(
+        digest_blob.encode("utf-8")
+    ).hexdigest()
+    if not hmac.compare_digest(
+        recomputed_generator_root,
+        metadata["generator_source_root_sha256"],
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: generator source digest lines/root disagree."
+        )
+
+    live_generator = generator_source_root(
+        Path(__file__).resolve().parents[1]
+    )
+    live_mismatches = {}
+    if not hmac.compare_digest(
+        metadata["generator_source_root_sha256"],
+        live_generator.sha256,
+    ):
+        live_mismatches["generator_source_root_sha256"] = (
+            metadata["generator_source_root_sha256"],
+            live_generator.sha256,
+        )
+    if metadata["generator_source_digest_lines"] != live_generator.digest_lines:
+        live_mismatches["generator_source_digest_lines"] = (
+            "<dataset digest lines>",
+            "<live reviewed digest lines>",
+        )
+    if metadata["generator_source_file_count"] != live_generator.file_count:
+        live_mismatches["generator_source_file_count"] = (
+            metadata["generator_source_file_count"],
+            live_generator.file_count,
+        )
+    if live_mismatches:
+        raise RuntimeError(
+            f"{dataset_path}: generator source attestation is internally "
+            f"coherent but does not match the live reviewed MATLAB source: "
+            f"{live_mismatches}. Regenerate from the converged source tree."
+        )
+
+    expected = {
+        "generation_behavior_version":
+            _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+        "matlab_release": _EXPECTED_MATLAB_RELEASE,
+        "campaign_matlab_release": _EXPECTED_MATLAB_RELEASE,
+        "actual_matlab_environment_descriptor":
+            _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+        "actual_matlab_environment_sha256":
+            _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+        "campaign_matlab_environment_descriptor":
+            _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+        "campaign_matlab_environment_sha256":
+            _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+        "qualification_source_sha256": "PRODUCTION",
+        "release_qualification_run": False,
+    }
+    mismatches = {
+        field: (metadata.get(field), wanted)
+        for field, wanted in expected.items()
+        if metadata.get(field) != wanted
+    }
+    if mismatches:
+        raise RuntimeError(
+            f"{dataset_path}: R11 generator/environment/source attestation "
+            f"does not match the reviewed production contract: {mismatches}. "
+            "Regenerate from the converged bundle; qualification output and "
+            "restamped/foreign data are never campaign input."
+        )
+
+    if expected_stage is not None:
+        contract = campaign_stage_contract(expected_stage)
+        expected_dataset = (
+            contract["dataset"]
+            if expected_dataset is None
+            else expected_dataset
+        )
+        if expected_dataset != contract["dataset"]:
+            raise RuntimeError(
+                f"{dataset_path}: requested dataset {expected_dataset!r} is "
+                f"not the registered {expected_stage!r} dataset "
+                f"{contract['dataset']!r}."
+            )
+        expected_targets = contract["learning"]["target_supports"]
+        expected_bearings = contract["learning"]["bearing_targets"]
+        if (
+            expected_target_supports is not None
+            and list(expected_target_supports) != expected_targets
+        ):
+            raise RuntimeError(
+                f"{dataset_path}: requested target supports "
+                f"{expected_target_supports!r} differ from the registered "
+                f"{expected_targets!r} for {expected_stage}."
+            )
+        normalized_bearings = (
+            list(expected_bearing_targets)
+            if expected_bearing_targets is not _UNSET
+            and expected_bearing_targets is not None
+            else None
+        )
+        if (
+            expected_bearing_targets is not _UNSET
+            and normalized_bearings != expected_bearings
+        ):
+            raise RuntimeError(
+                f"{dataset_path}: requested bearing targets "
+                f"{normalized_bearings!r} differ from the registered "
+                f"{expected_bearings!r} for {expected_stage}."
+            )
+        actual_basename = os.path.basename(
+            os.path.normpath(os.path.abspath(dataset_path))
+        )
+        expected_manifest = {
+            "case_name": expected_dataset,
+            "stage": expected_stage,
+            "damage_mode": contract["scenario"]["damage_mode"],
+            "L_bridge_m": contract["geometry"]["L_bridge_m"],
+            "num_spans": contract["geometry"]["num_spans"],
+            "num_supports": contract["geometry"]["num_supports"],
+            "scour_supports": contract["geometry"]["scour_supports"],
+            "n_states": contract["sampling"]["n_states"],
+            "passages_per_state":
+                contract["sampling"]["passages_per_state"],
+            "scour_dano_max_frac":
+                contract["sampling"]["scour_dano_max_frac"],
+            "family_counts": contract["sampling"]["family_counts"],
+            "bearing_mode": contract["scenario"]["bearing_mode"],
+            "bearing_label": "fixity_ratio",
+            "use_crack_eov": contract["scenario"]["use_crack_eov"],
+            "crack_draw": "per_state",
+            "profile_mode": contract["scenario"]["profile_mode"],
+            "profile_draw": "per_state",
+            "profile_jitter_sd_mm": 0.0,
+            "use_track_eov": contract["scenario"]["use_track_eov"],
+            "track_draw": "per_state",
+            "track_L_app": 30.0,
+            "track_L_after": 30.0,
+            "use_oor_eov": contract["scenario"]["use_oor_eov"],
+            "oor_flats_enabled":
+                contract["scenario"]["oor_flats_enabled"],
+            "use_signal_noise":
+                contract["scenario"]["use_signal_noise"],
+            "use_vehicle_variability": True,
+            "use_speed_variability": True,
+            "use_temp_variability": True,
+        }
+        manifest_mismatches = {
+            field: (metadata.get(field), wanted)
+            for field, wanted in expected_manifest.items()
+            if field not in metadata
+            or not _json_values_equal(metadata[field], wanted)
+        }
+        if actual_basename != expected_dataset:
+            manifest_mismatches["dataset_directory_basename"] = (
+                actual_basename,
+                expected_dataset,
+            )
+        config_expected = generation_config_expectations(expected_stage)
+        config_mismatches = {
+            field: (generation_config.get(field), wanted)
+            for field, wanted in config_expected.items()
+            if field not in generation_config
+            or not _json_values_equal(generation_config[field], wanted)
+        }
+        if manifest_mismatches or config_mismatches:
+            raise RuntimeError(
+                f"{dataset_path}: dataset is not the registered "
+                f"{expected_stage} scientific scenario. Manifest/path "
+                f"mismatches={manifest_mismatches}; hashed-config "
+                f"mismatches={config_mismatches}. Refusing a renamed or "
+                "wrong-rung dataset before any study/cache is created."
+            )
+        metadata["campaign_contract"] = contract
+    return metadata
+
+
+def _validate_state_top_level_generation_metadata(
+    loaded: dict,
+    manifest: dict,
+    *,
+    expected_schema: str,
+    expected_fingerprint: str,
+    expected_state_uid: str,
+    expected_state_seed_id: int,
+    expected_random_stream_schedule_version: str,
+    owner: str,
+) -> None:
+    """Cross-check one state's cheap top-level R11 stamps."""
+    top_names = tuple(loaded)
+    top_expected = {
+        "file_gen_schema": expected_schema,
+        "file_gen_fingerprint": expected_fingerprint,
+        "file_matlab_release": manifest["matlab_release"],
+        "file_campaign_matlab_release":
+            manifest["campaign_matlab_release"],
+        "file_actual_matlab_environment_sha256":
+            manifest["actual_matlab_environment_sha256"],
+        "file_campaign_matlab_environment_sha256":
+            manifest["campaign_matlab_environment_sha256"],
+        "file_generator_source_root_sha256":
+            manifest["generator_source_root_sha256"],
+        "file_qualification_source_sha256":
+            manifest["qualification_source_sha256"],
+    }
+    top_actual = {
+        field: _required_mat_text(loaded, top_names, field, owner)
+        for field in top_expected
+    }
+    top_state_uid = _required_mat_text(
+        loaded, top_names, "file_state_uid", owner
+    )
+    top_state_seed_id = _required_mat_int(
+        loaded, top_names, "file_state_seed_id", owner
+    )
+    top_schedule = _required_mat_text(
+        loaded,
+        top_names,
+        "file_random_stream_schedule_version",
+        owner,
+    )
+    top_qualification = _required_mat_logical(
+        loaded,
+        top_names,
+        "file_release_qualification_run",
+        owner,
+    )
+    top_mismatches = {
+        field: (top_actual[field], wanted)
+        for field, wanted in top_expected.items()
+        if top_actual[field] != wanted
+    }
+    if top_qualification is not manifest["release_qualification_run"]:
+        top_mismatches["file_release_qualification_run"] = (
+            top_qualification,
+            manifest["release_qualification_run"],
+        )
+    if top_state_uid != expected_state_uid:
+        top_mismatches["file_state_uid"] = (
+            top_state_uid,
+            expected_state_uid,
+        )
+    if (
+        top_state_seed_id != int(expected_state_seed_id)
+        or not 1 <= top_state_seed_id <= np.iinfo(np.uint32).max
+    ):
+        top_mismatches["file_state_seed_id"] = (
+            top_state_seed_id,
+            int(expected_state_seed_id),
+        )
+    if top_schedule != expected_random_stream_schedule_version:
+        top_mismatches["file_random_stream_schedule_version"] = (
+            top_schedule,
+            expected_random_stream_schedule_version,
+        )
+    if top_mismatches:
+        raise RuntimeError(
+            f"{owner}: top-level R11 provenance differs from case_info: "
+            f"{top_mismatches}."
+        )
+
+
+def _validate_state_generation_metadata(
+    loaded: dict,
+    data_struct,
+    names: tuple,
+    manifest: dict,
+    *,
+    expected_schema: str,
+    expected_fingerprint: str,
+    expected_state_uid: str,
+    expected_state_seed_id: int,
+    expected_random_stream_schedule_version: str,
+    owner: str,
+) -> None:
+    """Cross-check a state's top-level stamps and nested R11 payload."""
+    _validate_state_top_level_generation_metadata(
+        loaded,
+        manifest,
+        expected_schema=expected_schema,
+        expected_fingerprint=expected_fingerprint,
+        expected_state_uid=expected_state_uid,
+        expected_state_seed_id=expected_state_seed_id,
+        expected_random_stream_schedule_version=
+            expected_random_stream_schedule_version,
+        owner=owner,
+    )
+
+    nested_expected = {
+        "matlab_release": manifest["matlab_release"],
+        "campaign_matlab_release": manifest["campaign_matlab_release"],
+        "actual_matlab_environment_descriptor":
+            manifest["actual_matlab_environment_descriptor"],
+        "actual_matlab_environment_sha256":
+            manifest["actual_matlab_environment_sha256"],
+        "campaign_matlab_environment_descriptor":
+            manifest["campaign_matlab_environment_descriptor"],
+        "campaign_matlab_environment_sha256":
+            manifest["campaign_matlab_environment_sha256"],
+        "generator_source_root_sha256":
+            manifest["generator_source_root_sha256"],
+        "generator_source_digest_lines":
+            manifest["generator_source_digest_lines"],
+        "qualification_source_sha256":
+            manifest["qualification_source_sha256"],
+    }
+    nested_actual = {
+        field: _required_mat_text(
+            data_struct,
+            names,
+            field,
+            f"{owner}: data",
+        )
+        for field in nested_expected
+    }
+    nested_count = _required_mat_int(
+        data_struct,
+        names,
+        "generator_source_file_count",
+        f"{owner}: data",
+    )
+    nested_qualification = _required_mat_logical(
+        data_struct,
+        names,
+        "release_qualification_run",
+        f"{owner}: data",
+    )
+    nested_mismatches = {
+        field: (nested_actual[field], wanted)
+        for field, wanted in nested_expected.items()
+        if nested_actual[field] != wanted
+    }
+    if nested_count != manifest["generator_source_file_count"]:
+        nested_mismatches["generator_source_file_count"] = (
+            nested_count,
+            manifest["generator_source_file_count"],
+        )
+    if nested_qualification is not manifest["release_qualification_run"]:
+        nested_mismatches["release_qualification_run"] = (
+            nested_qualification,
+            manifest["release_qualification_run"],
+        )
+    if nested_mismatches:
+        raise RuntimeError(
+            f"{owner}: nested R11 provenance differs from case_info: "
+            f"{nested_mismatches}."
+        )
+
+
+def validate_dataset_state_provenance_stamps(
+    dataset_path: str,
+    n_states: int,
+    manifest: dict,
+    *,
+    expected_schema: str,
+    expected_fingerprint: str,
+) -> None:
+    """Validate every lightweight state stamp without loading signal payloads."""
+    state_table = read_state_table(dataset_path)
+    if len(state_table["state_uid"]) != int(n_states):
+        raise RuntimeError(
+            f"{dataset_path}: state table contains "
+            f"{len(state_table['state_uid'])} semantic identities but the "
+            f"manifest declares {int(n_states)} states."
+        )
+    variables = (
+        "file_gen_schema",
+        "file_gen_fingerprint",
+        "file_state_uid",
+        "file_state_seed_id",
+        "file_random_stream_schedule_version",
+        "file_matlab_release",
+        "file_campaign_matlab_release",
+        "file_release_qualification_run",
+        "file_actual_matlab_environment_sha256",
+        "file_campaign_matlab_environment_sha256",
+        "file_generator_source_root_sha256",
+        "file_qualification_source_sha256",
+    )
+    for index in range(1, int(n_states) + 1):
+        name = f"{index:04d}.mat"
+        path = os.path.join(dataset_path, name)
+        if not os.path.isfile(path):
+            raise RuntimeError(
+                f"{dataset_path}: expected state stamp file is missing: {name}."
+            )
+        loaded = sio.loadmat(path, variable_names=variables)
+        _validate_state_top_level_generation_metadata(
+            loaded,
+            manifest,
+            expected_schema=expected_schema,
+            expected_fingerprint=expected_fingerprint,
+            expected_state_uid=state_table["state_uid"][index - 1],
+            expected_state_seed_id=int(
+                state_table["state_seed_id"][index - 1]
+            ),
+            expected_random_stream_schedule_version=
+                state_table["random_stream_schedule_version"],
+            owner=name,
+        )
+
+
+def _validate_campaign_release_metadata(dataset_path: str) -> tuple[str, bool]:
+    """Compatibility gate returning (release, qualification) after R11 checks."""
+    metadata = _validate_campaign_generation_metadata(dataset_path)
+    return (
+        metadata["matlab_release"],
+        metadata["release_qualification_run"],
+    )
+
+
+def _read_completion_marker(dataset_path: str) -> tuple[str, str, str]:
+    """Read one canonical three-line R11 completion marker.
+
+    Platform newline translation is allowed (MATLAB writes the file), but the
+    logical text must contain exactly three nonempty, unpadded lines and one
+    final newline. Blank annotations, leading/trailing spaces, BOMs and
+    symlinks fail closed.
+    """
+    marker = os.path.join(dataset_path, '_GENERATION_COMPLETE')
+    if (
+        not os.path.isfile(marker)
+        or os.path.islink(marker)
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: missing regular _GENERATION_COMPLETE marker."
+        )
+    try:
+        with open(marker, encoding='utf-8', newline=None) as handle:
+            content = handle.read()
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(
+            f"{dataset_path}: completion marker is unreadable/non-UTF-8."
+        ) from exc
+    lines = content.split('\n')
+    if (
+        len(lines) != 4
+        or lines[-1] != ''
+        or any(not line or line != line.strip() for line in lines[:3])
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: completion marker must be exactly three "
+            "nonempty, unpadded lines plus a final newline."
+        )
+    return lines[0], lines[1], lines[2]
 
 
 def _read_file_digests(dataset_path: str):
-    """(digests dict {fname: sha256}, root_sha) from file_digests.mat, or
-    (None, None) if absent (audit R7.1 P4: source content integrity). A00 writes
-    a SHA-256 of every NNNN.mat plus a root = SHA-256 of the sorted per-file
-    digests. The loader verifies each file's bytes against this — so a bit-flip /
-    disk-or-transport corruption / same-size overwrite is caught, since none of
-    those preserve a SHA even when they preserve file size."""
+    """Read the exact R11 ``source-digests-v2`` dataset-byte contract.
+
+    A valid table contains canonical, sorted lowercase SHA-256 rows for every
+    numbered state plus ``case_info.mat`` and ``damage_states.mat``. R11
+    deliberately orphaned all earlier schemas, so a legacy state-only table,
+    an unknown scope/schema, duplicate/non-canonical rows, or an extra/missing
+    digest is an error rather than a compatibility path.
+
+    Returns ``(None, None)`` only when the table itself is absent. Malformed
+    tables raise ``RuntimeError``.
+    """
     fd = os.path.join(dataset_path, 'file_digests.mat')
     if not os.path.exists(fd):
         return None, None
-    info = sio.loadmat(fd)
-    if 'file_digests' not in info:
-        return None, None
-    s = info['file_digests'][0, 0]
+    if not os.path.isfile(fd) or os.path.islink(fd):
+        raise RuntimeError(
+            f"{dataset_path}: file_digests.mat must be a regular local file."
+        )
+    s = _load_scalar_mat_struct(
+        fd,
+        "file_digests",
+        f"{dataset_path}: file_digests",
+    )
     names = s.dtype.names or ()
-    # A single 'digest_lines' char blob ("0001.mat:<sha>\n0002.mat:<sha>...") plus
-    # a 'root' — a plain-string round-trip avoids scipy cell-array quirks.
-    lines = str(np.ravel(s['digest_lines'])[0]) if 'digest_lines' in names else ""
-    root = str(np.ravel(s['root'])[0]) if 'root' in names else None
-    per: dict = {}
-    for ln in lines.splitlines():
-        ln = ln.strip()
-        if ':' in ln:
-            fn, sh = ln.split(':', 1)
-            per[fn.strip()] = sh.strip()
-    return (per if per else None), root
+    required_fields = {'schema', 'scope', 'digest_lines', 'root'}
+    if set(names) != required_fields:
+        raise RuntimeError(
+            f"{dataset_path}: file_digests fields {sorted(names)!r} must be "
+            f"exactly {sorted(required_fields)!r}."
+        )
+    owner = f"{dataset_path}: file_digests"
+    schema = _required_mat_text(s, names, 'schema', owner)
+    scope = _required_mat_text(s, names, 'scope', owner)
+    if schema != 'source-digests-v2':
+        raise RuntimeError(
+            f"{dataset_path}: unsupported digest schema {schema!r}; "
+            "R11 requires 'source-digests-v2'."
+        )
+    expected_scope = 'NNNN.mat+case_info.mat+damage_states.mat'
+    if scope != expected_scope:
+        raise RuntimeError(
+            f"{dataset_path}: digest scope {scope!r} is incomplete/foreign; "
+            f"R11 requires {expected_scope!r}."
+        )
+
+    lines = _required_mat_text(s, names, 'digest_lines', owner)
+    root = _required_mat_text(s, names, 'root', owner)
+    if re.fullmatch(r'[0-9a-f]{64}', root) is None:
+        raise RuntimeError(
+            f"{dataset_path}: file_digests.root is not lowercase SHA-256."
+        )
+
+    per: dict[str, str] = {}
+    rows = lines.split('\n')
+    for row in rows:
+        if row.count(':') != 1:
+            raise RuntimeError(
+                f"{dataset_path}: malformed digest row {row!r}."
+            )
+        name, digest = row.split(':', 1)
+        if (
+            not name
+            or os.path.basename(name) != name
+            or name in {'.', '..'}
+            or name in per
+            or re.fullmatch(r'[0-9a-f]{64}', digest) is None
+        ):
+            raise RuntimeError(
+                f"{dataset_path}: unsafe, duplicate or invalid digest row "
+                f"{row!r}."
+            )
+        per[name] = digest
+
+    canonical = '\n'.join(f'{name}:{per[name]}' for name in sorted(per))
+    if lines != canonical:
+        raise RuntimeError(
+            f"{dataset_path}: digest rows are not canonical/sorted."
+        )
+    if len(per) != len({name.casefold() for name in per}):
+        raise RuntimeError(
+            f"{dataset_path}: digest inventory contains case-colliding names."
+        )
+    actual_states = sorted(
+        name for name in os.listdir(dataset_path) if _re_state.fullmatch(name)
+    )
+    expected_names = set(actual_states) | {'case_info.mat', 'damage_states.mat'}
+    if set(per) != expected_names:
+        raise RuntimeError(
+            f"{dataset_path}: R11 digest inventory mismatch; "
+            f"missing={sorted(expected_names - set(per))}, "
+            f"extra={sorted(set(per) - expected_names)}."
+        )
+    calculated_root = hashlib.sha256(lines.encode('utf-8')).hexdigest()
+    if not hmac.compare_digest(calculated_root, root):
+        raise RuntimeError(
+            f"{dataset_path}: file_digests root disagrees with canonical rows."
+        )
+    return per, root
 
 
 def _root_digest(per_file: dict) -> str:
@@ -904,11 +2124,9 @@ def verify_source_file_bytes(dataset_path: str) -> dict:
     previously go unnoticed until a cache rebuild.  The first call in a process
     hashes every recorded file.  Later cache lookups reuse that result only
     while every file retains the same size, mtime and ctime; any change forces a
-    new full pass.  The digest table may also list sidecars (new generators list
-    ``case_info.mat`` and ``damage_states.mat``), while old state-only tables
-    remain valid. Those two required sidecars are always hashed separately into
-    the protocol identity, with a flag stating whether the generation-time root
-    covered them.
+    new full pass. R11 requires ``case_info.mat`` and ``damage_states.mat`` in
+    the same generation-time root as every state file; legacy state-only tables
+    are rejected.
 
     Returns a compact, JSON-safe verification summary for protocol provenance.
     Raises ``RuntimeError`` on an incomplete, unsafe or mismatching digest set.
@@ -946,9 +2164,10 @@ def verify_source_file_bytes(dataset_path: str) -> dict:
                 raise RuntimeError(
                     f"{dataset_path}: invalid SHA-256 for digest entry {name!r}.")
             path = os.path.join(dataset_path, name)
-            if not os.path.isfile(path):
+            if not os.path.isfile(path) or os.path.islink(path):
                 raise RuntimeError(
-                    f"{dataset_path}: digest-listed source file is missing: {name}.")
+                    f"{dataset_path}: digest-listed source file is missing, "
+                    f"non-regular or symlinked: {name}.")
             stat = os.stat(path)
             rows.append((
                 name, int(stat.st_size), int(stat.st_mtime_ns),
@@ -975,19 +2194,15 @@ def verify_source_file_bytes(dataset_path: str) -> dict:
             _SOURCE_VERIFY_CACHE[dataset_path] = (str(root).lower(), after)
 
     sidecars = sorted(name for name in per_file if not _re_state.fullmatch(name))
-    # R8 datasets generated before audit r4 contain a state-only digest table.
-    # They remain scientifically usable, but their two interpretation-critical
-    # sidecars must still participate in the full protocol identity: otherwise
-    # editing damage_states.mat could change the split/labels while resuming the
-    # same Optuna study. New A00 tables list these files and therefore also
-    # authenticate them against the generation root; old tables get an explicit
-    # live SHA binding (identity, not a retroactive generation-time signature).
+    # Defence in depth: _read_file_digests already requires both sidecars in
+    # the R11 root; hash them again here for the compact protocol record.
     required_sidecar_sha256: dict[str, str] = {}
     for name in ("case_info.mat", "damage_states.mat"):
         path = os.path.join(dataset_path, name)
-        if not os.path.isfile(path):
+        if not os.path.isfile(path) or os.path.islink(path):
             raise RuntimeError(
-                f"{dataset_path}: required provenance sidecar is missing: {name}.")
+                f"{dataset_path}: required provenance sidecar is missing, "
+                f"non-regular or symlinked: {name}.")
         stat_before = os.stat(path)
         required_sidecar_sha256[name] = _sha256_file(path)
         stat_after = os.stat(path)
@@ -1009,65 +2224,576 @@ def verify_source_file_bytes(dataset_path: str) -> dict:
         "state_count": len(recorded_states),
         "sidecars": sidecars,
         "required_sidecar_sha256": required_sidecar_sha256,
-        "required_sidecars_generation_digest_covered":
-            all(name in per_file for name in required_sidecar_sha256),
+        "required_sidecars_generation_digest_covered": True,
+    }
+
+
+_STATE_UID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:|=,+-]{0,255}\Z")
+
+
+def _matlab_cellstr_vector(raw, owner: str) -> list[str]:
+    """Read one MATLAB cellstr/string vector without stringifying junk."""
+
+    values: list[str] = []
+    for index, cell in enumerate(np.ravel(np.asarray(raw, dtype=object))):
+        flat = np.ravel(np.asarray(cell))
+        if flat.size != 1:
+            raise RuntimeError(
+                f"{owner}[{index}] must contain exactly one text scalar."
+            )
+        value = flat[0]
+        if not isinstance(value, (str, np.str_)):
+            raise RuntimeError(
+                f"{owner}[{index}] is {type(value).__name__}, not text."
+            )
+        values.append(str(value))
+    return values
+
+
+def _matlab_text_scalar(raw, owner: str) -> str:
+    flat = np.ravel(np.asarray(raw))
+    if flat.size != 1 or not isinstance(flat[0], (str, np.str_)):
+        raise RuntimeError(f"{owner} must be exactly one text scalar.")
+    value = str(flat[0])
+    if not value or value != value.strip():
+        raise RuntimeError(f"{owner} must be nonempty and unpadded.")
+    return value
+
+
+def _strict_binary_vector(raw, owner: str) -> np.ndarray:
+    """Return bool only when every stored value is exactly finite 0 or 1."""
+
+    try:
+        values = np.ravel(np.asarray(raw, dtype=float))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{owner} must be a numeric/logical vector.") from exc
+    if not np.all(np.isfinite(values)) or not np.all(np.isin(values, (0.0, 1.0))):
+        raise RuntimeError(f"{owner} must contain only finite logical 0/1 values.")
+    return values.astype(bool)
+
+
+def _strict_positive_uint32_vector(raw, owner: str) -> np.ndarray:
+    """Return unique, positive, uint32-compatible RNG stream identifiers."""
+
+    try:
+        values = np.ravel(np.asarray(raw, dtype=np.float64))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{owner} must be an integer vector.") from exc
+    if (
+        not np.all(np.isfinite(values))
+        or not np.all(values == np.floor(values))
+        or np.any(values < 1)
+        or np.any(values > np.iinfo(np.uint32).max)
+    ):
+        raise RuntimeError(f"{owner} must contain integers in [1, 2^32-1].")
+    result = values.astype(np.uint32)
+    if len(np.unique(result)) != len(result):
+        raise RuntimeError(f"{owner} contains duplicate state-stream IDs.")
+    return result
+
+
+def _strict_nonnegative_int_vector(raw, owner: str) -> np.ndarray:
+    try:
+        values = np.ravel(np.asarray(raw, dtype=np.float64))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{owner} must be an integer vector.") from exc
+    if (
+        not np.all(np.isfinite(values))
+        or not np.all(values == np.floor(values))
+        or np.any(values < 0)
+        or np.any(values > np.iinfo(np.int32).max)
+    ):
+        raise RuntimeError(f"{owner} must contain nonnegative integers.")
+    return values.astype(np.int64)
+
+
+def _identity_sha256(value) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _state_identity_damage_seed(dataset_path: str) -> int:
+    """Read the generator seed used by the UID→StateSeedID derivation."""
+
+    path = os.path.join(dataset_path, "case_info.mat")
+    try:
+        info = sio.loadmat(path)["case_info"][0, 0]
+    except Exception as exc:
+        raise RuntimeError(
+            f"{dataset_path}: cannot read case_info.mat for StateSeedID "
+            "authentication."
+        ) from exc
+    names = info.dtype.names or ()
+    if "generation_config_json" in names:
+        raw = np.ravel(info["generation_config_json"])
+        if raw.size != 1:
+            raise RuntimeError(
+                f"{dataset_path}: generation_config_json must be scalar text."
+            )
+        try:
+            config = json.loads(str(raw[0]))
+            value = config["damage_seed"]
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"{dataset_path}: generation_config_json lacks valid damage_seed."
+            ) from exc
+    elif "damage_seed" in names:  # isolated mutation-test fixture
+        raw = np.ravel(info["damage_seed"])
+        value = raw[0] if raw.size == 1 else None
+    else:
+        raise RuntimeError(
+            f"{dataset_path}: case_info lacks generation_config_json/damage_seed."
+        )
+    if (
+        isinstance(value, (bool, np.bool_))
+        or not isinstance(value, (int, float, np.integer, np.floating))
+        or not np.isfinite(value)
+        or float(value) != math.floor(float(value))
+        or not 0 <= int(value) <= np.iinfo(np.uint32).max
+    ):
+        raise RuntimeError(f"{dataset_path}: damage_seed must be a uint32 integer.")
+    return int(value)
+
+
+def _expected_state_seed_id(uid: str, damage_seed: int) -> int:
+    token = f"ttbi-state-seed-v1|damage_seed={damage_seed}|{uid}"
+    return int(hashlib.sha256(token.encode("ascii")).hexdigest()[:8], 16)
+
+
+def _expected_named_seed(
+    schedule: str,
+    root_seed: int,
+    uid: str,
+    stream: str,
+    passage: int | None = None,
+) -> int:
+    token = (
+        f"{schedule}|root={root_seed}|uid={uid}|stream={stream}"
+        + ("" if passage is None else f"|pass={passage:05d}")
+    )
+    return int(hashlib.sha256(token.encode("ascii")).hexdigest()[:8], 16)
+
+
+def state_identity_descriptor(table: dict) -> dict:
+    """Canonical semantic-state inventory for split/cache/protocol binding."""
+
+    uids = [str(value) for value in table["state_uid"]]
+    sorted_uids = sorted(uids)
+    joint_uids = sorted(
+        uid for uid, family in zip(uids, table["family"], strict=True)
+        if family == "joint"
+    )
+    records = []
+    latent_records = []
+    for row, uid in enumerate(uids):
+        latent_record = {
+            "uid": uid,
+            "state_seed_id": int(table["state_seed_id"][row]),
+            "family": str(table["family"][row]),
+            "anchor_target": int(table["anchor_target"][row]),
+            "anchor_level": int(table["anchor_level"][row]),
+            "latent_bearing_fixity": [
+                float(value) for value in table["latent_bearing_fixity"][row]
+            ],
+            "latent_crack_on": bool(table["latent_crack_on"][row]),
+            "damage_state": [
+                float(value) for value in table["damage_states"][row]
+            ],
+        }
+        latent_records.append(latent_record)
+        records.append({
+            **latent_record,
+            "crack_on": bool(table["crack_on"][row]),
+            "bearing_fixity": [
+                float(value) for value in table["bearing_fixity"][row]
+            ],
+        })
+    records.sort(key=lambda record: record["uid"])
+    latent_records.sort(key=lambda record: record["uid"])
+    family_counts = {
+        family: int(sum(value == family for value in table["family"]))
+        for family in STATE_FAMILIES
+    }
+    return {
+        "schema": "ttbi-semantic-state-identity-v2",
+        "damage_seed": int(table["damage_seed"]),
+        "random_stream_schedule_version":
+            table["random_stream_schedule_version"],
+        "state_stream_names": list(table["state_stream_names"]),
+        "passage_stream_names": list(table["passage_stream_names"]),
+        "passages_per_state": int(
+            table["passage_named_stream_seed_id"].shape[1]
+        ),
+        "state_uid_count": len(uids),
+        "state_uid_inventory": sorted_uids,
+        "state_uid_inventory_sha256": _identity_sha256(sorted_uids),
+        "state_uid_row_order": uids,
+        "state_uid_row_order_sha256": _identity_sha256(uids),
+        "state_seed_id_by_uid_sha256": _identity_sha256([
+            [uid, int(seed)]
+            for uid, seed in sorted(
+                zip(uids, table["state_seed_id"], strict=True),
+                key=lambda pair: pair[0],
+            )
+        ]),
+        "state_named_stream_by_uid_sha256": _identity_sha256([
+            [
+                uid,
+                [
+                    int(value)
+                    for value in table["state_named_stream_seed_id"][row]
+                ],
+            ]
+            for row, uid in sorted(
+                enumerate(uids), key=lambda pair: pair[1]
+            )
+        ]),
+        "passage_named_stream_by_uid_sha256": _identity_sha256([
+            [
+                uid,
+                [
+                    [int(value) for value in passage]
+                    for passage in
+                    table["passage_named_stream_seed_id"][row]
+                ],
+            ]
+            for row, uid in sorted(
+                enumerate(uids), key=lambda pair: pair[1]
+            )
+        ]),
+        "joint_state_uid_count": len(joint_uids),
+        "joint_state_uid_inventory": joint_uids,
+        "joint_state_uid_inventory_sha256": _identity_sha256(joint_uids),
+        "family_counts": family_counts,
+        # This is the causal-pairing identity: it deliberately excludes active
+        # CrackOn/BearingFixity, which are the rung treatments, while binding
+        # the complete latent design and scour realization by semantic UID.
+        "latent_design_root_sha256": _identity_sha256(latent_records),
+        # Full active identity remains useful for cache/protocol provenance and
+        # is expected to differ when a rung activates bearing or crack physics.
+        "state_identity_root_sha256": _identity_sha256(records),
     }
 
 
 def read_state_table(dataset_path: str) -> dict:
-    """The per-state FAMILY table from damage_states.mat (Feature A, 2026-07-19).
+    """Read and authenticate the row-aligned semantic state/CRN table.
 
-    A00 writes, row-aligned with DamageStates:
-        StateFamily  — identity tag per state (one of STATE_FAMILIES); assigned
-                       by the GENERATOR at construction, never derived from
-                       labels downstream (with per-state persistent nuisances,
-                       `y` alone cannot distinguish target_healthy from
-                       nuisance_only — the Codex R7.1 correction).
-        AnchorTarget — scour_only: pier index; bearing_only: 1=left, 2=right.
-        AnchorLevel  — severity level index (1..n_anchor_levels), 0 otherwise.
-        CrackOn      — pre-drawn per-state crack activation (forced OFF for the
-                       controlled-probe families, ON for nuisance_only).
-    MANDATORY for every regression dataset: the stratified split and the
-    family-identity disentanglement probe both consume it. A dataset without it
-    predates Feature A — regenerate, do not guess families from labels."""
+    ``StateUID`` is independent of row/DC, while ``StateSeedID`` is its unique
+    RNG-stream identity.  Both latent and active bearing/crack variables are
+    mandatory.  Missing values are never reconstructed from row order or labels.
+    """
+
     ds = os.path.join(dataset_path, 'damage_states.mat')
     if not os.path.exists(ds):
         raise RuntimeError(
-            f"{dataset_path}: no damage_states.mat — the stratified split needs "
-            f"the state-family table. Regenerate with the current A00.")
+            f"{dataset_path}: no damage_states.mat — the semantic-state split "
+            f"needs the generator's CRN table. Regenerate with current A00.")
     m = sio.loadmat(ds)
-    required = ('StateFamily', 'AnchorTarget', 'AnchorLevel', 'CrackOn',
-                'DamageStates', 'BearingFixity')
-    missing = [f for f in required if f not in m]
+    required = (
+        'StateFamily', 'AnchorTarget', 'AnchorLevel', 'StateUID',
+        'StateSeedID', 'LatentBearingFixity', 'LatentCrackOn', 'CrackOn',
+        'StateNamedStreamSeedID', 'PassageNamedStreamSeedID',
+        'PassageNamedStreamSeedIDFlat', 'random_stream_schedule_version',
+        'state_stream_names', 'passage_stream_names',
+        'DamageStates', 'BearingFixity',
+    )
+    missing = [field for field in required if field not in m]
     if missing:
         raise RuntimeError(
-            f"{dataset_path}: damage_states.mat lacks {missing} — pre-Feature-A "
-            f"dataset. Regenerate with the current A00 (families are generated, "
-            f"never inferred).")
-    family = [str(np.ravel(c)[0]) for c in np.ravel(m['StateFamily'])]
-    bad = sorted({f for f in family if f not in STATE_FAMILIES})
+            f"{dataset_path}: damage_states.mat lacks {missing} — pre-R11 "
+            f"semantic-state dataset. Regenerate; never infer UID/stream/latent "
+            f"values from row order or labels.")
+    family = _matlab_cellstr_vector(
+        m['StateFamily'], f"{dataset_path}: StateFamily"
+    )
+    bad = sorted({value for value in family if value not in STATE_FAMILIES})
     if bad:
         raise RuntimeError(
             f"{dataset_path}: unknown state_family value(s) {bad} — expected "
             f"one of {STATE_FAMILIES}. Corrupt/foreign family table.")
+    state_uid = _matlab_cellstr_vector(
+        m['StateUID'], f"{dataset_path}: StateUID"
+    )
+    bad_uid = [
+        uid for uid in state_uid if _STATE_UID_RE.fullmatch(uid) is None
+    ]
+    if bad_uid:
+        raise RuntimeError(
+            f"{dataset_path}: malformed StateUID value(s) {bad_uid[:3]!r}; "
+            "UIDs must be nonempty canonical printable-ASCII tokens."
+        )
+    if len(set(state_uid)) != len(state_uid):
+        raise RuntimeError(
+            f"{dataset_path}: StateUID contains duplicates — semantic identity "
+            "must be one-to-one with generated states."
+        )
+    try:
+        damage_states = np.atleast_2d(
+            np.asarray(m['DamageStates'], dtype=float)
+        )
+        bearing_fixity = np.atleast_2d(
+            np.asarray(m['BearingFixity'], dtype=float)
+        )
+        latent_bearing = np.atleast_2d(
+            np.asarray(m['LatentBearingFixity'], dtype=float)
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"{dataset_path}: physical/latent state matrices must be numeric."
+        ) from exc
+    if (
+        not np.all(np.isfinite(damage_states))
+        or not np.all(np.isfinite(bearing_fixity))
+        or not np.all(np.isfinite(latent_bearing))
+    ):
+        raise RuntimeError(f"{dataset_path}: state matrices contain non-finite values.")
+    if (
+        np.any(damage_states < 0.0)
+        or np.any(damage_states > 1.0)
+        or np.any(bearing_fixity < 0.0)
+        or np.any(bearing_fixity > 1.0)
+        or np.any(latent_bearing < 0.0)
+        or np.any(latent_bearing > 1.0)
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: scour/fixity state matrices are outside [0,1]."
+        )
+    if bearing_fixity.shape[1] != 2 or latent_bearing.shape[1] != 2:
+        raise RuntimeError(
+            f"{dataset_path}: BearingFixity and LatentBearingFixity must each "
+            f"have two columns; got {bearing_fixity.shape} and "
+            f"{latent_bearing.shape}."
+        )
+    state_seed_id = _strict_positive_uint32_vector(
+        m['StateSeedID'], f"{dataset_path}: StateSeedID"
+    )
+    damage_seed = _state_identity_damage_seed(dataset_path)
+    expected_seed_ids = np.asarray([
+        _expected_state_seed_id(uid, damage_seed) for uid in state_uid
+    ], dtype=np.uint32)
+    if np.any(expected_seed_ids == 0):
+        raise RuntimeError(
+            f"{dataset_path}: UID seed derivation produced reserved stream 0; "
+            "the generator must fail closed and version the derivation."
+        )
+    if not np.array_equal(state_seed_id, expected_seed_ids):
+        mismatch = int(np.flatnonzero(state_seed_id != expected_seed_ids)[0])
+        raise RuntimeError(
+            f"{dataset_path}: StateSeedID row {mismatch + 1} is not the "
+            "registered SHA-256 derivation of its StateUID/damage_seed — "
+            "misaligned or restamped stream table."
+        )
+    schedule = _matlab_text_scalar(
+        m["random_stream_schedule_version"],
+        f"{dataset_path}: random_stream_schedule_version",
+    )
+    state_stream_names = _matlab_cellstr_vector(
+        m["state_stream_names"], f"{dataset_path}: state_stream_names"
+    )
+    passage_stream_names = _matlab_cellstr_vector(
+        m["passage_stream_names"], f"{dataset_path}: passage_stream_names"
+    )
+    if (
+        schedule != "uid-named-substreams-v2"
+        or state_stream_names != [
+            "operations", "crack", "profile-state", "track", "profile-phase"
+        ]
+        or passage_stream_names != ["profile-passage", "oor-passage"]
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: foreign named-substream schedule/names "
+            f"({schedule!r}, {state_stream_names!r}, "
+            f"{passage_stream_names!r})."
+        )
+    state_named = np.asarray(m["StateNamedStreamSeedID"], dtype=np.float64)
+    passage_named = np.asarray(
+        m["PassageNamedStreamSeedID"], dtype=np.float64
+    )
+    passage_named_flat = np.asarray(
+        m["PassageNamedStreamSeedIDFlat"], dtype=np.float64
+    )
+    if (
+        state_named.shape != (len(state_uid), len(state_stream_names))
+        or passage_named.ndim != 3
+        or passage_named.shape[0] != len(state_uid)
+        or passage_named.shape[2] != len(passage_stream_names)
+        or passage_named_flat.shape
+        != (len(state_uid), passage_named.shape[1] * len(passage_stream_names))
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: named stream matrices have wrong shapes "
+            f"{state_named.shape}, {passage_named.shape}, "
+            f"{passage_named_flat.shape}."
+        )
+    for owner, values in (
+        ("StateNamedStreamSeedID", state_named),
+        ("PassageNamedStreamSeedID", passage_named),
+        ("PassageNamedStreamSeedIDFlat", passage_named_flat),
+    ):
+        if (
+            not np.all(np.isfinite(values))
+            or not np.all(values == np.floor(values))
+            or np.any(values < 1)
+            or np.any(values > np.iinfo(np.uint32).max)
+        ):
+            raise RuntimeError(
+                f"{dataset_path}: {owner} must contain positive uint32 integers."
+            )
+    state_named = state_named.astype(np.uint32)
+    passage_named = passage_named.astype(np.uint32)
+    passage_named_flat = passage_named_flat.astype(np.uint32)
+    expected_state_named = np.empty_like(state_named)
+    expected_passage_named = np.empty_like(passage_named)
+    for row, uid in enumerate(state_uid):
+        root_seed = int(state_seed_id[row])
+        for stream_index, stream_name in enumerate(state_stream_names):
+            expected_state_named[row, stream_index] = _expected_named_seed(
+                schedule, root_seed, uid, stream_name
+            )
+        for passage_index in range(passage_named.shape[1]):
+            for stream_index, stream_name in enumerate(passage_stream_names):
+                expected_passage_named[
+                    row, passage_index, stream_index
+                ] = _expected_named_seed(
+                    schedule,
+                    root_seed,
+                    uid,
+                    stream_name,
+                    passage=passage_index + 1,
+                )
+    if (
+        np.any(expected_state_named == 0)
+        or np.any(expected_passage_named == 0)
+        or not np.array_equal(state_named, expected_state_named)
+        or not np.array_equal(passage_named, expected_passage_named)
+        or not np.array_equal(
+            passage_named_flat,
+            expected_passage_named.reshape(
+                len(state_uid), -1, order="F"
+            ),
+        )
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: named substream IDs are zero, misaligned, or do "
+            "not match the registered SHA-256 namespace derivation."
+        )
+    all_stream_ids = np.concatenate([
+        state_seed_id.ravel(),
+        state_named.ravel(),
+        passage_named.ravel(),
+    ])
+    if len(np.unique(all_stream_ids)) != len(all_stream_ids):
+        raise RuntimeError(
+            f"{dataset_path}: root/named RNG stream IDs collide."
+        )
     table = {
-        'family':         family,
-        'anchor_target':  np.ravel(m['AnchorTarget']).astype(int),
-        'anchor_level':   np.ravel(m['AnchorLevel']).astype(int),
-        'crack_on':       np.ravel(m['CrackOn']).astype(bool),
-        'damage_states':  np.atleast_2d(np.asarray(m['DamageStates'], dtype=float)),
-        'bearing_fixity': np.atleast_2d(np.asarray(m['BearingFixity'], dtype=float)),
+        'family': family,
+        'anchor_target': _strict_nonnegative_int_vector(
+            m['AnchorTarget'], f"{dataset_path}: AnchorTarget"
+        ),
+        'anchor_level': _strict_nonnegative_int_vector(
+            m['AnchorLevel'], f"{dataset_path}: AnchorLevel"
+        ),
+        'state_uid': state_uid,
+        'state_seed_id': state_seed_id,
+        # Explicit alias: this is the stable RNG stream, not a numbered-file row.
+        'state_stream_id': state_seed_id.copy(),
+        'damage_seed': damage_seed,
+        'random_stream_schedule_version': schedule,
+        'state_stream_names': state_stream_names,
+        'passage_stream_names': passage_stream_names,
+        'state_named_stream_seed_id': state_named,
+        'passage_named_stream_seed_id': passage_named,
+        'latent_bearing_fixity': latent_bearing,
+        'latent_crack_on': _strict_binary_vector(
+            m['LatentCrackOn'], f"{dataset_path}: LatentCrackOn"
+        ),
+        'crack_on': _strict_binary_vector(
+            m['CrackOn'], f"{dataset_path}: CrackOn"
+        ),
+        'damage_states': damage_states,
+        'bearing_fixity': bearing_fixity,
     }
     n = len(family)
-    if not (len(table['anchor_target']) == len(table['anchor_level'])
-            == len(table['crack_on']) == table['damage_states'].shape[0]
-            == table['bearing_fixity'].shape[0] == n):
+    if not (
+        len(table['anchor_target']) == len(table['anchor_level'])
+        == len(table['state_uid']) == len(table['state_seed_id'])
+        == len(table['latent_crack_on']) == len(table['crack_on'])
+        == table['latent_bearing_fixity'].shape[0]
+        == table['damage_states'].shape[0]
+        == table['bearing_fixity'].shape[0] == n
+    ):
         raise RuntimeError(
             f"{dataset_path}: state-table arrays are not row-aligned "
             f"(family={n}, target={len(table['anchor_target'])}, "
-            f"level={len(table['anchor_level'])}, crack={len(table['crack_on'])}, "
+            f"level={len(table['anchor_level'])}, uid={len(table['state_uid'])}, "
+            f"seed={len(table['state_seed_id'])}, "
+            f"latent_crack={len(table['latent_crack_on'])}, "
+            f"crack={len(table['crack_on'])}, "
+            f"latent_fixity={table['latent_bearing_fixity'].shape[0]}, "
             f"scour={table['damage_states'].shape[0]}, "
             f"fixity={table['bearing_fixity'].shape[0]}) — corrupt table.")
+    for row, family_name in enumerate(table["family"]):
+        target = int(table["anchor_target"][row])
+        level = int(table["anchor_level"][row])
+        if family_name in ("scour_only", "bearing_only"):
+            if target <= 0 or level <= 0:
+                raise RuntimeError(
+                    f"{dataset_path}: {family_name} row {row + 1} needs positive "
+                    "AnchorTarget and AnchorLevel."
+                )
+        elif target != 0 or level != 0:
+            raise RuntimeError(
+                f"{dataset_path}: non-anchor family {family_name!r} row "
+                f"{row + 1} must have AnchorTarget=AnchorLevel=0."
+            )
+        latent_crack = bool(table["latent_crack_on"][row])
+        active_crack = bool(table["crack_on"][row])
+        if family_name in ("target_healthy", "scour_only", "bearing_only"):
+            if latent_crack or active_crack:
+                raise RuntimeError(
+                    f"{dataset_path}: controlled family {family_name!r} row "
+                    f"{row + 1} cannot carry latent/active crack."
+                )
+        if family_name == "nuisance_only" and not latent_crack:
+            raise RuntimeError(
+                f"{dataset_path}: latent nuisance-only row {row + 1} must have "
+                "LatentCrackOn=true (active CrackOn may be dormant by rung)."
+            )
+        if active_crack and not latent_crack:
+            raise RuntimeError(
+                f"{dataset_path}: row {row + 1} activates crack without its "
+                "registered latent crack draw."
+            )
+    if not (
+        np.array_equal(
+            table["bearing_fixity"],
+            np.zeros_like(table["bearing_fixity"]),
+        )
+        or np.array_equal(
+            table["bearing_fixity"], table["latent_bearing_fixity"]
+        )
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: active BearingFixity must be either wholly dormant "
+            "(all zero) or exactly the latent CRN matrix."
+        )
+    if not (
+        np.array_equal(
+            table["crack_on"], np.zeros_like(table["crack_on"])
+        )
+        or np.array_equal(table["crack_on"], table["latent_crack_on"])
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: active CrackOn must be either wholly dormant or "
+            "exactly the latent CRN vector."
+        )
     return table
 
 
@@ -1183,36 +2909,97 @@ def _stable_stratum_seed(seed: int, stratum_key: str) -> int:
 
 
 def _stratum_keys(table: dict, dano_max: float | None) -> list[str]:
-    """One stratum key per state (Feature A). Strata are the units the split
-    balances across partitions:
-      * scour_only / bearing_only -> (family, anchor target): each pier's/side's
-        anchor set (n_anchor_levels x n_anchor_reps = 8 states) spans all three
-        partitions; the severity LEVELS inside are shuffled, and which level
-        landed where is pre-registered in split_manifest.json (levels are NOT
-        their own strata — with 2 replicas a per-level stratum would never
-        reach inner-val under the assignment pattern).
-      * target_healthy / nuisance_only -> the family itself.
-      * joint -> crack flag x severity bin (max normalized head, terciles):
-        balances the crack confound and the severity range across partitions.
+    """One registered semantic stratum per state.
+
+    * anchor families use ``family + target + level``.  R11 generates five
+      semantic replicas of every level, so the 3/1/1 pattern puts that exact
+      severity in train/validation/test;
+    * target-healthy and latent nuisance-only use their family;
+    * joint uses *latent* crack status and scour-only severity.  Active crack
+      and bearing mechanisms differ by rung, so using either would destroy the
+      common-random-number partition parity the paired contrasts require.
     """
-    ds, bf = table['damage_states'], table['bearing_fixity']
-    # Normalisers for the joint severity bins. dano_max comes from the manifest;
-    # bearing uses the observed table max (bin edges only — not a label scale).
+    ds = table['damage_states']
     dmax = float(dano_max) if dano_max else max(float(ds.max()), 1e-12)
-    bmax = float(bf.max())
     keys = []
     for i, fam in enumerate(table['family']):
         if fam in ('scour_only', 'bearing_only'):
-            keys.append(f"{fam}|target{int(table['anchor_target'][i])}")
+            keys.append(
+                f"{fam}|target{int(table['anchor_target'][i])}"
+                f"|level{int(table['anchor_level'][i])}"
+            )
         elif fam in ('target_healthy', 'nuisance_only'):
             keys.append(fam)
         else:                                                    # joint
             sev_s = float(ds[i].max()) / dmax
-            sev_b = (float(bf[i].max()) / bmax) if bmax > 0 else 0.0
-            sev = min(max(sev_s, sev_b), 1.0)
+            sev = min(max(sev_s, 0.0), 1.0)
             sev_bin = min(int(sev * N_JOINT_SEV_BINS), N_JOINT_SEV_BINS - 1)
-            keys.append(f"joint|crack{int(bool(table['crack_on'][i]))}|sev{sev_bin}")
+            keys.append(
+                f"joint|latentcrack"
+                f"{int(bool(table['latent_crack_on'][i]))}"
+                f"|scoursev{sev_bin}"
+            )
     return keys
+
+
+def _canonical_state_assignment(
+    table: dict,
+    dano_max: float | None,
+    seed: int,
+) -> tuple[list[str], list[str]]:
+    """Return row-aligned strata/partitions from semantic UIDs, never DC rows."""
+
+    strata = _stratum_keys(table, dano_max)
+    n_states = len(table["state_uid"])
+    assignment: list[str | None] = [None] * n_states
+    for key in sorted(set(strata)):
+        # Sorting first removes all construction-order/DC dependence.  The RNG
+        # then sees the same ordered UID set in every geometry-compatible rung.
+        members = sorted(
+            (row for row in range(n_states) if strata[row] == key),
+            key=lambda row: table["state_uid"][row],
+        )
+        rng = np.random.default_rng(_stable_stratum_seed(seed, key))
+        permutation = rng.permutation(len(members))
+        for position, member_position in enumerate(permutation):
+            assignment[members[int(member_position)]] = STRATIFY_PATTERN[
+                position % len(STRATIFY_PATTERN)
+            ]
+    if any(value is None for value in assignment):
+        raise RuntimeError("semantic UID split left an unassigned state.")
+    return strata, [str(value) for value in assignment]
+
+
+def semantic_split_descriptor(
+    table: dict,
+    dano_max: float | None,
+    seed: int = SPLIT_SEED,
+) -> dict:
+    """Canonical UID→partition record embedded in provenance artifacts."""
+
+    strata, assignment = _canonical_state_assignment(table, dano_max, seed)
+    records = [
+        {
+            "state_uid": table["state_uid"][row],
+            "state_seed_id": int(table["state_seed_id"][row]),
+            "stratum": strata[row],
+            "partition": assignment[row],
+        }
+        for row in range(len(assignment))
+    ]
+    records.sort(key=lambda record: record["state_uid"])
+    return {
+        "schema": "ttbi-semantic-split-v1",
+        "seed": int(seed),
+        "assignment_by_uid": records,
+        "assignment_by_uid_sha256": _identity_sha256(records),
+        "partition_counts": {
+            partition: int(sum(
+                record["partition"] == partition for record in records
+            ))
+            for partition in ("train", "val", "test")
+        },
+    }
 
 
 def _write_or_verify_split_manifest(dataset_dir: str, table: dict,
@@ -1231,17 +3018,32 @@ def _write_or_verify_split_manifest(dataset_dir: str, table: dict,
         fam_counts[fam] = {p: sum(1 for s, a in enumerate(assignment)
                                   if table['family'][s] == fam and a == p)
                            for p in ('train', 'val', 'test')}
+    identity = state_identity_descriptor(table)
+    split_identity = semantic_split_descriptor(
+        table, _read_dano_max(dataset_dir), seed
+    )
+    assignment_by_uid = split_identity["assignment_by_uid"]
     payload = {
-        "split_manifest_version": 1,
+        "split_manifest_version": 2,
         "policy": {"seed": seed, "test_frac": SPLIT_TEST_FRAC,
                    "val_frac": SPLIT_VAL_FRAC,
                    "pattern": list(STRATIFY_PATTERN),
-                   "n_joint_sev_bins": N_JOINT_SEV_BINS},
+                   "n_joint_sev_bins": N_JOINT_SEV_BINS,
+                   "ordering": "lexicographically sorted StateUID within stratum",
+                   "joint_basis": "latent crack + scour-only severity"},
         "dataset_gen_fingerprint": gen_fp,
         "n_states": len(assignment),
+        "state_identity": identity,
         "state_family": list(table['family']),
+        "state_uid": list(table["state_uid"]),
+        "state_seed_id": [
+            int(value) for value in table["state_seed_id"]
+        ],
         "stratum": list(strata),
         "assignment": list(assignment),
+        "assignment_by_uid": assignment_by_uid,
+        "assignment_by_uid_sha256":
+            split_identity["assignment_by_uid_sha256"],
         "partition_counts_by_family": fam_counts,
     }
     path = os.path.join(dataset_dir, 'split_manifest.json')
@@ -1282,9 +3084,9 @@ def canonical_grouped_splits(
       - outer-TEST (20%): UNTOUCHED until the final reported metrics, so the
         numbers in the paper are not the same set that selected the model.
 
-    Stratification (Feature A): states are assigned to partitions PER STRATUM
-    (family / anchor target / joint crack x severity bin — see _stratum_keys)
-    with a deterministic seeded permutation + the fixed 60/20/20 pattern, so
+    R11 stratification assigns semantic UIDs per stratum (family; anchor
+    family×target×level; joint latent-crack×scour-severity) using a seeded
+    permutation of sorted UIDs plus the fixed 60/20/20 pattern, so
     every family is GUARANTEED present in all three partitions (the old random
     GroupShuffleSplit left ~15% cross-seed odds of an empty disentanglement
     probe — audit R6 C8C). Fully deterministic: same dataset + seed -> same
@@ -1328,18 +3130,9 @@ def canonical_grouped_splits(
             f"groups reference states {uniq.min()}..{uniq.max()} "
             f"({len(uniq)} unique) but the state table has {n_states} rows — "
             f"stale cache or mismatched dataset. Rebuild the cache.")
-    strata = _stratum_keys(table, _read_dano_max(dataset_dir))
-    # ── deterministic per-stratum assignment ────────────────────────────────
-    assignment: list[str | None] = [None] * n_states
-    for key in sorted(set(strata)):
-        members = [s for s in range(n_states) if strata[s] == key]
-        # Seeded permutation removes any construction-order artifact (anchor
-        # levels ascend by build order) while staying fully deterministic.
-        rng = np.random.default_rng(_stable_stratum_seed(seed, key))
-        perm = rng.permutation(len(members))
-        for pos, mi in enumerate(perm):
-            assignment[members[mi]] = STRATIFY_PATTERN[pos % len(STRATIFY_PATTERN)]
-    assert all(a is not None for a in assignment)
+    strata, assignment = _canonical_state_assignment(
+        table, _read_dano_max(dataset_dir), seed
+    )
     # ── coverage guarantee (the whole point of Feature A) ───────────────────
     # Every family with >= len(pattern) states must appear in ALL partitions.
     for fam in sorted(set(table['family'])):
@@ -1392,7 +3185,7 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     """
     Build the base filename fragment that uniquely identifies a cache file.
 
-    Format:  <dataset>_<method>_dofs_<d0>_<d1>_..._disc<k>_gs5
+    Format:  <dataset>_<method>_dofs_<d0>_<d1>_..._disc<k>_gs7
 
     The trailing schema tag versions everything baked into the cache: the split
     policy (scaler fit on the canonical grouped TRAIN partition) AND the loaded
@@ -1402,8 +3195,9 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     inventory + stricter loader payload); **gs5** = R8 (family-STRATIFIED split
     + mandatory state table + per-file state_family); **gs6** = audit r3
     2026-07-22 (TRUE Keogh PAA replaces the linear resampler + per-global-DOF
-    paired noise RNG + segment count named in the stem). Older-tag caches are
-    orphaned, never reused.
+    paired noise RNG + segment count named in the stem); **gs7** = R11 semantic
+    UID/stream authentication and row-invariant UID split (which changes the
+    TRAIN states used to fit the scaler). Older-tag caches are orphaned.
 
     Kept private; the public filenames (features, labels, groups, scaler) are
     constructed in get_or_create_cache by appending the appropriate suffix.
@@ -1599,9 +3393,25 @@ def get_or_create_cache(
     cur_src_root = None
     cur_digests_sha = None
     cur_states_sha = None
+    cur_state_identity = None
+    cur_semantic_split = None
+    cur_matlab_release = None
+    cur_release_qualification = None
+    cur_generation_metadata = None
+    cur_runtime_source = None
     src_dir = os.path.join('data', dataset_name)
     if regression and os.path.isdir(src_dir):
         cur_nstates, cur_npass, cur_schema, cur_fp = _read_manifest(src_dir)
+        # R11: qualification/foreign-stack/source data is rejected even on a
+        # cache hit; a valid cache can never launder an ineligible dataset.
+        cur_generation_metadata = _validate_campaign_generation_metadata(
+            src_dir
+        )
+        cur_runtime_source = python_runtime_source_root()
+        cur_matlab_release = cur_generation_metadata["matlab_release"]
+        cur_release_qualification = cur_generation_metadata[
+            "release_qualification_run"
+        ]
         cur_dano = _read_dano_max(src_dir)
         state_files = sorted(f for f in os.listdir(src_dir) if _re_state.fullmatch(f))
         n_present = len(state_files)
@@ -1620,32 +3430,91 @@ def get_or_create_cache(
         cur_digests_sha = _sha256_file(fd_path) if os.path.exists(fd_path) else None
         dsm_path = os.path.join(src_dir, 'damage_states.mat')
         cur_states_sha = _sha256_file(dsm_path) if os.path.exists(dsm_path) else None
+        state_table = read_state_table(src_dir)
+        cur_state_identity = state_identity_descriptor(state_table)
+        cur_semantic_split = semantic_split_descriptor(
+            state_table, cur_dano, SPLIT_SEED
+        )
         # `complete` requires the marker to EXIST *and* its content (schema+fp) to
         # match the manifest (audit R7.1 P3): a stale/wrong-content marker on the
         # fast path must not certify a source as complete.
-        marker = os.path.join(src_dir, '_GENERATION_COMPLETE')
         marker_ok = False
-        if os.path.exists(marker):
-            try:
-                mk = [ln.strip() for ln in open(marker).read().splitlines() if ln.strip()]
-                # schema + fp + a ROOT source digest (line 3) all required.
-                marker_ok = (mk[:2] == [cur_schema, cur_fp] and len(mk) >= 3)
-                if marker_ok:
-                    cur_src_root = mk[2]      # regeneration -> new root -> cache stale
-            except Exception:
-                marker_ok = False
+        try:
+            mk = list(_read_completion_marker(src_dir))
+            # schema + fp + a ROOT source digest (line 3) all required.
+            marker_ok = mk[:2] == [cur_schema, cur_fp]
+            if marker_ok:
+                cur_src_root = mk[2]      # regeneration -> new root -> cache stale
+        except RuntimeError:
+            marker_ok = False
         cur_complete = (marker_ok and cur_nstates is not None
                         and n_present == cur_nstates)
     # SOURCE-provenance fields (compared as a block on the fast path). Includes the
     # source ROOT digest (audit R7.1 P4), so regenerating the dataset — which
     # rewrites file_digests + the marker root — invalidates a stale cache.
     cur_src = {"gen_schema": cur_schema, "gen_fingerprint": cur_fp,
+               "python_runtime_source_root_sha256": (
+                   cur_runtime_source.sha256
+                   if cur_runtime_source else None
+               ),
+               "python_runtime_source_file_count": (
+                   cur_runtime_source.file_count
+                   if cur_runtime_source else None
+               ),
+               "generation_behavior_version": (
+                   cur_generation_metadata.get("generation_behavior_version")
+                   if cur_generation_metadata else None
+               ),
+               "matlab_release": cur_matlab_release,
+               "campaign_matlab_release": (
+                   cur_generation_metadata.get("campaign_matlab_release")
+                   if cur_generation_metadata else None
+               ),
+               "actual_matlab_environment_descriptor": (
+                   cur_generation_metadata.get(
+                       "actual_matlab_environment_descriptor"
+                   ) if cur_generation_metadata else None
+               ),
+               "actual_matlab_environment_sha256": (
+                   cur_generation_metadata.get(
+                       "actual_matlab_environment_sha256"
+                   ) if cur_generation_metadata else None
+               ),
+               "campaign_matlab_environment_descriptor": (
+                   cur_generation_metadata.get(
+                       "campaign_matlab_environment_descriptor"
+                   ) if cur_generation_metadata else None
+               ),
+               "campaign_matlab_environment_sha256": (
+                   cur_generation_metadata.get(
+                       "campaign_matlab_environment_sha256"
+                   ) if cur_generation_metadata else None
+               ),
+               "generator_source_root_sha256": (
+                   cur_generation_metadata.get(
+                       "generator_source_root_sha256"
+                   ) if cur_generation_metadata else None
+               ),
+               "generator_source_file_count": (
+                   cur_generation_metadata.get(
+                       "generator_source_file_count"
+                   ) if cur_generation_metadata else None
+               ),
+               "qualification_source_sha256": (
+                   cur_generation_metadata.get(
+                       "qualification_source_sha256"
+                   ) if cur_generation_metadata else None
+               ),
+               "release_qualification_run": cur_release_qualification,
                "n_states": cur_nstates, "passages_per_state": cur_npass,
                "dano_max": cur_dano, "manifest_sha256": cur_manifest_sha,
-               "source_root": cur_src_root, "complete": cur_complete,
+               "dataset_content_root_sha256": cur_src_root,
+               "complete": cur_complete,
                "inventory": cur_inventory,
                "file_digests_sha256": cur_digests_sha,
-               "damage_states_sha256": cur_states_sha}
+               "damage_states_sha256": cur_states_sha,
+               "state_identity": cur_state_identity,
+               "semantic_split": cur_semantic_split}
 
     # Audit r4: a cache hit is allowed only after the recorded SOURCE bytes
     # themselves have passed SHA-256 verification.  Memoisation makes the first
@@ -1669,7 +3538,30 @@ def get_or_create_cache(
         if expected_provenance is not None:
             # Lazy import avoids a module-level dataset <-> protocol cycle.
             from core.protocol import read_dataset_provenance
-            current_provenance = read_dataset_provenance(src_dir)
+            rung = (
+                (config.get("protocol_descriptor") or {})
+                .get("rung", {})
+            )
+            required_rung = {
+                "stage", "dataset", "target_supports", "bearing_targets",
+                "dataset_provenance",
+            }
+            if (
+                not isinstance(rung, dict)
+                or not required_rung.issubset(rung)
+                or rung.get("dataset") != dataset_name
+            ):
+                raise RuntimeError(
+                    f"{dataset_name}: protocol-hashed cache config lacks the "
+                    "exact stage/dataset/target rung contract."
+                )
+            current_provenance = read_dataset_provenance(
+                src_dir,
+                expected_stage=rung.get("stage"),
+                expected_dataset=rung.get("dataset"),
+                expected_target_supports=rung.get("target_supports"),
+                expected_bearing_targets=rung.get("bearing_targets"),
+            )
             if current_provenance != expected_provenance:
                 raise RuntimeError(
                     f"{dataset_name}: source identity changed after the protocol "

@@ -1,5 +1,9 @@
 # Deep-research prompt — vehicle suspension damage as a drive-by EOV
 
+> **HISTORICAL RESEARCH PROMPT.** Current R11 evaluates empirical robustness
+> under the simulated nuisance distribution; it does not assume or claim
+> mathematical invariance.
+
 Paste the block below into Gemini Deep Research (or NotebookLM Deep Research).
 Written 2026-07-21, motivated by a methodology review of the ablation ladder: the
 train-side damage model currently covers wheel out-of-roundness only (polygonization

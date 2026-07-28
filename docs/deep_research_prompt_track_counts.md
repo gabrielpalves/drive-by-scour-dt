@@ -1,5 +1,9 @@
 # Deep-research prompt — track-defect COUNTS and PREVALENCE per 100 m
 
+> **HISTORICAL RESEARCH PROMPT.** Current R11 evaluates empirical robustness
+> under the simulated nuisance distribution; it does not assume or claim
+> mathematical invariance.
+
 Paste the block below into NotebookLM Deep Research (notebook: "Probabilistic Graphical
 Models for Predictive Digital Twins at Scale" — it already holds the Track-Layer Deep
 Research report and ~106 sources). Written 2026-07-14.

@@ -1,5 +1,10 @@
 # External audit R4 — implementation result and publication gate
 
+> **HISTORICAL AUDIT SNAPSHOT — SUPERSEDED BY THE CURRENT R11 GATE.** This
+> report applies only to checkpoint `f805fbe`. It does not authorize R11
+> generation, ablation, bundle publication or current paper claims. Current
+> authority: `README_CAMPAIGN.md` and `docs/audit_r5_results.md`.
+
 Date: 2026-07-25
 Audited baseline: `main@6f61fa0`
 R4 implementation checkpoint: `f805fbe`

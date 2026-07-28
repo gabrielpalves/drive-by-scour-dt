@@ -1,32 +1,193 @@
-"""check_loader_provenance.py - adversarial loader-validation test (audit R4).
+"""Adversarial R11 loader/provenance validation.
 
 Run:  python check_loader_provenance.py   (needs numpy + scipy)
 
 Builds a tiny VALID multi-output dataset in a temp dir, asserts it loads, then
 mutates it into each bad variant and asserts the loader REJECTS it. This proves
-that stale (R2/R3 schema), incomplete (gap / short state), corrupt (bad
-contact_log / NaN tension), and mixed-provenance (fingerprint mismatch) datasets
-cannot silently enter the pipeline. MUST print ALL PASS before launching runs.
+that stale, incomplete, corrupt, mixed-provenance, qualification, wrong
+numerical-environment, and wrong reviewed-source datasets cannot silently enter
+the pipeline. MUST print ALL PASS before launching runs.
 """
 import hashlib
+import json
 import os
 import re
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import scipy.io as sio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from core.dataset import _load_multi_output, _EXPECTED_GEN_SCHEMA  # noqa: E402
+from core.dataset import (                                            # noqa: E402
+    _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+    _EXPECTED_GEN_SCHEMA,
+    _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+    _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+    _EXPECTED_MATLAB_RELEASE,
+    _load_multi_output,
+    _read_manifest_generation_metadata,
+)
+from core.source_provenance import generator_source_root              # noqa: E402
 
 _DOF_SOURCE = {0: ('AcelPrimVag', 0), 1: ('AcelPrimVag', 1), 2: ('AcelPrimVag', 2),
                3: ('AcelRodaPrimVag', 0), 4: ('AcelRodaPrimVag', 1),
                5: ('PitchPrimVag', 0), 6: ('PitchPrimVag', 1), 7: ('PitchPrimVag', 2)}
 NST, NP, L = 3, 4, 64          # 3 states, 4 passages, length 64
-FP = "fp-canonical-v1"
 fails = 0
+_GENERATOR = generator_source_root(Path(__file__).resolve().parent)
+_QUALIFICATION_SHA = "a" * 64
+DAMAGE_SEED = 1
+RNG_SCHEDULE = "uid-named-substreams-v2"
+STATE_STREAM_NAMES = (
+    "operations", "crack", "profile-state", "track", "profile-phase"
+)
+PASSAGE_STREAM_NAMES = ("profile-passage", "oor-passage")
+STATE_UIDS = tuple(f"fixture-state-{index:03d}" for index in range(1, NST + 1))
+
+
+def _state_seed_id(uid):
+    token = f"ttbi-state-seed-v1|damage_seed={DAMAGE_SEED}|{uid}"
+    value = int(hashlib.sha256(token.encode("ascii")).hexdigest()[:8], 16)
+    assert value != 0
+    return value
+
+
+def _named_seed(root, uid, stream, passage=None):
+    token = (
+        f"{RNG_SCHEDULE}|root={root}|uid={uid}|stream={stream}"
+        + ("" if passage is None else f"|pass={passage:05d}")
+    )
+    value = int(hashlib.sha256(token.encode("ascii")).hexdigest()[:8], 16)
+    assert value != 0
+    return value
+
+
+def _generation_config_json():
+    return json.dumps(
+        {
+            "schema": _EXPECTED_GEN_SCHEMA,
+            "generation_behavior_version":
+                _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+            "campaign_matlab_release": _EXPECTED_MATLAB_RELEASE,
+            "campaign_matlab_environment_sha256":
+                _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+            "generator_source_root_sha256": _GENERATOR.sha256,
+            "qualification_source_sha256": "PRODUCTION",
+            "STAGE": "fixture_stage",
+            "n_states": NST,
+            "Npass": NP,
+            "damage_seed": DAMAGE_SEED,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+GENERATION_CONFIG_JSON = _generation_config_json()
+FP = hashlib.sha256(GENERATION_CONFIG_JSON.encode("utf-8")).hexdigest()
+
+
+def _state_identity(idx, npass=NP):
+    uid = f"fixture-state-{idx:03d}"
+    root = _state_seed_id(uid)
+    state_named = np.asarray([[
+        _named_seed(root, uid, name) for name in STATE_STREAM_NAMES
+    ]], dtype=np.uint32)
+    passage_named = np.asarray([
+        [
+            _named_seed(root, uid, name, passage=passage)
+            for name in PASSAGE_STREAM_NAMES
+        ]
+        for passage in range(1, npass + 1)
+    ], dtype=np.uint32)
+    return {
+        "state_uid": uid,
+        "state_seed_id": np.uint32(root),
+        "random_stream_schedule_version": RNG_SCHEDULE,
+        "state_named_stream_seed_id": state_named,
+        "passage_named_stream_seed_id": passage_named,
+        "latent_bearing_fixity": np.zeros((1, 2)),
+        "latent_crack_on": np.array([[False]], dtype=np.bool_),
+        "crack_on": np.array([[False]], dtype=np.bool_),
+        "bearing_fixity": np.zeros((1, 2)),
+        "scour_supports": np.array([[2, 3]], dtype=np.uint32),
+    }
+
+
+def _nested_provenance(*, matlab_release=_EXPECTED_MATLAB_RELEASE,
+                       qualification=False,
+                       qualification_source="PRODUCTION"):
+    return {
+        'gen_schema': _EXPECTED_GEN_SCHEMA,
+        'gen_fingerprint': FP,
+        'matlab_release': matlab_release,
+        'campaign_matlab_release': _EXPECTED_MATLAB_RELEASE,
+        'actual_matlab_environment_descriptor':
+            _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+        'actual_matlab_environment_sha256':
+            _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+        'campaign_matlab_environment_descriptor':
+            _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+        'campaign_matlab_environment_sha256':
+            _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+        'generator_source_root_sha256': _GENERATOR.sha256,
+        'generator_source_digest_lines': _GENERATOR.digest_lines,
+        'generator_source_file_count': _GENERATOR.file_count,
+        'qualification_source_sha256': qualification_source,
+        'release_qualification_run': qualification,
+    }
+
+
+def _top_level_provenance(nested):
+    return {
+        'file_gen_schema': nested['gen_schema'],
+        'file_gen_fingerprint': nested['gen_fingerprint'],
+        'file_state_uid': nested['state_uid'],
+        'file_state_seed_id': nested['state_seed_id'],
+        'file_random_stream_schedule_version':
+            nested['random_stream_schedule_version'],
+        'file_matlab_release': nested['matlab_release'],
+        'file_campaign_matlab_release':
+            nested['campaign_matlab_release'],
+        'file_release_qualification_run':
+            nested['release_qualification_run'],
+        'file_actual_matlab_environment_sha256':
+            nested['actual_matlab_environment_sha256'],
+        'file_campaign_matlab_environment_sha256':
+            nested['campaign_matlab_environment_sha256'],
+        'file_generator_source_root_sha256':
+            nested['generator_source_root_sha256'],
+        'file_qualification_source_sha256':
+            nested['qualification_source_sha256'],
+    }
+
+
+def _save_state(path, idx, data, *, nested_overrides=None, nested_drop=(),
+                top_overrides=None, top_drop=()):
+    nested = _nested_provenance()
+    nested.update(_state_identity(idx))
+    nested.update(data)
+    nested.update(nested_overrides or {})
+    stamp_source = dict(nested)
+    for field in nested_drop:
+        nested.pop(field, None)
+    # save_progress.m derives these stamps from the final nested payload.
+    # Individual tests can then mutate one representation independently.
+    top = _top_level_provenance(stamp_source)
+    top.update(top_overrides or {})
+    for field in top_drop:
+        top.pop(field, None)
+    sio.savemat(
+        os.path.join(path, f"{idx:04d}.mat"),
+        {'data': nested, **top},
+        long_field_names=True,
+    )
+    _finalize(path)
 
 
 def _cellrow(nrows, npass=NP, nan_passage=None):
@@ -54,55 +215,209 @@ def _finalize(path):
     """Recompute source SHA-256 digests + root and (re)write file_digests.mat and
     the 3-line completion marker (schema, fp, root). Called after any STATE write
     so the loader's per-file SHA + root checks reach the case's intended guard."""
-    files = sorted(f for f in os.listdir(path) if re.fullmatch(r'\d{4}\.mat', f))
-    per = {f: hashlib.sha256(open(os.path.join(path, f), 'rb').read()).hexdigest()
-           for f in files}
+    files = [
+        f for f in os.listdir(path)
+        if re.fullmatch(r'\d{4}\.mat', f)
+        or f in {'case_info.mat', 'damage_states.mat'}
+    ]
+    per = {
+        f: hashlib.sha256(Path(path, f).read_bytes()).hexdigest()
+        for f in sorted(files)
+    }
     lines = "\n".join(f"{k}:{per[k]}" for k in sorted(per))
     root = hashlib.sha256(lines.encode()).hexdigest()
-    sio.savemat(os.path.join(path, 'file_digests.mat'),
-                {'file_digests': {'digest_lines': lines, 'root': root}})
+    sio.savemat(
+        os.path.join(path, 'file_digests.mat'),
+        {'file_digests': {
+            'schema': 'source-digests-v2',
+            'scope': 'NNNN.mat+case_info.mat+damage_states.mat',
+            'digest_lines': lines,
+            'root': root,
+        }},
+    )
     with open(os.path.join(path, '_GENERATION_COMPLETE'), 'w') as fh:
         fh.write(f"{_EXPECTED_GEN_SCHEMA}\n{FP}\n{root}\n")
 
 
+def _foreign_generator_attestation():
+    """A canonical and internally coherent source identity unlike this tree."""
+    rows = _GENERATOR.digest_lines.split("\n")
+    name, digest = rows[0].split(":", 1)
+    replacement = "0" * 64 if digest != "0" * 64 else "1" * 64
+    rows[0] = f"{name}:{replacement}"
+    digest_lines = "\n".join(rows)
+    return {
+        "generator_source_root_sha256":
+            hashlib.sha256(digest_lines.encode("utf-8")).hexdigest(),
+        "generator_source_digest_lines": digest_lines,
+        "generator_source_file_count": len(rows),
+    }
+
+
 def _write_state(path, idx, schema=_EXPECTED_GEN_SCHEMA, fp=FP,
                  clog=None, npass=NP, drop_fp=False, drop_clog=False,
-                 family='joint', drop_family=False):
+                 family='joint', drop_family=False,
+                 matlab_release=_EXPECTED_MATLAB_RELEASE,
+                 qualification=False, drop_release=False,
+                 drop_qualification=False,
+                 qualification_source="PRODUCTION",
+                 nested_overrides=None, nested_drop=(),
+                 top_overrides=None, top_drop=()):
     if clog is None:
         clog = np.column_stack([np.zeros(npass), np.zeros(npass),
                                 np.zeros(npass), -1.0e5 * np.ones(npass)])
     d = {'scour_vector': np.array([[0.0, 0.1, 0.2, 0.0]]),
-         'gen_schema': schema, 'state_family': family,   # Feature A identity
+         'state_family': family,   # Feature A identity
          'AcelPrimVag': _cellrow(3),
          'AcelRodaPrimVag': _cellrow(4), 'PitchPrimVag': _cellrow(3),
          'contact_log': np.asarray(clog, dtype=float), **_raw_meta(npass)}
-    if not drop_fp:
-        d['gen_fingerprint'] = fp
     if drop_clog:
         del d['contact_log']
     if drop_family:
         del d['state_family']
-    sio.savemat(os.path.join(path, f"{idx:04d}.mat"), {'data': d})
-    _finalize(path)      # refresh digests+marker so SHA checks pass -> intended guard
+    overrides = {
+        'gen_schema': schema,
+        'gen_fingerprint': fp,
+        'matlab_release': matlab_release,
+        'release_qualification_run': qualification,
+        'qualification_source_sha256': qualification_source,
+        **(nested_overrides or {}),
+    }
+    drops = set(nested_drop)
+    if drop_fp:
+        drops.add('gen_fingerprint')
+    if drop_release:
+        drops.add('matlab_release')
+    if drop_qualification:
+        drops.add('release_qualification_run')
+    _save_state(
+        path, idx, d,
+        nested_overrides=overrides,
+        nested_drop=drops,
+        top_overrides=top_overrides,
+        top_drop=top_drop,
+    )
 
 
 def _write_state_table(path, n_states=NST, families=None):
     """damage_states.mat family table (Feature A) — MANDATORY for the loader."""
     fams = families or ['joint'] * n_states
+    identities = [_state_identity(index) for index in range(1, n_states + 1)]
+    state_named = np.vstack([
+        identity["state_named_stream_seed_id"] for identity in identities
+    ])
+    passage_named = np.stack([
+        identity["passage_named_stream_seed_id"] for identity in identities
+    ])
     sio.savemat(os.path.join(path, 'damage_states.mat'), {
         'StateFamily':  np.array(fams, dtype=object).reshape(-1, 1),
-        'AnchorTarget': np.zeros((n_states, 1)), 'AnchorLevel': np.zeros((n_states, 1)),
-        'CrackOn':      np.zeros((n_states, 1), dtype=np.uint8),
-        'DamageStates': np.tile([0.0, 0.1, 0.2, 0.0], (n_states, 1)),
-        'BearingFixity': np.zeros((n_states, 2))})
+        'AnchorTarget': np.zeros((n_states, 1)),
+        'AnchorLevel': np.zeros((n_states, 1)),
+        'StateUID': np.asarray(
+            [identity["state_uid"] for identity in identities],
+            dtype=object,
+        ).reshape(-1, 1),
+        'StateSeedID': np.asarray(
+            [identity["state_seed_id"] for identity in identities],
+            dtype=np.uint32,
+        ).reshape(-1, 1),
+        'LatentBearingFixity': np.zeros((n_states, 2)),
+        'LatentCrackOn': np.zeros((n_states, 1), dtype=np.uint8),
+        'CrackOn': np.zeros((n_states, 1), dtype=np.uint8),
+        'StateNamedStreamSeedID': state_named,
+        'PassageNamedStreamSeedID': passage_named,
+        'PassageNamedStreamSeedIDFlat': passage_named.reshape(
+            n_states, -1, order="F"
+        ),
+        'random_stream_schedule_version': RNG_SCHEDULE,
+        'state_stream_names': np.asarray(
+            STATE_STREAM_NAMES, dtype=object
+        ).reshape(1, -1),
+        'passage_stream_names': np.asarray(
+            PASSAGE_STREAM_NAMES, dtype=object
+        ).reshape(1, -1),
+        'DamageStates': np.tile(
+            [0.0, 0.1, 0.2, 0.0], (n_states, 1)
+        ),
+        'BearingFixity': np.zeros((n_states, 2)),
+        'scour_supports': np.array([[2, 3]], dtype=np.uint32),
+    })
 
 
 def _write_manifest(path, n_states=NST, npass=NP, schema=_EXPECTED_GEN_SCHEMA,
-                    fp=FP, dano_max=0.60):
+                    fp=FP, dano_max=0.60,
+                    matlab_release=_EXPECTED_MATLAB_RELEASE,
+                    qualification=False, drop_release=False,
+                    drop_campaign_release=False, drop_qualification=False,
+                    qualification_source="PRODUCTION",
+                    metadata_overrides=None, metadata_drop=(),
+                    drop_dano=False):
     ci = {'n_states': n_states, 'passages_per_state': npass,
           'gen_schema': schema, 'gen_fingerprint': fp,
-          'scour_dano_max_frac': dano_max}   # A00's real field name
-    sio.savemat(os.path.join(path, 'case_info.mat'), {'case_info': ci})
+          'generation_config_json': GENERATION_CONFIG_JSON,
+          'case_name': 'fixture_dataset',
+          'stage': 'fixture_stage',
+          'damage_mode': 'multi_scour',
+          'L_bridge_m': 60.0,
+          'num_spans': 3,
+          'num_supports': 4,
+          'scour_supports': '[2 3]',
+          'scour_dano_max_frac': dano_max,
+          'n_target_healthy': 0,
+          'n_scour_only': 0,
+          'n_bearing_only': 0,
+          'n_nuisance_only': 0,
+          'n_joint': n_states,
+          'bearing_mode': 'off',
+          'bearing_label': 'fixity_ratio',
+          'use_crack_eov': False,
+          'crack_draw': 'per_state',
+          'profile_mode': 'fixed',
+          'profile_draw': 'per_state',
+          'profile_jitter_sd_mm': 0.0,
+          'use_track_eov': False,
+          'track_draw': 'per_state',
+          'track_L_app': 30.0,
+          'track_L_after': 30.0,
+          'use_oor_eov': False,
+          'oor_flats_enabled': False,
+          'use_signal_noise': False,
+          'use_vehicle_variability': True,
+          'use_speed_variability': True,
+          'use_temp_variability': True,
+          'generation_behavior_version':
+              _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+          'matlab_release': matlab_release,
+          'campaign_matlab_release': _EXPECTED_MATLAB_RELEASE,
+          'release_qualification_run': qualification,
+          'actual_matlab_environment_descriptor':
+              _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+          'actual_matlab_environment_sha256':
+              _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+          'campaign_matlab_environment_descriptor':
+              _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+          'campaign_matlab_environment_sha256':
+              _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+          'generator_source_root_sha256': _GENERATOR.sha256,
+          'generator_source_digest_lines': _GENERATOR.digest_lines,
+          'generator_source_file_count': _GENERATOR.file_count,
+          'qualification_source_sha256': qualification_source}
+    ci.update(metadata_overrides or {})
+    if drop_release:
+        del ci['matlab_release']
+    if drop_campaign_release:
+        del ci['campaign_matlab_release']
+    if drop_qualification:
+        del ci['release_qualification_run']
+    if drop_dano:
+        del ci['scour_dano_max_frac']
+    for field in metadata_drop:
+        ci.pop(field, None)
+    sio.savemat(
+        os.path.join(path, 'case_info.mat'),
+        {'case_info': ci},
+        long_field_names=True,
+    )
 
 
 def _mark_complete(path, schema=_EXPECTED_GEN_SCHEMA, fp=FP):
@@ -146,6 +461,63 @@ try:
     # 0. VALID dataset loads
     p = os.path.join(root, "valid"); _build(p)
     check("valid dataset loads", lambda: _load(p), should_raise=False)
+
+    # Strict scalar/canonical manifest grammar: no int() truncation, no [0]
+    # selection from arrays, and no non-SHA provenance aliases.
+    p = os.path.join(root, "fractionalmanifest"); _build(p)
+    _write_manifest(p, n_states=NST + 0.5)
+    check("fractional n_states manifest rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "arraycountmanifest"); _build(p)
+    _write_manifest(p, npass=np.array([NP, NP]))
+    check("multi-element passage count rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "arrayschemamanifest"); _build(p)
+    _write_manifest(
+        p,
+        schema=np.array(
+            [_EXPECTED_GEN_SCHEMA, _EXPECTED_GEN_SCHEMA],
+            dtype=object,
+        ),
+    )
+    check("multi-element gen_schema rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "arrayfpmanifest"); _build(p)
+    _write_manifest(p, fp=np.array([FP, "d" * 64], dtype=object))
+    check("multi-element gen_fingerprint rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "uppercasefpmanifest"); _build(p)
+    _write_manifest(p, fp=FP.upper())
+    check("noncanonical uppercase fingerprint rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "arraystructmanifest"); _build(p)
+    ci_path = os.path.join(p, "case_info.mat")
+    ci_raw = sio.loadmat(ci_path)["case_info"]
+    sio.savemat(
+        ci_path,
+        {"case_info": np.concatenate((ci_raw, ci_raw), axis=1)},
+        long_field_names=True,
+    )
+    _finalize(p)
+    check("multi-element case_info struct rejected", lambda: _load(p),
+          should_raise=True)
+    check(
+        "generation-metadata reader rejects multi-element case_info struct",
+        lambda: _read_manifest_generation_metadata(p),
+        should_raise=True,
+    )
+
+    p = os.path.join(root, "directorymanifest"); _build(p)
+    ci_path = os.path.join(p, "case_info.mat")
+    os.remove(ci_path)
+    os.mkdir(ci_path)
+    check("non-regular case_info.mat rejected", lambda: _load(p),
+          should_raise=True)
 
     # 1. Stale schema (simulates an R2/R3 file)
     p = os.path.join(root, "stale"); _build(p)
@@ -208,8 +580,8 @@ try:
     def _write_raw(path, idx, d):
         for k, v in _raw_meta().items():   # ensure RAW metadata unless overridden
             d.setdefault(k, v)
-        sio.savemat(os.path.join(path, f"{idx:04d}.mat"), {'data': d})
-        _finalize(path)
+        d.setdefault('state_family', 'joint')
+        _save_state(path, idx, d)
 
     def _good_clog(npass=NP):
         return np.column_stack([np.zeros(npass), np.zeros(npass),
@@ -306,8 +678,8 @@ try:
 
     # ── audit R7.1 P5: RAW mandatory, crop validity, dano_max, full-vector ranges ──
     def _write_bare(path, idx, d):     # write WITHOUT auto RAW metadata
-        sio.savemat(os.path.join(path, f"{idx:04d}.mat"), {'data': d})
-        _finalize(path)
+        d.setdefault('state_family', 'joint')
+        _save_state(path, idx, d)
 
     # 24. Missing RAW field (no DimSpace) -> reject (r7 requires the raw format)
     p = os.path.join(root, "noraw"); _build(p)
@@ -328,9 +700,7 @@ try:
 
     # 26. dano_max missing from manifest -> reject (mandatory in r7)
     p = os.path.join(root, "nodano"); _build(p)
-    sio.savemat(os.path.join(p, 'case_info.mat'), {'case_info': {
-        'n_states': NST, 'passages_per_state': NP,
-        'gen_schema': _EXPECTED_GEN_SCHEMA, 'gen_fingerprint': FP}})   # no dano_max
+    _write_manifest(p, drop_dano=True)
     check("missing dano_max rejected", lambda: _load(p), should_raise=True)
 
     # 27. dano_max out of range (1.5) -> reject
@@ -408,13 +778,32 @@ try:
     os.remove(os.path.join(p, "file_digests.mat"))
     check("missing file_digests rejected", lambda: _load(p), should_raise=True)
 
+    p = os.path.join(root, "arraydigeststruct"); _build(p)
+    fd_path = os.path.join(p, "file_digests.mat")
+    fd_raw = sio.loadmat(fd_path)["file_digests"]
+    sio.savemat(
+        fd_path,
+        {"file_digests": np.concatenate((fd_raw, fd_raw), axis=1)},
+        long_field_names=True,
+    )
+    check("multi-element file_digests struct rejected", lambda: _load(p),
+          should_raise=True)
+
     # 37. Marker root != file_digests root -> reject
     p = os.path.join(root, "badroot"); _build(p)
     with open(os.path.join(p, '_GENERATION_COMPLETE'), 'w') as fh:
         fh.write(f"{_EXPECTED_GEN_SCHEMA}\n{FP}\ndeadbeef\n")   # wrong root line 3
     check("marker root mismatch rejected", lambda: _load(p), should_raise=True)
 
-    # 38. VALID dataset with source digests STILL loads (positive control)
+    # 38. Exact marker grammar: a fourth nonempty line is a restamp/tamper,
+    # even when the three canonical lines remain correct.
+    p = os.path.join(root, "extramarker"); _build(p)
+    with open(os.path.join(p, '_GENERATION_COMPLETE'), 'a') as fh:
+        fh.write("RESTAMPED\n")
+    check("extra completion-marker line rejected", lambda: _load(p),
+          should_raise=True)
+
+    # 39. VALID dataset with source digests STILL loads (positive control)
     p = os.path.join(root, "valid2"); _build(p)
     check("valid dataset (with source digests) loads", lambda: _load(p), should_raise=False)
 
@@ -473,6 +862,264 @@ try:
     _write_state(p, 2, clog=ovr)
     check("brief tension above 24 kN cap rejected", lambda: _load(p),
           should_raise=True)
+
+    # -- R11 exact numerical-environment / qualification firewall -----------
+    # These guards run before signals are admitted and therefore also protect
+    # the cache/study paths from laundering qualification output.
+    p = os.path.join(root, "qualification"); _build(p)
+    _write_manifest(p, qualification=True)
+    check("qualification dataset rejected", lambda: _load(p), should_raise=True)
+
+    p = os.path.join(root, "noqualification"); _build(p)
+    _write_manifest(p, drop_qualification=True)
+    check("missing qualification marker rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "wrongrelease"); _build(p)
+    _write_manifest(p, matlab_release="R2023b")
+    check("wrong MATLAB release rejected", lambda: _load(p), should_raise=True)
+
+    p = os.path.join(root, "nocampaignrelease"); _build(p)
+    _write_manifest(p, drop_campaign_release=True)
+    check("missing campaign release rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "badlogical"); _build(p)
+    _write_manifest(p, qualification=np.array([0, 1]))
+    check("non-scalar qualification marker rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "staterelease"); _build(p)
+    _write_state(p, 2, matlab_release="R2023b")
+    check("per-state release mismatch rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "statequal"); _build(p)
+    _write_state(p, 2, qualification=True)
+    check("per-state qualification mismatch rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "statequalmissing"); _build(p)
+    _write_state(p, 2, drop_qualification=True)
+    check("missing per-state qualification marker rejected", lambda: _load(p),
+          should_raise=True)
+
+    # ── R11 full numerical-environment/source attestation ────────────────
+    # Every case starts from a fully valid fixture, so each rejection reaches
+    # the named guard instead of being masked by an unrelated missing field.
+    manifest_mutations = (
+        ("generation behaviour mismatch rejected",
+         {'generation_behavior_version': 'generation-rules-v3'}, ()),
+        ("missing actual environment descriptor rejected", {},
+         ('actual_matlab_environment_descriptor',)),
+        ("actual environment SHA mismatch rejected",
+         {'actual_matlab_environment_sha256': '0' * 64}, ()),
+        ("missing campaign environment descriptor rejected", {},
+         ('campaign_matlab_environment_descriptor',)),
+        ("campaign environment SHA mismatch rejected",
+         {'campaign_matlab_environment_sha256': '1' * 64}, ()),
+        ("missing generator source root rejected", {},
+         ('generator_source_root_sha256',)),
+        ("generator source digest-lines mismatch rejected",
+         {'generator_source_digest_lines':
+              _GENERATOR.digest_lines + '\nTAMPERED:0'}, ()),
+        ("generator source file-count mismatch rejected",
+         {'generator_source_file_count': _GENERATOR.file_count + 1}, ()),
+        ("production qualification-source mismatch rejected",
+         {'qualification_source_sha256': '2' * 64}, ()),
+    )
+    for case_no, (label, overrides, drops) in enumerate(
+            manifest_mutations, start=1):
+        p = os.path.join(root, f"r11manifest{case_no:02d}"); _build(p)
+        _write_manifest(
+            p,
+            metadata_overrides=overrides,
+            metadata_drop=drops,
+        )
+        check(label, lambda p=p: _load(p), should_raise=True)
+
+    # Self-consistency is not authenticity: rewrite manifest + every state stamp
+    # to one canonical foreign source identity, then recompute dataset digests
+    # and the completion marker. It must still fail against the live source tree.
+    p = os.path.join(root, "r11coherentforeign"); _build(p)
+    foreign = _foreign_generator_attestation()
+    _write_manifest(p, metadata_overrides=foreign)
+    for state_idx in range(1, NST + 1):
+        _write_state(p, state_idx, nested_overrides=foreign)
+    check("coherent foreign generator source rejected",
+          lambda: _load(p), should_raise=True)
+
+    top_level_fields = (
+        'file_gen_schema',
+        'file_gen_fingerprint',
+        'file_state_uid',
+        'file_state_seed_id',
+        'file_random_stream_schedule_version',
+        'file_matlab_release',
+        'file_campaign_matlab_release',
+        'file_release_qualification_run',
+        'file_actual_matlab_environment_sha256',
+        'file_campaign_matlab_environment_sha256',
+        'file_generator_source_root_sha256',
+        'file_qualification_source_sha256',
+    )
+    for case_no, field in enumerate(top_level_fields, start=1):
+        p = os.path.join(root, f"r11top{case_no:02d}"); _build(p)
+        bad_value = True if field == 'file_release_qualification_run' else (
+            '3' * 64 if field.endswith('sha256') else 'TAMPERED'
+        )
+        _write_state(p, 2, top_overrides={field: bad_value})
+        check(f"top-level state stamp {field} mismatch rejected",
+              lambda p=p: _load(p), should_raise=True)
+
+    p = os.path.join(root, "r11topmissing"); _build(p)
+    _write_state(
+        p, 2,
+        top_drop=('file_generator_source_root_sha256',),
+    )
+    check("missing top-level state stamp rejected", lambda: _load(p),
+          should_raise=True)
+
+    # R11 semantic identity is duplicated only for the cheap UID/root/schedule
+    # stamps. Keep those top-level values valid while independently mutating
+    # each nested identity field, proving the table-alignment guards themselves
+    # are reached rather than merely a generic stamp mismatch.
+    baseline_identity = _state_identity(2)
+    bad_state_named = baseline_identity[
+        "state_named_stream_seed_id"
+    ].copy()
+    bad_state_named[0, 0] = np.uint32(int(bad_state_named[0, 0]) + 1)
+    bad_passage_named = baseline_identity[
+        "passage_named_stream_seed_id"
+    ].copy()
+    bad_passage_named[0, 0] = np.uint32(
+        int(bad_passage_named[0, 0]) + 1
+    )
+    semantic_mutations = (
+        (
+            "nested StateUID/table mismatch rejected",
+            {"state_uid": "fixture-state-999"},
+            {"file_state_uid": baseline_identity["state_uid"]},
+        ),
+        (
+            "nested StateSeedID/table mismatch rejected",
+            {"state_seed_id": np.uint32(
+                int(baseline_identity["state_seed_id"]) + 1
+            )},
+            {"file_state_seed_id": baseline_identity["state_seed_id"]},
+        ),
+        (
+            "nested RNG schedule/table mismatch rejected",
+            {"random_stream_schedule_version": "uid-named-substreams-v999"},
+            {
+                "file_random_stream_schedule_version":
+                    baseline_identity["random_stream_schedule_version"]
+            },
+        ),
+        (
+            "nested state named-substream mutation rejected",
+            {"state_named_stream_seed_id": bad_state_named},
+            {},
+        ),
+        (
+            "nested passage named-substream mutation rejected",
+            {"passage_named_stream_seed_id": bad_passage_named},
+            {},
+        ),
+        (
+            "nested latent bearing/table mismatch rejected",
+            {"latent_bearing_fixity": np.array([[0.1, 0.0]])},
+            {},
+        ),
+        (
+            "nested latent crack/table mismatch rejected",
+            {"latent_crack_on": np.array([[True]], dtype=np.bool_)},
+            {},
+        ),
+        (
+            "nested active crack/table mismatch rejected",
+            {"crack_on": np.array([[True]], dtype=np.bool_)},
+            {},
+        ),
+        (
+            "nested active bearing/table mismatch rejected",
+            {"bearing_fixity": np.array([[0.1, 0.0]])},
+            {},
+        ),
+        (
+            "nested scour-support/table mismatch rejected",
+            {"scour_supports": np.array([[2, 4]], dtype=np.uint32)},
+            {},
+        ),
+    )
+    for case_no, (label, overrides, top_overrides) in enumerate(
+        semantic_mutations, start=1
+    ):
+        p = os.path.join(root, f"r11semantic{case_no:02d}")
+        _build(p)
+        _write_state(
+            p,
+            2,
+            nested_overrides=overrides,
+            top_overrides=top_overrides,
+        )
+        check(label, lambda p=p: _load(p), should_raise=True)
+
+    p = os.path.join(root, "r11semanticmissing")
+    _build(p)
+    _write_state(
+        p,
+        2,
+        nested_drop=("state_named_stream_seed_id",),
+    )
+    check(
+        "missing nested semantic-state field rejected",
+        lambda: _load(p),
+        should_raise=True,
+    )
+
+    nested_mutations = (
+        ('actual_matlab_environment_descriptor', 'TAMPERED'),
+        ('actual_matlab_environment_sha256', '4' * 64),
+        ('campaign_matlab_environment_descriptor', 'TAMPERED'),
+        ('campaign_matlab_environment_sha256', '5' * 64),
+        ('generator_source_root_sha256', '6' * 64),
+        ('generator_source_digest_lines',
+         _GENERATOR.digest_lines + '\nTAMPERED:0'),
+        ('generator_source_file_count', _GENERATOR.file_count + 1),
+        ('qualification_source_sha256', '7' * 64),
+    )
+    for case_no, (field, value) in enumerate(nested_mutations, start=1):
+        p = os.path.join(root, f"r11nested{case_no:02d}"); _build(p)
+        _write_state(p, 2, nested_overrides={field: value})
+        check(f"nested state attestation {field} mismatch rejected",
+              lambda p=p: _load(p), should_raise=True)
+
+    p = os.path.join(root, "r11nestedmissing"); _build(p)
+    _write_state(
+        p, 2,
+        nested_drop=('campaign_matlab_environment_descriptor',),
+    )
+    check("missing nested state attestation rejected", lambda: _load(p),
+          should_raise=True)
+
+    # A coherent qualification dataset (manifest + nested payload + top-level
+    # stamps all agree) must still never be accepted as production campaign
+    # input. This is the anti-laundering policy, not merely a mismatch check.
+    p = os.path.join(root, "r11qualificationlaunder"); _build(p)
+    _write_manifest(
+        p,
+        qualification=True,
+        qualification_source=_QUALIFICATION_SHA,
+    )
+    for state_idx in range(1, NST + 1):
+        _write_state(
+            p, state_idx,
+            qualification=True,
+            qualification_source=_QUALIFICATION_SHA,
+        )
+    check("coherent qualification dataset cannot be laundered into production",
+          lambda: _load(p), should_raise=True)
 
     print()
     print("LOADER PROVENANCE: ALL PASS" if fails == 0 else

@@ -2,7 +2,8 @@
 % Runs a full healthy passage for L60/L99.6 x fixed/psd_fra (and L99.6/fixed at
 % 70/80/90 km/h) and asserts that (a) B19 keeps the LIVE bridge geometry,
 % (b) D01 crops the whole deck at round(100*L_bridge) samples, (c) the profile
-% covers the whole track and is finite, and (d) there is NO wheel-rail tension
+% covers the whole track and is finite, (d) there is NO wheel-rail tension,
+% and (e) the healthy deck frequency remains in the audited few-Hz range
 % (contactLost_track == 0). (d) is the check that a previous version lacked, so
 % a discontinuous profile-tiling seam that spiked accel to ~176 m/s^2 slipped
 % through. Ends with error() on any failure (nonzero exit). ~6 full solves.
@@ -16,7 +17,7 @@ cfgs = {{'fixed', 60, 3, 80}, ...
 for i = 1:numel(cfgs)
     mode = cfgs{i}{1}; Lb = cfgs{i}{2}; ns = cfgs{i}{3}; vk = cfgs{i}{4};
     fprintf('\n=== %s  L=%.1f  (%d spans)  %d km/h ===\n', mode, Lb, ns, vk);
-    [sig, Calc, data, Sol] = local_geo_passage(mode, Lb, ns, vk);
+    [sig, Calc, data, Sol, Beam] = local_geo_passage(mode, Lb, ns, vk);
 
     % 1. B19 kept the LIVE bridge length (not the stored 39.9 m)
     Lb_live = Calc.Profile.L_bridge;
@@ -58,6 +59,16 @@ for i = 1:numel(cfgs)
     if ~all(isfinite(sig(:)))
         fprintf('  FAIL: signal has NaN/Inf\n'); fails = fails + 1;
     end
+
+    % 6. Healthy deck f1 catches the historical 1000x mass regression.
+    f1 = Beam.Modal.f(1);
+    if Lb < 80, f1_bounds = [3, 6]; else, f1_bounds = [2, 4]; end
+    fprintf('  healthy deck f1 = %.4g Hz (required [%g,%g])\n', ...
+        f1, f1_bounds(1), f1_bounds(2));
+    if ~isfinite(f1) || f1 < f1_bounds(1) || f1 > f1_bounds(2)
+        fprintf('  FAIL: deck modal frequency indicates a mass/stiffness regression\n');
+        fails = fails + 1;
+    end
 end
 
 fprintf('\n');
@@ -68,7 +79,7 @@ else
 end
 
 % -------------------------------------------------------------------------
-function [sig, Calc, data, Sol] = local_geo_passage(mode, L_bridge, num_spans, vk)
+function [sig, Calc, data, Sol, Beam] = local_geo_passage(mode, L_bridge, num_spans, vk)
     Train = A01_Train(vk/3.6, zeros(5,3));
     Track = A02_Track();
     Beam_seed = struct();
@@ -83,7 +94,7 @@ function [sig, Calc, data, Sol] = local_geo_passage(mode, L_bridge, num_spans, v
     Damage.scour_rates = zeros(1, num_spans+1);
     Damage.bearing_left = 0; Damage.bearing_right = 0;
     Damage.crack_locs = []; Damage.crack_intensity = []; Damage.crack_lc = 0;
-    [Sol, Calc, Train, ~, ~] = B00_Calculations(Calc, Train, Track, Beam, Damage);
+    [Sol, Calc, Train, Beam, ~] = B00_Calculations(Calc, Train, Track, Beam, Damage);
     data = struct();
     data = D01_DataProcessing(1, 1, Sol, Train, Calc, Damage, data);
     sig = [data.AceleracaoPrimVag{1,1}; data.AcelRodaPrimVag{1,1}; ...

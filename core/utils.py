@@ -39,6 +39,9 @@ DETERMINISM_POLICY = {
     "torch_cuda_random": "all_devices",
     "cudnn_deterministic": True,
     "cudnn_benchmark": False,
+    "cuda_matmul_allow_tf32": False,
+    "cudnn_allow_tf32": False,
+    "float32_matmul_precision": "highest",
     "torch_deterministic_algorithms": True,
     "torch_deterministic_warn_only": False,
     "cublas_workspace_config": ":4096:8",
@@ -80,11 +83,26 @@ def _validate_determinism_policy(policy: dict) -> None:
     for key in (
         "cudnn_deterministic",
         "cudnn_benchmark",
+        "cuda_matmul_allow_tf32",
+        "cudnn_allow_tf32",
         "torch_deterministic_algorithms",
         "torch_deterministic_warn_only",
     ):
         if not isinstance(policy[key], bool):
             raise ValueError(f"determinism policy {key} must be boolean")
+    matmul_precision = policy["float32_matmul_precision"]
+    if matmul_precision not in {"highest", "high", "medium"}:
+        raise ValueError(
+            "float32_matmul_precision must be one of "
+            "{'highest', 'high', 'medium'}")
+    # In PyTorch 2.7 these are two interfaces to the same CUDA matmul mode.
+    # Reject an internally contradictory protocol rather than silently letting
+    # the last assignment win.
+    tf32_implied_by_precision = matmul_precision != "highest"
+    if policy["cuda_matmul_allow_tf32"] != tf32_implied_by_precision:
+        raise ValueError(
+            "cuda_matmul_allow_tf32 conflicts with "
+            "float32_matmul_precision")
     workspace = policy["cublas_workspace_config"]
     if not isinstance(workspace, str) or not workspace:
         raise ValueError(
@@ -128,10 +146,34 @@ def set_global_seed(
 
     torch.backends.cudnn.deterministic = policy["cudnn_deterministic"]
     torch.backends.cudnn.benchmark = policy["cudnn_benchmark"]
+    torch.set_float32_matmul_precision(policy["float32_matmul_precision"])
+    torch.backends.cuda.matmul.allow_tf32 = \
+        policy["cuda_matmul_allow_tf32"]
+    torch.backends.cudnn.allow_tf32 = policy["cudnn_allow_tf32"]
     torch.use_deterministic_algorithms(
         policy["torch_deterministic_algorithms"],
         warn_only=policy["torch_deterministic_warn_only"],
     )
+
+    actual_numeric_mode = {
+        "cuda_matmul_allow_tf32":
+            bool(torch.backends.cuda.matmul.allow_tf32),
+        "cudnn_allow_tf32": bool(torch.backends.cudnn.allow_tf32),
+        "float32_matmul_precision":
+            torch.get_float32_matmul_precision(),
+    }
+    expected_numeric_mode = {
+        key: policy[key]
+        for key in (
+            "cuda_matmul_allow_tf32",
+            "cudnn_allow_tf32",
+            "float32_matmul_precision",
+        )
+    }
+    if actual_numeric_mode != expected_numeric_mode:
+        raise RuntimeError(
+            "numeric execution mode differs from determinism policy: "
+            f"{actual_numeric_mode!r} != {expected_numeric_mode!r}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

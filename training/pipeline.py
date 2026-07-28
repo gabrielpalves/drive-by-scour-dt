@@ -30,17 +30,30 @@ import shutil
 
 import joblib
 import optuna
-import torch
 
 from core          import task
+from core.capacity_preflight import (
+    ensure_capacity_preflight,
+    validate_capacity_receipt,
+)
 from core.dataset  import get_or_create_cache, _cache_stem
+from core.execution_environment import validate_execution_runtime
+from core.hyperparameter_policy import (
+    ANCHOR_HPO_MODE,
+    FROZEN_SINGLETON_MODE,
+    LEGACY_MODE,
+    anchor_study_identity,
+    build_manifest_entry,
+    derive_execution_plan,
+    validate_run_plan,
+    validate_terminal_study,
+)
 from core.protocol import OPTUNA_PROTOCOL, protocol_hash
 from core.utils    import set_global_seed, DOF_NAME_TO_IDX
 from plotting.confusion        import plot_cached_confusion_matrix
 from plotting.robustness_plots import generate_optuna_robustness_plots, plot_stochastic_summary
 from training.robustness       import evaluate_stochastic_robustness, evaluate_parametric_robustness
 from training.trainer          import (
-    DEVICE,
     TRAIN_PROTOCOL,
     Objective,
     print_best_callback,
@@ -82,6 +95,54 @@ def _canonical_json_sha256(value) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _validated_config_execution_runtime(config: dict) -> dict | None:
+    """Return the exact runtime binding required by a protocol-hashed config."""
+
+    runtime = config.get("execution_runtime")
+    descriptor = config.get("protocol_descriptor")
+    rung = descriptor.get("rung") if isinstance(descriptor, dict) else None
+    core = descriptor.get("core") if isinstance(descriptor, dict) else None
+    campaign_blocked = (
+        (isinstance(core, dict) and "execution_blocking" in core)
+        or (
+            isinstance(rung, dict)
+            and (
+                "execution_block" in rung
+                or "execution_anchor" in rung
+            )
+        )
+    )
+    if not config.get("protocol_hash") or not campaign_blocked:
+        return (
+            validate_execution_runtime(runtime)
+            if runtime is not None else None
+        )
+    if runtime is None:
+        raise RuntimeError(
+            f"{config.get('name')}: protocol-hashed config lacks its "
+            "execution-runtime attestation."
+        )
+    runtime = validate_execution_runtime(runtime)
+    if not isinstance(rung, dict):
+        raise RuntimeError(
+            f"{config.get('name')}: execution-blocked protocol lacks its rung."
+        )
+    expected = (
+        rung.get("execution_block"),
+        rung.get("execution_anchor"),
+    )
+    actual = (
+        runtime["execution_block"],
+        runtime["anchor_stage"],
+    )
+    if actual != expected:
+        raise RuntimeError(
+            f"{config.get('name')}: execution runtime {actual!r} does not "
+            f"match protocol rung {expected!r}."
+        )
+    return runtime
+
+
 def _stamp_study_protocol(
     study: optuna.Study,
     *,
@@ -91,6 +152,8 @@ def _stamp_study_protocol(
     epochs: int,
     sampler_seed: int,
     use_pruner: bool,
+    hyperparameter_plan: dict | None = None,
+    capacity_receipt: dict | None = None,
 ) -> None:
     """Persist and enforce the complete protocol record in Optuna storage.
 
@@ -108,10 +171,58 @@ def _stamp_study_protocol(
             raise RuntimeError(
                 f"{study.study_name}: protocol descriptor/hash pair is "
                 "missing or internally inconsistent.")
+    execution_runtime = _validated_config_execution_runtime(config)
+    is_campaign = bool(config.get("protocol_hash"))
+    if is_campaign:
+        if hyperparameter_plan is None:
+            raise RuntimeError(
+                f"{study.study_name}: protocol-hashed study lacks its derived "
+                "hyperparameter execution plan."
+            )
+        hyperparameter_plan = validate_run_plan(hyperparameter_plan)
+        expected_plan = derive_execution_plan(
+            config,
+            dataset_name=dataset_name,
+            requested_n_trials=hyperparameter_plan["requested_n_trials"],
+            requested_use_pruner=(
+                hyperparameter_plan["requested_use_pruner"]
+            ),
+            execution_runtime=execution_runtime,
+        )
+        if hyperparameter_plan != expected_plan:
+            raise RuntimeError(
+                f"{study.study_name}: hyperparameter plan does not derive "
+                "from this config/runtime."
+            )
+        if capacity_receipt is None:
+            raise RuntimeError(
+                f"{study.study_name}: protocol-hashed study lacks its CUDA "
+                "capacity-preflight receipt."
+            )
+        capacity_receipt = validate_capacity_receipt(
+            capacity_receipt,
+            expected_runtime=execution_runtime,
+        )
+        if n_trials != hyperparameter_plan["effective_n_trials"]:
+            raise RuntimeError(
+                f"{study.study_name}: caller passed a non-derived study budget."
+            )
+        if use_pruner is not hyperparameter_plan["effective_use_pruner"]:
+            raise RuntimeError(
+                f"{study.study_name}: caller passed a non-derived pruner mode."
+            )
     record = {
-        "schema": "optuna-study-provenance-v1",
+        "schema": (
+            "optuna-study-provenance-v4"
+            if is_campaign else "optuna-study-provenance-v2"
+        ),
         "protocol_hash": config.get("protocol_hash"),
         "protocol_descriptor": config.get("protocol_descriptor"),
+        "execution_environment_sha256": (
+            execution_runtime["execution_environment_sha256"]
+            if execution_runtime is not None else None
+        ),
+        "execution_runtime": execution_runtime,
         "dataset": dataset_name,
         "model_name": config.get("name"),
         "seed": int(config.get("seed", sampler_seed)),
@@ -121,6 +232,27 @@ def _stamp_study_protocol(
         "use_pruner": bool(use_pruner),
         "optuna_protocol": OPTUNA_PROTOCOL,
     }
+    if is_campaign:
+        record.update({
+            "hyperparameter_execution_plan": hyperparameter_plan,
+            "hyperparameter_policy_sha256":
+                hyperparameter_plan["policy_sha256"],
+            "hyperparameter_mode": hyperparameter_plan["mode"],
+            "hyperparameter_manifest_sha256":
+                hyperparameter_plan["hyperparameter_manifest_sha256"],
+            "hyperparameter_source":
+                hyperparameter_plan["hyperparameter_source"],
+            "capacity_preflight_receipt_sha256":
+                capacity_receipt["receipt_sha256"],
+            "capacity_preflight_policy_sha256":
+                capacity_receipt["receipt"]["policy_sha256"],
+            "campaign_run_tag":
+                hyperparameter_plan["campaign_run_tag"],
+            "execution_receipt_sha256":
+                hyperparameter_plan["execution_receipt_sha256"],
+            "block_reference_manifest_sha256":
+                hyperparameter_plan["block_reference_manifest_sha256"],
+        })
     # Optuna persists user attributes through JSON.  Canonicalise before both
     # storage and comparison because tuples (notably search-space bounds) return
     # from SQLite as lists.  Comparing the raw Python objects made every genuine
@@ -136,10 +268,150 @@ def _stamp_study_protocol(
                 f"{len(study.trials)} trial(s) but no {key!r}. Its trials "
                 "cannot be certified; start a fresh RUN_TAG/study.")
         study.set_user_attr(key, record)
+        if is_campaign:
+            study.set_user_attr(
+                "ttbi_capacity_preflight_receipt", capacity_receipt
+            )
     elif _canonical_json_value(previous) != record:
         raise RuntimeError(
             f"{study.study_name}: stored Optuna protocol record differs from "
             "the requested run. Refusing to mix trials; use a fresh RUN_TAG.")
+    elif is_campaign:
+        stored_capacity = study.user_attrs.get(
+            "ttbi_capacity_preflight_receipt"
+        )
+        if stored_capacity is None:
+            raise RuntimeError(
+                f"{study.study_name}: stored campaign study lacks its capacity "
+                "receipt; it cannot be certified."
+            )
+        stored_capacity = validate_capacity_receipt(
+            stored_capacity,
+            expected_runtime=execution_runtime,
+        )
+        if stored_capacity != capacity_receipt:
+            raise RuntimeError(
+                f"{study.study_name}: stored capacity receipt differs from "
+                "the current qualification."
+            )
+
+
+def _validated_study_hyperparameter_record(
+    study: optuna.Study,
+    config: dict,
+) -> tuple[dict | None, dict | None]:
+    """Validate stored HPO/capacity provenance and return ``(plan, receipt)``."""
+
+    if not config.get("protocol_hash"):
+        return None, None
+    execution_runtime = _validated_config_execution_runtime(config)
+    record = study.user_attrs.get("ttbi_protocol_record")
+    expected_keys = {
+        "schema",
+        "protocol_hash",
+        "protocol_descriptor",
+        "execution_environment_sha256",
+        "execution_runtime",
+        "dataset",
+        "model_name",
+        "seed",
+        "sampler_seed",
+        "n_trials",
+        "epochs",
+        "use_pruner",
+        "optuna_protocol",
+        "hyperparameter_execution_plan",
+        "hyperparameter_policy_sha256",
+        "hyperparameter_mode",
+        "hyperparameter_manifest_sha256",
+        "hyperparameter_source",
+        "capacity_preflight_receipt_sha256",
+        "capacity_preflight_policy_sha256",
+        "campaign_run_tag",
+        "execution_receipt_sha256",
+        "block_reference_manifest_sha256",
+    }
+    if (
+        not isinstance(record, dict)
+        or set(record) != expected_keys
+        or record.get("schema") != "optuna-study-provenance-v4"
+    ):
+        raise RuntimeError(
+            f"{study.study_name}: malformed/missing v4 campaign study record."
+        )
+    canonical_record = _canonical_json_value(record)
+    plan = canonical_record["hyperparameter_execution_plan"]
+    requested_n_trials = plan.get("requested_n_trials")
+    requested_use_pruner = plan.get("requested_use_pruner")
+    expected_plan = derive_execution_plan(
+        config,
+        dataset_name=canonical_record["dataset"],
+        requested_n_trials=requested_n_trials,
+        requested_use_pruner=requested_use_pruner,
+        execution_runtime=execution_runtime,
+    )
+    if plan != expected_plan:
+        raise RuntimeError(
+            f"{study.study_name}: stored hyperparameter plan does not derive "
+            "from the current config/policy."
+        )
+    expected_scalars = {
+        "protocol_hash": config["protocol_hash"],
+        "protocol_descriptor": _canonical_json_value(
+            config["protocol_descriptor"]
+        ),
+        "execution_environment_sha256":
+            execution_runtime["execution_environment_sha256"],
+        "execution_runtime": execution_runtime,
+        "model_name": config.get("name"),
+        "seed": int(config["seed"]),
+        "n_trials": plan["effective_n_trials"],
+        "use_pruner": plan["effective_use_pruner"],
+        "optuna_protocol": _canonical_json_value(OPTUNA_PROTOCOL),
+        "hyperparameter_policy_sha256": plan["policy_sha256"],
+        "hyperparameter_mode": plan["mode"],
+        "hyperparameter_manifest_sha256":
+            plan["hyperparameter_manifest_sha256"],
+        "hyperparameter_source": plan["hyperparameter_source"],
+        "campaign_run_tag": plan["campaign_run_tag"],
+        "execution_receipt_sha256": plan["execution_receipt_sha256"],
+        "block_reference_manifest_sha256":
+            plan["block_reference_manifest_sha256"],
+    }
+    mismatches = {
+        key: (canonical_record.get(key), expected)
+        for key, expected in expected_scalars.items()
+        if canonical_record.get(key) != expected
+    }
+    if mismatches:
+        raise RuntimeError(
+            f"{study.study_name}: campaign study record mismatch: {mismatches}"
+        )
+    if (
+        isinstance(canonical_record["epochs"], bool)
+        or not isinstance(canonical_record["epochs"], int)
+        or canonical_record["epochs"] < 1
+        or isinstance(canonical_record["sampler_seed"], bool)
+        or not isinstance(canonical_record["sampler_seed"], int)
+    ):
+        raise RuntimeError(
+            f"{study.study_name}: invalid epoch/sampler-seed provenance."
+        )
+    capacity = validate_capacity_receipt(
+        study.user_attrs.get("ttbi_capacity_preflight_receipt"),
+        expected_runtime=execution_runtime,
+    )
+    if (
+        capacity["receipt_sha256"]
+        != canonical_record["capacity_preflight_receipt_sha256"]
+        or capacity["receipt"]["policy_sha256"]
+        != canonical_record["capacity_preflight_policy_sha256"]
+    ):
+        raise RuntimeError(
+            f"{study.study_name}: capacity receipt hashes disagree with the "
+            "study record."
+        )
+    return plan, capacity
 
 
 def verify_digital_twin_package(
@@ -148,12 +420,17 @@ def verify_digital_twin_package(
     output_dir: str,
 ) -> dict:
     """Verify champion weights against both metadata and the Optuna study."""
+    execution_runtime = _validated_config_execution_runtime(config)
     if config.get("protocol_hash"):
         descriptor = config.get("protocol_descriptor")
         if descriptor is None or protocol_hash(descriptor) != config["protocol_hash"]:
             raise RuntimeError(
                 f"{config.get('name')}: requested protocol descriptor/hash pair "
                 "is missing or internally inconsistent.")
+    hyperparameter_plan, capacity_receipt = (
+        _validated_study_hyperparameter_record(study, config)
+    )
+    study_record = study.user_attrs.get("ttbi_protocol_record")
     weights_path = os.path.join(output_dir, "DT_champion_weights.pth")
     metadata_path = os.path.join(output_dir, "DT_metadata.json")
     if not os.path.isfile(weights_path) or not os.path.isfile(metadata_path):
@@ -189,12 +466,72 @@ def verify_digital_twin_package(
         "protocol_descriptor": _canonical_json_value(
             config.get("protocol_descriptor")
         ),
+        "execution_environment_sha256": (
+            execution_runtime["execution_environment_sha256"]
+            if execution_runtime is not None else None
+        ),
+        "execution_runtime": execution_runtime,
+        "dataset": (
+            study_record.get("dataset")
+            if isinstance(study_record, dict) else None
+        ),
+        "hyperparameter_mode": (
+            hyperparameter_plan["mode"]
+            if hyperparameter_plan is not None else None
+        ),
+        "hyperparameter_policy_sha256": (
+            hyperparameter_plan["policy_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        "hyperparameter_manifest_sha256": (
+            hyperparameter_plan["hyperparameter_manifest_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        "hyperparameter_source": (
+            hyperparameter_plan["hyperparameter_source"]
+            if hyperparameter_plan is not None else None
+        ),
+        "capacity_preflight_receipt_sha256": (
+            capacity_receipt["receipt_sha256"]
+            if capacity_receipt is not None else None
+        ),
+        "capacity_preflight_policy_sha256": (
+            capacity_receipt["receipt"]["policy_sha256"]
+            if capacity_receipt is not None else None
+        ),
+        "campaign_run_tag": (
+            hyperparameter_plan["campaign_run_tag"]
+            if hyperparameter_plan is not None else None
+        ),
+        "execution_receipt_sha256": (
+            hyperparameter_plan["execution_receipt_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        "block_reference_manifest_sha256": (
+            hyperparameter_plan["block_reference_manifest_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
         "study_name": study.study_name,
         "best_trial_number": int(study.best_trial.number),
         "best_trial_value": float(study.best_value),
         "champion_weights_sha256": actual_sha,
         "scaler_sha256": scaler_sha,
     }
+    if config.get("protocol_hash"):
+        required_campaign_lineage = {
+            "campaign_run_tag",
+            "execution_receipt_sha256",
+            "block_reference_manifest_sha256",
+        }
+        missing_campaign_lineage = sorted(
+            required_campaign_lineage - set(metadata)
+        )
+        if missing_campaign_lineage:
+            raise RuntimeError(
+                f"{config.get('name')}: champion package provenance mismatch: "
+                "missing campaign lineage field(s): "
+                f"{missing_campaign_lineage}"
+            )
     mismatches = {
         key: (metadata.get(key), value)
         for key, value in expected.items()
@@ -206,41 +543,50 @@ def verify_digital_twin_package(
         mismatches["optimal_hyperparameters"] = (
             metadata.get("optimal_hyperparameters"), study.best_params)
 
-    study_record = study.user_attrs.get("ttbi_protocol_record")
     if config.get("protocol_hash"):
         canonical_study_record = (
             _canonical_json_value(study_record)
             if study_record is not None else None
         )
-        expected_record_fields = {
-            "schema": "optuna-study-provenance-v1",
-            "protocol_hash": config.get("protocol_hash"),
-            "protocol_descriptor": _canonical_json_value(
-                config.get("protocol_descriptor")
-            ),
-            "model_name": config.get("name"),
-        }
-        if "seed" in config:
-            expected_record_fields["seed"] = int(config["seed"])
-        if (canonical_study_record is None
-                or any(canonical_study_record.get(key) != value
-                       for key, value in expected_record_fields.items())):
-            mismatches["study.user_attrs.ttbi_protocol_record"] = (
-                canonical_study_record, expected_record_fields)
-        else:
-            record_sha = _canonical_json_sha256(canonical_study_record)
-            if metadata.get("study_protocol_record_sha256") != record_sha:
-                mismatches["study_protocol_record_sha256"] = (
-                    metadata.get("study_protocol_record_sha256"), record_sha)
+        record_sha = _canonical_json_sha256(canonical_study_record)
+        if metadata.get("study_protocol_record_sha256") != record_sha:
+            mismatches["study_protocol_record_sha256"] = (
+                metadata.get("study_protocol_record_sha256"), record_sha)
 
     expected_artifact = {
-        "schema": "champion-artifact-v1",
+        "schema": (
+            "champion-artifact-v4"
+            if config.get("protocol_hash") else "champion-artifact-v2"
+        ),
         "best_trial_number": int(study.best_trial.number),
         "best_trial_value": float(study.best_value),
         "champion_weights_sha256": actual_sha,
         "scaler_sha256": scaler_sha,
         "protocol_hash": config.get("protocol_hash"),
+        "execution_environment_sha256": (
+            execution_runtime["execution_environment_sha256"]
+            if execution_runtime is not None else None
+        ),
     }
+    if config.get("protocol_hash"):
+        expected_artifact.update({
+            "hyperparameter_mode": hyperparameter_plan["mode"],
+            "hyperparameter_policy_sha256":
+                hyperparameter_plan["policy_sha256"],
+            "hyperparameter_manifest_sha256":
+                hyperparameter_plan["hyperparameter_manifest_sha256"],
+            "hyperparameter_source":
+                hyperparameter_plan["hyperparameter_source"],
+            "capacity_preflight_receipt_sha256":
+                capacity_receipt["receipt_sha256"],
+            "capacity_preflight_policy_sha256":
+                capacity_receipt["receipt"]["policy_sha256"],
+            "campaign_run_tag": hyperparameter_plan["campaign_run_tag"],
+            "execution_receipt_sha256":
+                hyperparameter_plan["execution_receipt_sha256"],
+            "block_reference_manifest_sha256":
+                hyperparameter_plan["block_reference_manifest_sha256"],
+        })
     artifact = study.user_attrs.get("ttbi_champion_artifact")
     if artifact != expected_artifact:
         mismatches["study.user_attrs.ttbi_champion_artifact"] = (
@@ -253,6 +599,57 @@ def verify_digital_twin_package(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+def _execute_protocol_study(
+    study: optuna.Study,
+    objective,
+    hyperparameter_plan: dict,
+) -> dict:
+    """Run exactly the derived campaign budget, without catch/retry semantics."""
+
+    hyperparameter_plan = validate_run_plan(hyperparameter_plan)
+    if hyperparameter_plan.get("mode") not in {
+        ANCHOR_HPO_MODE,
+        FROZEN_SINGLETON_MODE,
+    }:
+        raise RuntimeError("protocol study helper received a non-campaign plan")
+    TS = optuna.trial.TrialState
+    states = [trial.state for trial in study.trials]
+    counts = {
+        state: sum(item == state for item in states)
+        for state in (
+            TS.COMPLETE,
+            TS.PRUNED,
+            TS.FAIL,
+            TS.RUNNING,
+            TS.WAITING,
+        )
+    }
+    useful = counts[TS.COMPLETE] + counts[TS.PRUNED]
+    budget = hyperparameter_plan["effective_n_trials"]
+    if (
+        counts[TS.FAIL]
+        or counts[TS.RUNNING]
+        or counts[TS.WAITING]
+        or useful > budget
+        or len(states) != useful
+    ):
+        raise RuntimeError(
+            f"{study.study_name}: existing campaign study has forbidden "
+            f"states or exceeds its derived budget: {counts!r}."
+        )
+    remaining = budget - useful
+    if remaining:
+        # Deliberately omit catch=: CUDA OOM and every other exception are
+        # fatal and persist as evidence rather than triggering another trial.
+        study.optimize(
+            objective,
+            n_trials=remaining,
+            callbacks=[print_best_callback],
+            show_progress_bar=True,
+        )
+    return validate_terminal_study(study, hyperparameter_plan)
+
+
 # 1. Master ablation loop
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -335,76 +732,140 @@ def execute_ablation_pipeline(
         os.makedirs(output_dir, exist_ok=True)
 
         # ── 1. Optuna study ───────────────────────────────────────────────────
+        execution_runtime = _validated_config_execution_runtime(step)
+        hyperparameter_plan = derive_execution_plan(
+            step,
+            dataset_name=dataset,
+            requested_n_trials=n_trials,
+            requested_use_pruner=use_pruner,
+            execution_runtime=execution_runtime,
+        )
+        # This qualification is deliberately before create_study(): an
+        # incapable GPU cannot leave a misleading resumable campaign study.
+        capacity_receipt = (
+            ensure_capacity_preflight(execution_runtime)
+            if hyperparameter_plan["mode"] != LEGACY_MODE else None
+        )
+        effective_n_trials = hyperparameter_plan["effective_n_trials"]
+        effective_use_pruner = hyperparameter_plan["effective_use_pruner"]
         study = _create_or_resume_study(
-            step['name'], database_name, n_trials,
+            step['name'], database_name, effective_n_trials,
             sampler_seed=optuna_seed,
-            use_pruner=use_pruner,
+            use_pruner=effective_use_pruner,
+            force_nop_pruner=(
+                hyperparameter_plan["mode"] == FROZEN_SINGLETON_MODE
+            ),
         )
         _stamp_study_protocol(
             study,
             config=step,
             dataset_name=dataset,
-            n_trials=n_trials,
+            n_trials=effective_n_trials,
             epochs=epochs,
             sampler_seed=optuna_seed,
-            use_pruner=use_pruner,
+            use_pruner=effective_use_pruner,
+            hyperparameter_plan=hyperparameter_plan,
+            capacity_receipt=capacity_receipt,
         )
 
-        # Budget = terminal-USEFUL trials (COMPLETE + PRUNED). FAILed trials are
-        # RETRIED automatically (audit R7.1 P2): re-evaluate the budget AFTER each
-        # optimize() and keep going until the useful budget is met, so a burst of
-        # FAILs inside one run does not leave the study short until the whole script
-        # is re-run. A deterministically-broken config would retry forever, so cap
-        # total trials at n_trials + MAX_FAIL_SLACK; it then stops short of the
-        # useful budget and is flagged INCOMPLETE by _study_is_finished (never
-        # silently selected). The trainer raises TrialPruned for the pruner but lets
-        # deterministic bugs propagate as FAILs, which the cap bounds.
-        # PROTOCOL (2026-07-19): the slack value lives in OPTUNA_PROTOCOL so it
-        # is part of the unified protocol hash.
-        MAX_FAIL_SLACK = OPTUNA_PROTOCOL["max_fail_slack"]
+        # Legacy callers retain their historical bounded OOM handling.  The
+        # protocol-hashed campaign takes the separate fail-closed helper below:
+        # no caught exception, no replacement trial, exact derived terminal
+        # budget.
         objective = Objective(
             config=step, dataset_name=dataset, n_epochs=epochs,
             cache_dir=cache_dir_name, output_dir=output_dir,
         )
-        # RECOVERABLE trial failures (transient GPU/CPU OOM) are CAUGHT -> marked
-        # FAILED -> the loop retries them to the useful budget. EVERY OTHER
-        # exception propagates and FAILS FAST (audit R7.1 P2): a deterministic bug
-        # must crash immediately, not be silently retried 20 times.
-        import optuna.exceptions as _oe                           # noqa: F401
-        _oom = tuple(e for e in (getattr(torch.cuda, "OutOfMemoryError", None),
-                                 getattr(torch, "OutOfMemoryError", None)) if e)
         TS = optuna.trial.TrialState
-        while True:
-            states = [t.state for t in study.trials]
-            n_useful = sum(s in (TS.COMPLETE, TS.PRUNED) for s in states)
-            remaining = min(n_trials - n_useful,
-                            (n_trials + MAX_FAIL_SLACK) - len(study.trials))
-            if remaining <= 0:
-                break
-            study.optimize(
-                objective,
-                n_trials=remaining,
-                catch=_oom,                    # retry only transient OOM
-                callbacks=[print_best_callback],
-                show_progress_bar=True,
+        if hyperparameter_plan["mode"] == LEGACY_MODE:
+            import torch as _torch
+            max_fail_slack = OPTUNA_PROTOCOL["max_fail_slack"]
+            oom = tuple(
+                error for error in (
+                    getattr(_torch.cuda, "OutOfMemoryError", None),
+                    getattr(_torch, "OutOfMemoryError", None),
+                ) if error
             )
+            while True:
+                states = [trial.state for trial in study.trials]
+                n_useful = sum(
+                    state in (TS.COMPLETE, TS.PRUNED) for state in states
+                )
+                remaining = min(
+                    effective_n_trials - n_useful,
+                    (effective_n_trials + max_fail_slack) - len(study.trials),
+                )
+                if remaining <= 0:
+                    break
+                study.optimize(
+                    objective,
+                    n_trials=remaining,
+                    catch=oom,
+                    callbacks=[print_best_callback],
+                    show_progress_bar=True,
+                )
 
         # ── FATAL GATE before ANY export / report (audit R7.1 P1/P2) ──────────
         # The study must be FINISHED: useful budget met, >=1 COMPLETE, no in-flight
         # trials. Otherwise refuse to compute best_value / export weights / run
         # robustness on an incomplete study (which selection would reject anyway,
         # but only AFTER the weights were exported).
-        states = [t.state for t in study.trials]
-        n_complete = sum(s == TS.COMPLETE for s in states)
-        n_useful   = sum(s in (TS.COMPLETE, TS.PRUNED) for s in states)
-        n_inflight = sum(s in (TS.RUNNING, TS.WAITING) for s in states)
-        if n_inflight or n_useful != n_trials or n_complete < 1:
-            raise RuntimeError(
-                f"{step['name']}: study NOT finished (COMPLETE={n_complete}, "
-                f"useful={n_useful}/{n_trials}, in-flight={n_inflight}) — refusing "
-                f"to export weights / report. Investigate the FAILs (or delete the "
-                f"study to re-run); an incomplete OR manually extended study "
-                f"must not be published.")
+        if hyperparameter_plan["mode"] == LEGACY_MODE:
+            states = [trial.state for trial in study.trials]
+            n_complete = sum(state == TS.COMPLETE for state in states)
+            n_useful = sum(
+                state in (TS.COMPLETE, TS.PRUNED) for state in states
+            )
+            n_inflight = sum(
+                state in (TS.RUNNING, TS.WAITING) for state in states
+            )
+            if (
+                n_inflight
+                or n_useful != effective_n_trials
+                or n_complete < 1
+            ):
+                raise RuntimeError(
+                    f"{step['name']}: legacy study NOT finished "
+                    f"(COMPLETE={n_complete}, useful={n_useful}/"
+                    f"{effective_n_trials}, in-flight={n_inflight})."
+                )
+        else:
+            _execute_protocol_study(
+                study, objective, hyperparameter_plan
+            )
+            if hyperparameter_plan["mode"] == FROZEN_SINGLETON_MODE:
+                if _canonical_json_value(study.best_params) != (
+                    _canonical_json_value(step["frozen_hyperparameters"])
+                ):
+                    raise RuntimeError(
+                        f"{step['name']}: singleton Optuna trial did not "
+                        "reproduce its authenticated frozen parameters."
+                    )
+            elif hyperparameter_plan["mode"] == ANCHOR_HPO_MODE:
+                identity = anchor_study_identity(
+                    study=study,
+                    config=step,
+                    plan=hyperparameter_plan,
+                    dataset_name=dataset,
+                    study_protocol_record=study.user_attrs[
+                        "ttbi_protocol_record"
+                    ],
+                )
+                entry = build_manifest_entry(
+                    study_identity=identity,
+                    params=study.best_params,
+                )
+                prior = study.user_attrs.get(
+                    "ttbi_hyperparameter_manifest_entry"
+                )
+                if prior is not None and _canonical_json_value(prior) != entry:
+                    raise RuntimeError(
+                        f"{step['name']}: stored anchor manifest entry differs "
+                        "from the completed study."
+                    )
+                study.set_user_attr(
+                    "ttbi_hyperparameter_manifest_entry", entry
+                )
 
         print(f"  Best MSE: {study.best_value:.4f}  (trial {study.best_trial.number})")
 
@@ -490,6 +951,10 @@ def export_digital_twin_package(
         output_dir (str): Destination directory for the three output files.
     """
     print(f"  --> Exporting DT package: {config['name']}")
+    execution_runtime = _validated_config_execution_runtime(config)
+    hyperparameter_plan, capacity_receipt = (
+        _validated_study_hyperparameter_record(study, config)
+    )
 
     # ── Metadata ──────────────────────────────────────────────────────────────
     metadata = {
@@ -517,6 +982,48 @@ def export_digital_twin_package(
         # the exact protocol that produced them (None for legacy callers that
         # predate the hash, e.g. the single-scour classification scripts).
         'protocol_hash':   config.get('protocol_hash'),
+        'execution_environment_sha256': (
+            execution_runtime["execution_environment_sha256"]
+            if execution_runtime is not None else None
+        ),
+        'execution_runtime': execution_runtime,
+        'dataset': dataset_name,
+        'hyperparameter_mode': (
+            hyperparameter_plan["mode"]
+            if hyperparameter_plan is not None else None
+        ),
+        'hyperparameter_policy_sha256': (
+            hyperparameter_plan["policy_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        'hyperparameter_manifest_sha256': (
+            hyperparameter_plan["hyperparameter_manifest_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        'hyperparameter_source': (
+            hyperparameter_plan["hyperparameter_source"]
+            if hyperparameter_plan is not None else None
+        ),
+        'capacity_preflight_receipt_sha256': (
+            capacity_receipt["receipt_sha256"]
+            if capacity_receipt is not None else None
+        ),
+        'capacity_preflight_policy_sha256': (
+            capacity_receipt["receipt"]["policy_sha256"]
+            if capacity_receipt is not None else None
+        ),
+        'campaign_run_tag': (
+            hyperparameter_plan["campaign_run_tag"]
+            if hyperparameter_plan is not None else None
+        ),
+        'execution_receipt_sha256': (
+            hyperparameter_plan["execution_receipt_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        'block_reference_manifest_sha256': (
+            hyperparameter_plan["block_reference_manifest_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
     }
 
     # ── Champion weights ──────────────────────────────────────────────────────
@@ -563,13 +1070,39 @@ def export_digital_twin_package(
     )
 
     artifact = {
-        "schema": "champion-artifact-v1",
+        "schema": (
+            "champion-artifact-v4"
+            if config.get("protocol_hash") else "champion-artifact-v2"
+        ),
         "best_trial_number": int(best_trial_num),
         "best_trial_value": float(study.best_value),
         "champion_weights_sha256": champion_sha,
         "scaler_sha256": scaler_sha,
         "protocol_hash": config.get("protocol_hash"),
+        "execution_environment_sha256": (
+            execution_runtime["execution_environment_sha256"]
+            if execution_runtime is not None else None
+        ),
     }
+    if config.get("protocol_hash"):
+        artifact.update({
+            "hyperparameter_mode": hyperparameter_plan["mode"],
+            "hyperparameter_policy_sha256":
+                hyperparameter_plan["policy_sha256"],
+            "hyperparameter_manifest_sha256":
+                hyperparameter_plan["hyperparameter_manifest_sha256"],
+            "hyperparameter_source":
+                hyperparameter_plan["hyperparameter_source"],
+            "capacity_preflight_receipt_sha256":
+                capacity_receipt["receipt_sha256"],
+            "capacity_preflight_policy_sha256":
+                capacity_receipt["receipt"]["policy_sha256"],
+            "campaign_run_tag": hyperparameter_plan["campaign_run_tag"],
+            "execution_receipt_sha256":
+                hyperparameter_plan["execution_receipt_sha256"],
+            "block_reference_manifest_sha256":
+                hyperparameter_plan["block_reference_manifest_sha256"],
+        })
     study.set_user_attr("ttbi_champion_artifact", artifact)
     metadata.update({
         "study_name": study.study_name,
@@ -617,6 +1150,7 @@ def _create_or_resume_study(
     n_trials:      int,
     sampler_seed:  int  = 42,
     use_pruner:    bool = False,
+    force_nop_pruner: bool = False,
 ) -> optuna.Study:
     """
     Create a new TPE study or resume an existing one from storage.
@@ -650,13 +1184,21 @@ def _create_or_resume_study(
         constant_liar=sp["constant_liar"],
         warn_independent_sampling=False,
     )
+    if use_pruner and force_nop_pruner:
+        raise RuntimeError(
+            "cannot request both the registered pruner and NopPruner"
+        )
     pruner = (
         optuna.pruners.SuccessiveHalvingPruner(
             min_resource=pp["min_resource"],               # epochs before pruning
             reduction_factor=pp["reduction_factor"],       # keep top 1/N per rung
             min_early_stopping_rate=pp["min_early_stopping_rate"],
         )
-        if use_pruner else None
+        if use_pruner
+        else (
+            optuna.pruners.NopPruner()
+            if force_nop_pruner else None
+        )
     )
     return optuna.create_study(
         study_name=study_name,

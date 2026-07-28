@@ -1,5 +1,9 @@
 # Audit r4 handoff — response to r3, change log, and mandate
 
+> **HISTORICAL HANDOFF — SUPERSEDED BY R11.** This preserves the R4 review
+> record, including terminology later corrected. It does not authorize current
+> generation, ablation, bundle dispatch or paper claims.
+
 Audience: the external auditor (Codex), round 4. Round 3 was delivered 2026-07-22
 against `main@a13ea7f` plus a dirty working tree. Since then two commits landed:
 

@@ -241,10 +241,21 @@ scour_MATLAB/Results/
 # Heavy run outputs copied from the Lab PC (6 GB each) — summaries are
 # force-added selectively; never commit the raw data/caches/databases
 results/Stage0/
+/results/Stage1/
+/results/Stage2/
 results/Final Results/
 
 # Generated Lab-PC code bundles (regenerable; distributed via Drive)
 multidamage_*.zip
+/bundle_*.zip
+/bundle_sha256.txt
+/bundle_sha256.txt.INVALID_BUILD_IN_PROGRESS
+/stale_pre_r11_bundles/*.zip
+/stale_pre_r11_bundles/bundle_sha256.txt
+/stale_pre_r11_bundles/bundle_s*_extracted/
+
+# Historical extracted dispatch bundles kept locally for reference only.
+/bundle_s*/
 
 # Root-level temporary smoke/validation scripts
 /_*.py

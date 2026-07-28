@@ -245,6 +245,69 @@ def _suggest_one(trial, name: str, spec: tuple):
     raise ValueError(f"unknown search-space spec kind {kind!r} for {name!r}")
 
 
+def _suggest_frozen_one(
+    trial,
+    name: str,
+    spec: tuple,
+    frozen: dict,
+):
+    """Register one authenticated fixed value as a singleton Optuna domain.
+
+    Fixed candidate fits still use a real one-trial Optuna study so all
+    downstream artifact/provenance code sees a complete ``best_params``
+    mapping.  The singleton distribution makes renewed tuning impossible by
+    construction, while this validator refuses values outside the registered
+    search space.
+    """
+
+    if name not in frozen:
+        raise ValueError(
+            f"frozen hyperparameters are missing required key {name!r}"
+        )
+    value = frozen[name]
+    kind = spec[0]
+    if kind in {"int", "int_step"}:
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+                value, (int, np.integer)):
+            raise ValueError(
+                f"frozen {name!r} must be an integer; got {value!r}"
+            )
+        value = int(value)
+        low, high = int(spec[1]), int(spec[2])
+        if not low <= value <= high:
+            raise ValueError(
+                f"frozen {name!r}={value} lies outside [{low}, {high}]"
+            )
+        if kind == "int_step" and (value - low) % int(spec[3]) != 0:
+            raise ValueError(
+                f"frozen {name!r}={value} violates step {spec[3]} from {low}"
+            )
+        return trial.suggest_int(name, value, value)
+    if kind in {"float", "logfloat"}:
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+                value, (int, float, np.integer, np.floating)):
+            raise ValueError(
+                f"frozen {name!r} must be numeric; got {value!r}"
+            )
+        value = float(value)
+        low, high = float(spec[1]), float(spec[2])
+        if not np.isfinite(value) or not low <= value <= high:
+            raise ValueError(
+                f"frozen {name!r}={value!r} lies outside [{low}, {high}]"
+            )
+        return trial.suggest_float(
+            name, value, value, log=(kind == "logfloat")
+        )
+    if kind == "cat":
+        choices = list(spec[1])
+        if value not in choices:
+            raise ValueError(
+                f"frozen {name!r}={value!r} is not in {choices!r}"
+            )
+        return trial.suggest_categorical(name, [value])
+    raise ValueError(f"unknown search-space spec kind {kind!r} for {name!r}")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. Core training & evaluation - one Optuna trial
 # ──────────────────────────────────────────────────────────────────────────────
@@ -635,37 +698,54 @@ def _suggest_params(trial, config: dict) -> dict:
     lstm_hidden_size, nhits) so a seeded sampler reproduces identical trials.
     """
     SS = SEARCH_SPACE
-    n_conv  = _suggest_one(trial, 'n_conv_layers',  SS['base']['n_conv_layers'])
-    n_dense = _suggest_one(trial, 'n_dense_layers', SS['base']['n_dense_layers'])
+    frozen = config.get("frozen_hyperparameters")
+    if frozen is not None and not isinstance(frozen, dict):
+        raise ValueError("frozen_hyperparameters must be a mapping when present")
+
+    def suggest(name: str, spec: tuple):
+        if frozen is None:
+            return _suggest_one(trial, name, spec)
+        return _suggest_frozen_one(trial, name, spec, frozen)
+
+    n_conv  = suggest('n_conv_layers',  SS['base']['n_conv_layers'])
+    n_dense = suggest('n_dense_layers', SS['base']['n_dense_layers'])
 
     params = {
-        'lr':             _suggest_one(trial, 'lr',           SS['base']['lr']),
-        'weight_decay':   _suggest_one(trial, 'weight_decay', SS['base']['weight_decay']),
+        'lr':             suggest('lr',           SS['base']['lr']),
+        'weight_decay':   suggest('weight_decay', SS['base']['weight_decay']),
         'n_conv_layers':  n_conv,
         'n_dense_layers': n_dense,
     }
 
     for i in range(n_conv):        # per-conv-layer block, suffix _l{i}
         for key, spec in SS['per_conv_layer'].items():
-            params[f'{key}_l{i}'] = _suggest_one(trial, f'{key}_l{i}', spec)
+            params[f'{key}_l{i}'] = suggest(f'{key}_l{i}', spec)
 
     for i in range(n_dense):       # per-dense-layer block, suffix _l{i}
         for key, spec in SS['per_dense_layer'].items():
-            params[f'{key}_l{i}'] = _suggest_one(trial, f'{key}_l{i}', spec)
+            params[f'{key}_l{i}'] = suggest(f'{key}_l{i}', spec)
 
     if config.get('use_lstm', False):
         # ORDER MATTERS: lstm_num_layers is suggested BEFORE lstm_hidden_size
         # (as in the original code); lstm_dropout only exists for 2-layer LSTMs.
-        n_lstm = _suggest_one(trial, 'lstm_num_layers', SS['lstm']['lstm_num_layers'])
-        params['lstm_hidden_size'] = _suggest_one(
-            trial, 'lstm_hidden_size', SS['lstm']['lstm_hidden_size'])
+        n_lstm = suggest('lstm_num_layers', SS['lstm']['lstm_num_layers'])
+        params['lstm_hidden_size'] = suggest(
+            'lstm_hidden_size', SS['lstm']['lstm_hidden_size'])
         params['lstm_num_layers'] = n_lstm
         if n_lstm > 1:
-            params['lstm_dropout'] = _suggest_one(
-                trial, 'lstm_dropout', SS['lstm']['lstm_dropout'])
+            params['lstm_dropout'] = suggest(
+                'lstm_dropout', SS['lstm']['lstm_dropout'])
 
     if config.get('use_nhits', False):
-        params['nhits_pool_rates_key'] = _suggest_one(
-            trial, 'nhits_pool_rates_key', SS['nhits']['nhits_pool_rates_key'])
+        params['nhits_pool_rates_key'] = suggest(
+            'nhits_pool_rates_key', SS['nhits']['nhits_pool_rates_key'])
+
+    if frozen is not None and set(params) != set(frozen):
+        missing = sorted(set(params) - set(frozen))
+        extra = sorted(set(frozen) - set(params))
+        raise ValueError(
+            "frozen hyperparameter keyset does not match the active "
+            f"architecture (missing={missing}, extra={extra})"
+        )
 
     return params

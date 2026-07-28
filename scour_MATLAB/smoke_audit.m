@@ -9,8 +9,9 @@
 %      must match the reference rad/m formula converted consistently
 %      (S_cyc(n) = 2*pi*S_rad(2*pi*n), all in m^2/(cycle/m)). The old
 %      unconverted corner gave ~16x at the 1.524 m cutoff.
-%   3. Profile jitter is OFF in A00 (physical jitter was an EN 13848-2
-%      misreading; noise belongs to the load-time observation model).
+%   3. The former 0.5 mm per-passage white profile perturbation is OFF in A00
+%      (it was an EN 13848-2 metrology misreading; observation noise belongs
+%      to the load-time model).
 clear; clc;
 fails = 0;
 
@@ -70,7 +71,7 @@ tok_ = regexp(txt_, 'profile_jitter_sd_mm\s*=\s*([0-9.]+)', 'tokens', 'once');
 jit_ = str2double(tok_{1});
 fprintf('[3] A00 profile_jitter_sd_mm = %g\n', jit_);
 if jit_ ~= 0
-    fprintf('    FAIL: physical profile jitter must stay 0 (audit 2026-07-17)\n');
+    fprintf('    FAIL: per-passage white profile perturbation must stay 0 (audit 2026-07-17)\n');
     fails = fails + 1;
 end
 

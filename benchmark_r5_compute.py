@@ -1,4 +1,4 @@
-"""R5 compute-only benchmark using the real production training path.
+"""R11 compute-only benchmark using the registered production training path.
 
 This program is deliberately *not* an experiment and its legacy cache is not
 scientific evidence.  It exists only to measure whether a campaign machine can
@@ -7,16 +7,21 @@ of time.
 
 The benchmark is intentionally strict:
 
-* the legacy fixture is opened read-only with ``numpy.load(..., mmap_mode="r")``;
-* its exact 259-state x 50-passage layout is checked before any training;
+* the legacy fixture is opened read-only and used only to materialise a
+  deterministic, authenticated 475-state x 50-passage, eight-channel workload;
+* every derived byte lives below ``.audit_tmp/r11_compute_benchmark``;
 * only ``training.trainer.get_or_create_cache`` and
   ``training.trainer.canonical_train_val_split`` are temporarily adapted;
-* the real ``training.trainer.Objective`` and the production Optuna study
-  helpers are used;
+* the real ``derive_execution_plan``, ``_stamp_study_protocol``,
+  ``_execute_protocol_study`` and ``training.trainer.Objective`` path is used;
+* a durable, real-CUDA capacity qualification is completed before the single
+  registered 100-trial full-array PAA_LSTM_NHiTS anchor study is created;
+* an OOM or any other failed trial is fatal and is never caught or replaced;
+* exactly one shared-production finalist CV refit is durably accepted;
 * results contain compute/provenance data only.  Model-objective and returned
   finalist values are never exported to JSON/CSV or printed;
 * all durable and transient outputs live below
-  ``.audit_tmp/r5_compute_benchmark``.
+  ``.audit_tmp/r11_compute_benchmark``.
 
 The shared production ``training.trainer.fit_predict_finalist_fold`` helper is
 loaded as a hard preflight.  Keep this import boundary aligned with the
@@ -53,6 +58,7 @@ import re
 import shlex
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
@@ -68,22 +74,28 @@ DISCLAIMER_DETAIL = (
     "tables. Objective and returned finalist values are not exported."
 )
 
-BENCHMARK_SCHEMA = "ttbi-r5-compute-benchmark-v1"
-DESCRIPTOR_SCHEMA = "ttbi-workload-benchmark-v1"
-STUDY_DATASET_NAME = "R5_NON_SCIENTIFIC_LEGACY_WORKLOAD_FIXTURE"
+BENCHMARK_SCHEMA = "ttbi-r11-compute-benchmark-v1"
+DESCRIPTOR_SCHEMA = "ttbi-r11-workload-benchmark-v1"
+DERIVATION_SCHEMA = "ttbi-r11-derived-workload-v1"
+STUDY_DATASET_NAME = "R11_NON_SCIENTIFIC_DERIVED_WORST_SIZE_WORKLOAD"
 STUDY_NAME_PREFIX = "BENCHMARK_ONLY_DO_NOT_PUBLISH__"
 
-DEFAULT_X_SHAPE = (12950, 2, 512)
-DEFAULT_Y_SHAPE = (12950, 2)
-N_STATES = 259
+SOURCE_X_SHAPE = (12950, 2, 512)
+SOURCE_Y_SHAPE = (12950, 2)
+SOURCE_N_STATES = 259
+DEFAULT_X_SHAPE = (23750, 8, 512)
+DEFAULT_Y_SHAPE = (23750, 5)
+N_STATES = 475
 PASSAGES_PER_STATE = 50
-DOFS = (2, 5)
-TARGET_SUPPORTS = (2, 3)
+DOFS = tuple(range(8))
+TARGET_SUPPORTS = (2, 3, 4)
+BEARING_TARGETS = ("left", "right")
 SEED = 42
 USEFUL_TRIALS = 100
 EPOCHS = 50
 USE_PRUNER = True
-MAX_FAIL_SLACK = 20
+ANCHOR_STAGE = "s21_scour4"
+EXECUTION_BLOCK = "l99"
 
 FINALIST_N_SPLITS = 5
 FINALIST_N_REPEATS = 2
@@ -96,7 +108,39 @@ FULL_FINITE_CHUNK_SAMPLES = 256
 LOCK_FOREIGN_STALE_SECONDS = 24 * 60 * 60
 LOCK_UNREADABLE_STALE_SECONDS = 300
 ACTIVE_WALL_HEARTBEAT_SECONDS = 5.0
-AUTHENTICATED_JSON_READ_ATTEMPTS = 30
+JSON_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
+REPORT_SNAPSHOT_MAX_BYTES = 256 * 1024 * 1024
+SQLITE_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024 * 1024
+SNAPSHOT_CHUNK_BYTES = 1 << 20
+SNAPSHOT_OPEN_ATTEMPTS = 30
+
+BENCHMARK_HYPERPARAMETER_EXECUTION_SCHEMA = (
+    "ttbi-r11-benchmark-hyperparameter-execution-v1"
+)
+HYPERPARAMETER_RUN_PLAN_SCHEMA = "ttbi-hyperparameter-run-plan-v2"
+HYPERPARAMETER_RUN_PLAN_FIELDS = frozenset({
+    "schema",
+    "mode",
+    "execution_block",
+    "anchor_stage",
+    "stage",
+    "dataset",
+    "protocol_hash",
+    "protocol_core_hash",
+    "architecture",
+    "seed",
+    "active_dofs",
+    "effective_n_trials",
+    "effective_use_pruner",
+    "requested_n_trials",
+    "requested_use_pruner",
+    "policy_sha256",
+    "campaign_run_tag",
+    "execution_receipt_sha256",
+    "block_reference_manifest_sha256",
+    "hyperparameter_manifest_sha256",
+    "hyperparameter_source",
+})
 
 DEFAULT_FIXTURE_DIR = Path(
     "results/Stage0/cache/"
@@ -104,7 +148,43 @@ DEFAULT_FIXTURE_DIR = Path(
 )
 DEFAULT_X_GLOB = "cache_*_PAA_dofs_2_5_disc1_reg_t2_3.npy"
 DEFAULT_Y_GLOB = "cache_*_PAA_dofs_2_5_disc1_reg_t2_3_labels.npy"
-OUTPUT_ROOT_RELATIVE = Path(".audit_tmp/r5_compute_benchmark")
+OUTPUT_ROOT_RELATIVE = Path(".audit_tmp/r11_compute_benchmark")
+
+DERIVATION_RECIPE = {
+    "schema": DERIVATION_SCHEMA,
+    "source_layout": {
+        "features_shape": list(SOURCE_X_SHAPE),
+        "labels_shape": list(SOURCE_Y_SHAPE),
+        "states": SOURCE_N_STATES,
+        "passages_per_state": PASSAGES_PER_STATE,
+    },
+    "derived_layout": {
+        "features_shape": list(DEFAULT_X_SHAPE),
+        "labels_shape": list(DEFAULT_Y_SHAPE),
+        "states": N_STATES,
+        "passages_per_state": PASSAGES_PER_STATE,
+    },
+    "state_mapping": "derived_state modulo 259; passage index preserved",
+    "feature_channels": [
+        {"source_channel": 0, "scale": 1.0},
+        {"source_channel": 1, "scale": 1.0},
+        {"source_channel": 0, "scale": -1.0},
+        {"source_channel": 1, "scale": -1.0},
+        {"source_channel": 0, "scale": 0.5},
+        {"source_channel": 1, "scale": 0.5},
+        {"source_channel": 0, "scale": 1.5},
+        {"source_channel": 1, "scale": 1.5},
+    ],
+    "label_heads": [
+        {"operation": "copy", "source_channel": 0},
+        {"operation": "copy", "source_channel": 1},
+        {"operation": "mean", "source_channels": [0, 1]},
+        {"operation": "copy", "source_channel": 0},
+        {"operation": "copy", "source_channel": 1},
+    ],
+    "dtype": "float32",
+    "classification": DISCLAIMER,
+}
 
 IMMUTABLE_EVIDENCE_FILES = (
     "descriptor.json",
@@ -119,22 +199,29 @@ IMMUTABLE_EVIDENCE_FILES = (
 
 SOURCE_FILES = (
     "benchmark_r5_compute.py",
+    "bundle_source_files.txt",
     "check_benchmark_contract.py",
     "comprehensive_ablation_multidamage.py",
-    "training/trainer.py",
-    "training/pipeline.py",
-    "training/robustness.py",
-    "plotting/confusion.py",
-    "plotting/robustness_plots.py",
+    "core/campaign_contract.py",
+    "core/capacity_preflight.py",
     "core/dataset.py",
+    "core/environment.py",
+    "core/execution_environment.py",
+    "core/hyperparameter_policy.py",
     "core/models.py",
     "core/preprocessing.py",
+    "core/protocol.py",
+    "core/source_provenance.py",
+    "core/statistical_inference.py",
     "core/task.py",
     "core/utils.py",
-    "core/statistical_inference.py",
-    "core/protocol.py",
-    "core/environment.py",
     "environment/campaign-py313-cu128.json",
+    "plotting/confusion.py",
+    "plotting/robustness_plots.py",
+    "requirements-campaign-py313-cu128.txt",
+    "training/pipeline.py",
+    "training/robustness.py",
+    "training/trainer.py",
 )
 
 # These are field-name fragments, not a ban on explanatory prose.  Every JSON
@@ -175,14 +262,12 @@ HPO_REPORT_FIELDS = (
     "counts_before",
     "counts_after",
     "useful_budget",
-    "failure_slack",
     "epoch_cap_per_trial",
     "useful_trial_duration_seconds_sum",
     "useful_trial_duration_seconds_quantiles",
     "useful_epochs_reported_sum",
     "useful_epochs_reported_quantiles",
-    "failed_trial_durations_excluded",
-    "failed_trial_duration_reason",
+    "fatal_failure_policy",
     "hpo_wall_seconds_this_invocation",
     "hpo_active_wall_seconds_cumulative",
     "active_wall_checkpoint_interval_seconds",
@@ -257,6 +342,191 @@ def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
         for block in iter(lambda: stream.read(chunk_size), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _regular_file_snapshot(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int,
+    capture_bytes: bool = False,
+    allow_missing: bool = False,
+) -> dict[str, Any] | None:
+    """Read one immutable regular-file view through one no-follow handle.
+
+    The accepted size and digest are computed from the exact byte stream read
+    from the opened handle.  Pre/open/post identities are compared so a path
+    substitution, truncation, or concurrent rewrite cannot combine metadata
+    from one object with bytes from another.  ``O_NOFOLLOW`` is used where the
+    platform exposes it; the lstat/open identity comparison is the fallback on
+    Windows.
+    """
+
+    if (
+        isinstance(max_bytes, bool)
+        or not isinstance(max_bytes, int)
+        or max_bytes < 0
+    ):
+        raise ContractError("snapshot max_bytes must be a non-negative integer")
+    path = Path(path)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    before: os.stat_result | None = None
+    for attempt in range(SNAPSHOT_OPEN_ATTEMPTS):
+        try:
+            before = os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:
+            if allow_missing:
+                return None
+            raise ContractError(f"{label} is missing: {path}") from None
+        except OSError as exc:
+            retryable = (
+                isinstance(exc, PermissionError)
+                or (
+                    os.name == "nt"
+                    and getattr(exc, "winerror", None) in (5, 32)
+                )
+            )
+            if not retryable or attempt + 1 == SNAPSHOT_OPEN_ATTEMPTS:
+                raise ContractError(f"cannot lstat {label}: {path}") from exc
+            time.sleep(min(0.02 * (attempt + 1), 0.25))
+            continue
+        if stat.S_ISLNK(before.st_mode):
+            raise ContractError(f"{label} must not be a symbolic link: {path}")
+        if not stat.S_ISREG(before.st_mode):
+            raise ContractError(f"{label} is not a regular file: {path}")
+        if before.st_size < 0 or before.st_size > max_bytes:
+            raise ContractError(
+                f"{label} size {before.st_size} exceeds limit "
+                f"{max_bytes}: {path}"
+            )
+        try:
+            descriptor = os.open(path, flags)
+            break
+        except FileNotFoundError:
+            raise ContractError(
+                f"{label} disappeared before open: {path}") from None
+        except OSError as exc:
+            retryable = (
+                isinstance(exc, PermissionError)
+                or (
+                    os.name == "nt"
+                    and getattr(exc, "winerror", None) in (5, 32)
+                )
+            )
+            if not retryable or attempt + 1 == SNAPSHOT_OPEN_ATTEMPTS:
+                raise ContractError(
+                    f"cannot open no-follow snapshot for {label}: {path}"
+                ) from exc
+            time.sleep(min(0.02 * (attempt + 1), 0.25))
+    if descriptor is None or before is None:
+        raise AssertionError("unreachable snapshot-open retry state")
+
+    digest = hashlib.sha256()
+    captured = bytearray() if capture_bytes else None
+    byte_count = 0
+    try:
+        opened = os.fstat(descriptor)
+        same_object = (
+            stat.S_ISREG(opened.st_mode)
+            and opened.st_dev == before.st_dev
+            and (
+                before.st_ino == 0
+                or opened.st_ino == 0
+                or opened.st_ino == before.st_ino
+            )
+        )
+        if not same_object:
+            raise ContractError(
+                f"{label} path identity changed while opening: {path}"
+            )
+        if opened.st_size < 0 or opened.st_size > max_bytes:
+            raise ContractError(
+                f"{label} size {opened.st_size} exceeds limit "
+                f"{max_bytes}: {path}"
+            )
+        while True:
+            block = os.read(descriptor, SNAPSHOT_CHUNK_BYTES)
+            if not block:
+                break
+            byte_count += len(block)
+            if byte_count > max_bytes:
+                raise ContractError(
+                    f"{label} byte stream exceeds limit {max_bytes}: {path}"
+                )
+            digest.update(block)
+            if captured is not None:
+                captured.extend(block)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise ContractError(f"cannot snapshot {label}: {path}") from exc
+    finally:
+        os.close(descriptor)
+
+    stable_metadata = (
+        stat.S_ISREG(after.st_mode)
+        and opened.st_dev == after.st_dev
+        and opened.st_ino == after.st_ino
+        and opened.st_size == after.st_size == byte_count
+        and getattr(opened, "st_mtime_ns", None)
+        == getattr(after, "st_mtime_ns", None)
+        and getattr(opened, "st_ctime_ns", None)
+        == getattr(after, "st_ctime_ns", None)
+    )
+    if not stable_metadata:
+        raise ContractError(f"{label} changed while being read: {path}")
+    result: dict[str, Any] = {
+        "size_bytes": byte_count,
+        "sha256": digest.hexdigest(),
+    }
+    if captured is not None:
+        result["bytes"] = bytes(captured)
+    return result
+
+
+def _public_file_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Strip private captured bytes from a snapshot before publication."""
+
+    return {
+        "size_bytes": int(snapshot["size_bytes"]),
+        "sha256": str(snapshot["sha256"]),
+    }
+
+
+def _json_mapping_from_snapshot(
+    snapshot: Mapping[str, Any],
+    path: Path,
+    label: str,
+) -> dict[str, Any]:
+    """Parse the exact bytes whose size and SHA-256 were authenticated."""
+
+    raw = snapshot.get("bytes")
+    if not isinstance(raw, bytes):
+        raise ContractError(f"{label} snapshot did not retain JSON bytes")
+
+    def reject_nonfinite_json(token: str) -> None:
+        raise ValueError(f"non-finite JSON token {token!r}")
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, child in pairs:
+            if key in value:
+                raise ValueError(f"duplicate JSON key {key!r}")
+            value[key] = child
+        return value
+
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            parse_constant=reject_nonfinite_json,
+            object_pairs_hook=unique_object,
+        )
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ContractError(f"cannot parse {label}: {path}") from exc
+    if not isinstance(payload, Mapping):
+        raise ContractError(f"{label} must contain a JSON object: {path}")
+    return dict(payload)
 
 
 def _canonical_json(value: Any) -> str:
@@ -348,68 +618,28 @@ def _atomic_replace(source: Path, destination: Path) -> None:
 
 
 def _read_json_mapping(path: Path, label: str) -> dict[str, Any]:
-    """Read authenticated state through short Windows/OneDrive sharing locks."""
+    """Read one authenticated JSON snapshot from a regular file."""
 
-    def reject_nonfinite_json(token: str) -> None:
-        raise ValueError(f"non-finite JSON token {token!r}")
-
-    last_error: BaseException | None = None
-    for attempt in range(AUTHENTICATED_JSON_READ_ATTEMPTS):
-        try:
-            payload = json.loads(
-                path.read_text(encoding="utf-8"),
-                parse_constant=reject_nonfinite_json,
-            )
-            if not isinstance(payload, Mapping):
-                raise ContractError(
-                    f"{label} must contain a JSON object: {path}")
-            return dict(payload)
-        except ContractError:
-            raise
-        except (OSError, ValueError) as exc:
-            retryable = (
-                isinstance(exc, (FileNotFoundError, PermissionError))
-                or isinstance(exc, ValueError)
-                or (
-                    os.name == "nt"
-                    and getattr(exc, "winerror", None) in (2, 3, 5, 32)
-                )
-            )
-            if (
-                not retryable
-                or attempt + 1 == AUTHENTICATED_JSON_READ_ATTEMPTS
-            ):
-                raise ContractError(
-                    f"cannot read {label}: {path}") from exc
-            last_error = exc
-            time.sleep(min(0.02 * (attempt + 1), 0.25))
-    raise ContractError(f"cannot read {label}: {path}") from last_error
+    snapshot = _regular_file_snapshot(
+        path,
+        label,
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+    )
+    assert snapshot is not None
+    return _json_mapping_from_snapshot(snapshot, path, label)
 
 
 def _authenticated_file_sha256(path: Path, label: str) -> str:
-    """Hash a required receipt through short Windows/OneDrive sharing locks."""
+    """Hash the exact accepted bytes of one required regular file."""
 
-    last_error: BaseException | None = None
-    for attempt in range(AUTHENTICATED_JSON_READ_ATTEMPTS):
-        try:
-            return _sha256_file(path)
-        except OSError as exc:
-            retryable = (
-                isinstance(exc, (FileNotFoundError, PermissionError))
-                or (
-                    os.name == "nt"
-                    and getattr(exc, "winerror", None) in (2, 3, 5, 32)
-                )
-            )
-            if (
-                not retryable
-                or attempt + 1 == AUTHENTICATED_JSON_READ_ATTEMPTS
-            ):
-                raise ContractError(
-                    f"cannot hash {label}: {path}") from exc
-            last_error = exc
-            time.sleep(min(0.02 * (attempt + 1), 0.25))
-    raise ContractError(f"cannot hash {label}: {path}") from last_error
+    snapshot = _regular_file_snapshot(
+        path,
+        label,
+        max_bytes=REPORT_SNAPSHOT_MAX_BYTES,
+    )
+    assert snapshot is not None
+    return str(snapshot["sha256"])
 
 
 def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -434,6 +664,39 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def _atomic_bytes(path: Path, payload: bytes) -> None:
+    """Durably publish exact already-authenticated bytes."""
+
+    if not isinstance(payload, bytes):
+        raise ContractError("atomic binary payload must be bytes")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(
+        f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_BINARY", 0)
+        descriptor = os.open(temporary, flags, 0o600)
+        try:
+            view = memoryview(payload)
+            written = 0
+            while written < len(view):
+                count = os.write(descriptor, view[written:])
+                if count <= 0:
+                    raise ContractError(
+                        f"short write while publishing {path}")
+                written += count
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        _atomic_replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _atomic_csv(
@@ -675,6 +938,240 @@ def _resolve_fixture_paths(args: argparse.Namespace) -> dict[str, Path]:
     if x_path == y_path:
         raise ContractError("feature and label fixtures resolve to one file")
     return {"features": x_path, "labels": y_path}
+
+
+def _portable_file_identity(
+    snapshot: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Drop host/copy metadata while retaining exact content identity."""
+
+    return {
+        role: {
+            "size_bytes": int(record["size_bytes"]),
+            "sha256": str(record["sha256"]),
+        }
+        for role, record in sorted(snapshot.items())
+    }
+
+
+def _validate_derived_workload(
+    np: Any,
+    derived_dir: Path,
+    *,
+    source_identity: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Path]:
+    """Authenticate the deterministic derived workload and its exact arrays."""
+
+    manifest_path = derived_dir / "derived_workload.json"
+    manifest = _read_json_mapping(
+        manifest_path, "derived-workload manifest"
+    )
+    expected_keys = {
+        "schema",
+        "classification",
+        "recipe",
+        "recipe_sha256",
+        "source_files",
+        "files",
+    }
+    if (
+        set(manifest) != expected_keys
+        or manifest.get("schema") != DERIVATION_SCHEMA
+        or manifest.get("classification") != DISCLAIMER
+        or manifest.get("recipe") != DERIVATION_RECIPE
+        or manifest.get("recipe_sha256")
+        != _canonical_sha256(DERIVATION_RECIPE)
+        or manifest.get("source_files") != dict(source_identity)
+    ):
+        raise ContractError(
+            f"derived workload manifest differs from R11: {manifest_path}"
+        )
+    paths = {
+        "features": derived_dir / "features_475x50x8x512_f32.npy",
+        "labels": derived_dir / "labels_475x50x5_f32.npy",
+    }
+    snapshot = _portable_file_identity(_snapshot_files(paths))
+    if manifest.get("files") != snapshot:
+        raise ContractError(
+            "derived workload bytes differ from their authenticated manifest"
+        )
+    features = np.load(paths["features"], mmap_mode="r", allow_pickle=False)
+    labels = np.load(paths["labels"], mmap_mode="r", allow_pickle=False)
+    try:
+        if (
+            not isinstance(features, np.memmap)
+            or not isinstance(labels, np.memmap)
+            or features.flags.writeable
+            or labels.flags.writeable
+            or tuple(features.shape) != DEFAULT_X_SHAPE
+            or tuple(labels.shape) != DEFAULT_Y_SHAPE
+            or features.dtype != np.dtype("float32")
+            or labels.dtype != np.dtype("float32")
+        ):
+            raise ContractError(
+                "authenticated derived arrays do not have the R11 workload "
+                "shape, dtype, and read-only memmap contract"
+            )
+    finally:
+        features._mmap.close()
+        labels._mmap.close()
+    return {**paths, "manifest": manifest_path}
+
+
+def _materialize_derived_workload(
+    np: Any,
+    *,
+    source_paths: Mapping[str, Path],
+    source_snapshot: Mapping[str, Mapping[str, Any]],
+    output_root: Path,
+) -> dict[str, Path]:
+    """Create the campaign-worst-size synthetic workload content-addressably.
+
+    A unique staging directory is populated and then renamed to its immutable
+    content identity.  A power loss can leave only an unreferenced staging
+    directory; it can never make a partial array look published.
+    """
+
+    source_identity = _portable_file_identity(source_snapshot)
+    identity = {
+        "schema": DERIVATION_SCHEMA,
+        "recipe": DERIVATION_RECIPE,
+        "source_files": source_identity,
+    }
+    identity_sha = _canonical_sha256(identity)
+    root = _require_within(
+        output_root / "derived_workloads",
+        output_root,
+        "derived-workload root",
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    derived_dir = _require_within(
+        root / identity_sha,
+        root,
+        "derived-workload directory",
+    )
+    if derived_dir.exists():
+        return _validate_derived_workload(
+            np,
+            derived_dir,
+            source_identity=source_identity,
+        )
+
+    source_x = np.load(
+        source_paths["features"], mmap_mode="r", allow_pickle=False
+    )
+    source_y = np.load(
+        source_paths["labels"], mmap_mode="r", allow_pickle=False
+    )
+    staging = _require_within(
+        root / (
+            f".materializing-{identity_sha}-{os.getpid()}-{uuid.uuid4().hex}"
+        ),
+        root,
+        "derived-workload staging directory",
+    )
+    staging.mkdir()
+    x_path = staging / "features_475x50x8x512_f32.npy"
+    y_path = staging / "labels_475x50x5_f32.npy"
+    derived_x = derived_y = None
+    try:
+        if (
+            not isinstance(source_x, np.memmap)
+            or not isinstance(source_y, np.memmap)
+            or source_x.flags.writeable
+            or source_y.flags.writeable
+            or tuple(source_x.shape) != SOURCE_X_SHAPE
+            or tuple(source_y.shape) != SOURCE_Y_SHAPE
+            or source_x.dtype != np.dtype("float32")
+            or source_y.dtype != np.dtype("float32")
+        ):
+            raise ContractError(
+                "legacy source fixture differs from its immutable "
+                "259-state/two-channel float32 contract"
+            )
+        source_labels = np.asarray(source_y).reshape(
+            SOURCE_N_STATES,
+            PASSAGES_PER_STATE,
+            SOURCE_Y_SHAPE[1],
+        )
+        if not np.array_equal(
+            source_labels,
+            np.broadcast_to(source_labels[:, :1, :], source_labels.shape),
+        ):
+            raise ContractError(
+                "legacy source labels are not contiguous 50-passage state blocks"
+            )
+
+        derived_x = np.lib.format.open_memmap(
+            x_path, mode="w+", dtype=np.float32, shape=DEFAULT_X_SHAPE
+        )
+        derived_y = np.lib.format.open_memmap(
+            y_path, mode="w+", dtype=np.float32, shape=DEFAULT_Y_SHAPE
+        )
+        chunk = FULL_FINITE_CHUNK_SAMPLES
+        for start in range(0, DEFAULT_X_SHAPE[0], chunk):
+            stop = min(start + chunk, DEFAULT_X_SHAPE[0])
+            derived_indices = np.arange(start, stop, dtype=np.int64)
+            states = derived_indices // PASSAGES_PER_STATE
+            passages = derived_indices % PASSAGES_PER_STATE
+            source_indices = (
+                (states % SOURCE_N_STATES) * PASSAGES_PER_STATE + passages
+            )
+            source_features = np.asarray(source_x[source_indices])
+            source_targets = np.asarray(source_y[source_indices])
+            for channel, rule in enumerate(
+                DERIVATION_RECIPE["feature_channels"]
+            ):
+                derived_x[start:stop, channel, :] = (
+                    source_features[:, rule["source_channel"], :]
+                    * np.float32(rule["scale"])
+                )
+            derived_y[start:stop, 0] = source_targets[:, 0]
+            derived_y[start:stop, 1] = source_targets[:, 1]
+            derived_y[start:stop, 2] = (
+                source_targets[:, 0] + source_targets[:, 1]
+            ) * np.float32(0.5)
+            derived_y[start:stop, 3] = source_targets[:, 0]
+            derived_y[start:stop, 4] = source_targets[:, 1]
+        derived_x.flush()
+        derived_y.flush()
+        derived_x._mmap.close()
+        derived_y._mmap.close()
+        derived_x = derived_y = None
+
+        files = {
+            "features": x_path,
+            "labels": y_path,
+        }
+        manifest = {
+            "schema": DERIVATION_SCHEMA,
+            "classification": DISCLAIMER,
+            "recipe": DERIVATION_RECIPE,
+            "recipe_sha256": _canonical_sha256(DERIVATION_RECIPE),
+            "source_files": source_identity,
+            "files": _portable_file_identity(_snapshot_files(files)),
+        }
+        _atomic_json(staging / "derived_workload.json", manifest)
+        try:
+            os.rename(staging, derived_dir)
+        except FileExistsError:
+            # A concurrent content-identical publisher won. Its public bytes
+            # are reauthenticated below; this process's complete staging
+            # directory remains as explicit, non-public evidence.
+            pass
+    finally:
+        if derived_x is not None:
+            derived_x._mmap.close()
+        if derived_y is not None:
+            derived_y._mmap.close()
+        source_x._mmap.close()
+        source_y._mmap.close()
+
+    return _validate_derived_workload(
+        np,
+        derived_dir,
+        source_identity=source_identity,
+    )
 
 
 def _pid_alive(pid: int) -> bool:
@@ -927,7 +1424,7 @@ class _ExclusivePidLock:
     def __enter__(self) -> "_ExclusivePidLock":
         self.run_dir.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema": "r5-compute-pid-lock-v1",
+            "schema": "r11-compute-pid-lock-v1",
             "pid": os.getpid(),
             "hostname": socket.gethostname(),
             "created_utc": _utc_now(),
@@ -1652,22 +2149,37 @@ def _load_runtime(descriptor: Mapping[str, Any], descriptor_sha256: str) -> dict
     inference = importlib.import_module("core.statistical_inference")
     protocol = importlib.import_module("core.protocol")
     environment = importlib.import_module("core.environment")
+    execution_environment = importlib.import_module(
+        "core.execution_environment"
+    )
+    hyperparameter_policy = importlib.import_module(
+        "core.hyperparameter_policy"
+    )
+    capacity_preflight = importlib.import_module(
+        "core.capacity_preflight"
+    )
+    utils = importlib.import_module("core.utils")
 
     if protocol.protocol_hash(dict(descriptor)) != descriptor_sha256:
         raise ContractError(
             "benchmark descriptor hash differs from core.protocol.protocol_hash"
         )
-    if int(protocol.OPTUNA_PROTOCOL["max_fail_slack"]) != MAX_FAIL_SLACK:
+    if int(protocol.OPTUNA_PROTOCOL["max_fail_slack"]) != 0:
         raise ContractError(
-            "production max_fail_slack drifted from the R5 benchmark contract"
+            "registered campaign failure policy is not fail-closed"
         )
     for module, name in (
         (pipeline, "_create_or_resume_study"),
         (pipeline, "_stamp_study_protocol"),
+        (pipeline, "_execute_protocol_study"),
         (inference, "repeated_stratified_group_folds"),
         (inference, "frozen_checkpoint_epoch_count"),
         (trainer, "Objective"),
         (trainer, "fit_predict_finalist_fold"),
+        (hyperparameter_policy, "derive_execution_plan"),
+        (hyperparameter_policy, "validate_terminal_study"),
+        (capacity_preflight, "ensure_capacity_preflight"),
+        (execution_environment, "enforce_execution_block"),
     ):
         if not callable(getattr(module, name, None)):
             raise ContractError(
@@ -1688,6 +2200,10 @@ def _load_runtime(descriptor: Mapping[str, Any], descriptor_sha256: str) -> dict
         "inference": inference,
         "protocol": protocol,
         "environment_record": environment_record,
+        "execution_environment": execution_environment,
+        "hyperparameter_policy": hyperparameter_policy,
+        "capacity_preflight": capacity_preflight,
+        "utils": utils,
     }
 
 
@@ -1856,7 +2372,8 @@ def _load_and_validate_fixture(
         )
     if len(X) != N_STATES * PASSAGES_PER_STATE:
         raise ContractError(
-            "fixture sample count does not equal 259 states x 50 passages"
+            "derived workload sample count does not equal 475 states x "
+            "50 passages"
         )
 
     sample_count = min(SAMPLED_FINITE_COUNT, len(X))
@@ -2197,23 +2714,27 @@ def _recover_inflight_trials(
                 f"could not mark stale trial {trial.number} as FAIL"
             )
     events = _validated_study_recovery_events(
-        study.user_attrs.get("r5_compute_recovery_events", [])
+        study.user_attrs.get("r11_compute_recovery_events", [])
     )
     events.append({
         "recovered_utc": _utc_now(),
         "trial_numbers": numbers,
         "policy": "state changed to FAIL; no deletion",
     })
-    study.set_user_attr("r5_compute_recovery_events", events)
+    study.set_user_attr("r11_compute_recovery_events", events)
     return numbers
 
 
 def _build_config(
     descriptor: Mapping[str, Any],
     descriptor_sha256: str,
+    execution_runtime: Mapping[str, Any],
+    *,
+    campaign_run_tag: str,
+    execution_receipt_sha256: str,
 ) -> dict[str, Any]:
     return {
-        "name": "r5c",
+        "name": "r11c",
         "seed": SEED,
         "sensor_noise": None,
         "name_short": "PAA_LSTM_NHiTS",
@@ -2226,15 +2747,25 @@ def _build_config(
         "model_type": "1D_MODULAR",
         "task": "regression",
         "target_supports": list(TARGET_SUPPORTS),
-        "bearing_targets": None,
+        "bearing_targets": list(BEARING_TARGETS),
         "protocol_hash": descriptor_sha256,
+        "protocol_core_hash": _canonical_sha256(descriptor["core"]),
         "protocol_descriptor": dict(descriptor),
+        "execution_runtime": dict(execution_runtime),
+        # This is an anchor-HPO benchmark: the block reference does not exist
+        # until after selection, but the run and execution receipt already do.
+        "campaign_run_tag": campaign_run_tag,
+        "execution_receipt_sha256": execution_receipt_sha256,
+        "block_reference_manifest_sha256": None,
+        "hyperparameter_mode": "anchor_hpo",
     }
 
 
 def _prepare_study(
     runtime: Mapping[str, Any],
     config: Mapping[str, Any],
+    hyperparameter_plan: Mapping[str, Any],
+    capacity_receipt: Mapping[str, Any],
     run_dir: Path,
     descriptor_sha256: str,
     *,
@@ -2259,6 +2790,8 @@ def _prepare_study(
         epochs=EPOCHS,
         sampler_seed=SEED,
         use_pruner=USE_PRUNER,
+        hyperparameter_plan=dict(hyperparameter_plan),
+        capacity_receipt=dict(capacity_receipt),
     )
     contract_attr = {
         "schema": BENCHMARK_SCHEMA,
@@ -2268,11 +2801,11 @@ def _prepare_study(
             "compute/provenance fields only; scientific values are not exported"
         ),
     }
-    previous = study.user_attrs.get("r5_compute_contract")
+    previous = study.user_attrs.get("r11_compute_contract")
     if previous is None:
-        study.set_user_attr("r5_compute_contract", contract_attr)
+        study.set_user_attr("r11_compute_contract", contract_attr)
     elif previous != contract_attr:
-        raise ContractError("stored R5 compute-study contract differs")
+        raise ContractError("stored R11 compute-study contract differs")
     recovered = _recover_inflight_trials(
         runtime,
         study,
@@ -2281,10 +2814,67 @@ def _prepare_study(
     return study, recovered
 
 
-def _optimize_useful_budget(
+class _QuietProtocolStudy:
+    """Output-only adapter around the real durable Optuna study.
+
+    The production helper deliberately supplies its normal champion-printing
+    callback and progress bar.  Those surfaces reveal objective values, which
+    this non-scientific benchmark forbids publishing.  The adapter verifies
+    that exact call signature, substitutes the compute-receipt callback, and
+    invokes the underlying Optuna study without ``catch``.  Trial sampling,
+    pruning, objective execution, storage and terminal validation are unchanged.
+    """
+
+    def __init__(
+        self,
+        raw_study: Any,
+        *,
+        production_callback: Any,
+        receipt_callback: Any,
+    ):
+        self._raw_study = raw_study
+        self._production_callback = production_callback
+        self._receipt_callback = receipt_callback
+
+    @property
+    def study_name(self) -> str:
+        return self._raw_study.study_name
+
+    @property
+    def trials(self):
+        return self._raw_study.trials
+
+    def optimize(
+        self,
+        objective: Any,
+        *,
+        n_trials: int,
+        callbacks: Sequence[Any],
+        show_progress_bar: bool,
+    ) -> Any:
+        if (
+            callbacks != [self._production_callback]
+            or show_progress_bar is not True
+        ):
+            raise ContractError(
+                "training.pipeline._execute_protocol_study call signature "
+                "drifted from the reviewed production path"
+            )
+        # Deliberately no catch= argument: CPU/CUDA OOM and every unexpected
+        # exception are fatal, produce a FAIL trial, and receive no replacement.
+        return self._raw_study.optimize(
+            objective,
+            n_trials=n_trials,
+            callbacks=[self._receipt_callback],
+            show_progress_bar=False,
+        )
+
+
+def _run_registered_anchor_hpo(
     runtime: Mapping[str, Any],
     study: Any,
     config: Mapping[str, Any],
+    hyperparameter_plan: Mapping[str, Any],
     fixture: Mapping[str, Any],
     splits: Mapping[str, Any],
     weights_dir: Path,
@@ -2294,11 +2884,27 @@ def _optimize_useful_budget(
     *,
     recover_stale: bool,
 ) -> dict[str, Any]:
-    """Production-equivalent COMPLETE+PRUNED retry loop, without score output."""
+    """Run the one exact registered anchor-HPO study without value output."""
 
     optuna = runtime["optuna"]
     torch = runtime["torch"]
     trainer = runtime["trainer"]
+    pipeline = runtime["pipeline"]
+    plan = runtime["hyperparameter_policy"].validate_run_plan(
+        dict(hyperparameter_plan)
+    )
+    if (
+        plan["mode"] != "anchor_hpo"
+        or plan["effective_n_trials"] != USEFUL_TRIALS
+        or plan["effective_use_pruner"] is not USE_PRUNER
+        or tuple(plan["active_dofs"]) != DOFS
+        or plan["architecture"] != "PAA_LSTM_NHiTS"
+        or plan["stage"] != ANCHOR_STAGE
+        or plan["execution_block"] != EXECUTION_BLOCK
+    ):
+        raise ContractError(
+            "benchmark did not receive the exact registered R11 anchor plan"
+        )
     trial_csv = run_dir / "trial_compute.csv"
     progress_path = run_dir / "run_state.json"
     hpo_checkpoint_path = run_dir / "hpo_compute.json"
@@ -2308,13 +2914,14 @@ def _optimize_useful_budget(
         raise ContractError(
             f"study was extended past useful budget: {counts_before}"
         )
-    if counts_before["total"] > USEFUL_TRIALS + MAX_FAIL_SLACK:
+    if counts_before["total"] > USEFUL_TRIALS:
         raise ContractError(
-            f"study was extended past failure slack: {counts_before}"
+            f"study was extended past its exact registered budget: "
+            f"{counts_before}"
         )
 
     study_recovery_events = _validated_study_recovery_events(
-        study.user_attrs.get("r5_compute_recovery_events", [])
+        study.user_attrs.get("r11_compute_recovery_events", [])
     )
     all_recovered_trial_numbers = sorted({
         int(number)
@@ -2388,9 +2995,11 @@ def _optimize_useful_budget(
     )
 
     budget_complete_before = (
-        counts_before["running"] == 0
+        counts_before["failed"] == 0
+        and counts_before["running"] == 0
         and counts_before["waiting"] == 0
         and counts_before["useful"] == USEFUL_TRIALS
+        and counts_before["total"] == USEFUL_TRIALS
         and counts_before["complete"] >= 1
     )
     stored_report: dict[str, Any] | None = None
@@ -2607,7 +3216,7 @@ def _optimize_useful_budget(
             "updated_utc": _utc_now(),
         })
         print(
-            f"[R5 COMPUTE] useful={counts['useful']}/{USEFUL_TRIALS} "
+            f"[R11 COMPUTE] terminal={counts['useful']}/{USEFUL_TRIALS} "
             f"complete={counts['complete']} pruned={counts['pruned']} "
             f"failed={counts['failed']}"
         )
@@ -2620,14 +3229,6 @@ def _optimize_useful_budget(
             n_epochs=EPOCHS,
             cache_dir=str(run_dir / "fixture_adapter"),
             output_dir=str(weights_dir),
-        )
-        oom_types = tuple(
-            error_type
-            for error_type in (
-                getattr(torch.cuda, "OutOfMemoryError", None),
-                getattr(torch, "OutOfMemoryError", None),
-            )
-            if error_type
         )
         _write_trial_csv(trial_csv, study, descriptor_sha256)
         with _patched_trainer_fixture(
@@ -2650,21 +3251,16 @@ def _optimize_useful_budget(
                 memory_monitor = live_memory_monitor
                 _synchronize_cuda(torch)
                 start = time.perf_counter()
-                while True:
-                    counts = _study_counts(optuna, study)
-                    remaining = min(
-                        USEFUL_TRIALS - counts["useful"],
-                        (USEFUL_TRIALS + MAX_FAIL_SLACK) - counts["total"],
-                    )
-                    if remaining <= 0:
-                        break
-                    study.optimize(
-                        objective,
-                        n_trials=remaining,
-                        catch=oom_types,
-                        callbacks=[callback],
-                        show_progress_bar=False,
-                    )
+                quiet_study = _QuietProtocolStudy(
+                    study,
+                    production_callback=pipeline.print_best_callback,
+                    receipt_callback=callback,
+                )
+                pipeline._execute_protocol_study(
+                    quiet_study,
+                    objective,
+                    plan,
+                )
                 _synchronize_cuda(torch)
                 wall_seconds = time.perf_counter() - start
             current_memory = live_memory_monitor.result
@@ -2676,15 +3272,18 @@ def _optimize_useful_budget(
 
     counts_after = _study_counts(optuna, study)
     if (
-        counts_after["running"]
+        counts_after["failed"]
+        or counts_after["running"]
         or counts_after["waiting"]
         or counts_after["useful"] != USEFUL_TRIALS
+        or counts_after["total"] != USEFUL_TRIALS
         or counts_after["complete"] < 1
     ):
         raise ContractError(
             "benchmark study did not finish the exact useful budget: "
             f"{counts_after}"
         )
+    runtime["hyperparameter_policy"].validate_terminal_study(study, plan)
     _write_trial_csv(trial_csv, study, descriptor_sha256)
     rows = _trial_compute_rows(study, descriptor_sha256)
     trial_compute_sha256 = _authenticated_file_sha256(
@@ -2754,7 +3353,6 @@ def _optimize_useful_budget(
         "counts_before": counts_before,
         "counts_after": counts_after,
         "useful_budget": USEFUL_TRIALS,
-        "failure_slack": MAX_FAIL_SLACK,
         "epoch_cap_per_trial": EPOCHS,
         "useful_trial_duration_seconds_sum": useful_duration_sum,
         "useful_trial_duration_seconds_quantiles": _quantile_summary(
@@ -2762,9 +3360,9 @@ def _optimize_useful_budget(
         "useful_epochs_reported_sum": useful_epoch_sum,
         "useful_epochs_reported_quantiles": _quantile_summary(
             runtime["np"], useful_epochs_reported),
-        "failed_trial_durations_excluded": True,
-        "failed_trial_duration_reason": (
-            "stale FAIL durations may include powered-off downtime"
+        "fatal_failure_policy": (
+            "FAIL=0 is required; OOM and every other exception are uncaught "
+            "and no replacement trial is permitted"
         ),
         "hpo_wall_seconds_this_invocation": wall_seconds,
         "hpo_active_wall_seconds_cumulative": active_wall_cumulative,
@@ -3385,19 +3983,82 @@ def _materialize_study_storage_receipt(run_dir: Path) -> Path:
 
 def _storage_snapshot(run_dir: Path) -> dict[str, dict[str, Any]]:
     receipt = run_dir / "study_receipt.sqlite3"
-    if not receipt.is_file():
-        raise ContractError(
-            f"immutable study receipt is missing: {receipt}")
+    captured = _regular_file_snapshot(
+        receipt,
+        "immutable study receipt",
+        max_bytes=SQLITE_SNAPSHOT_MAX_BYTES,
+    )
+    assert captured is not None
     return {
-        receipt.name: {
-            "size_bytes": int(receipt.stat().st_size),
-            "sha256": _sha256_file(receipt),
-        }
+        receipt.name: _public_file_snapshot(captured)
     }
+
+
+def _coordination_receipt_snapshot(
+    run_dir: Path,
+) -> dict[str, dict[str, Any]]:
+    """Authenticate the one execution and one CUDA-capacity public receipt."""
+
+    paths: dict[str, Path] = {}
+    for role, directory_name in (
+        ("execution_block", "execution_receipts"),
+        ("cuda_capacity", "capacity_receipts"),
+    ):
+        directory = run_dir / directory_name
+        try:
+            directory_stat = os.stat(directory, follow_symlinks=False)
+        except FileNotFoundError:
+            matches: list[Path] = []
+        except OSError as exc:
+            raise ContractError(
+                f"cannot inspect {role} receipt directory: {directory}"
+            ) from exc
+        else:
+            if stat.S_ISLNK(directory_stat.st_mode):
+                raise ContractError(
+                    f"{role} receipt directory must not be a symlink: "
+                    f"{directory}"
+                )
+            if not stat.S_ISDIR(directory_stat.st_mode):
+                raise ContractError(
+                    f"{role} receipt path is not a directory: {directory}"
+                )
+            try:
+                with os.scandir(directory) as entries:
+                    matches = sorted(
+                        (Path(entry.path) for entry in entries
+                         if entry.name.endswith(".json")),
+                        key=lambda path: path.name,
+                    )
+            except OSError as exc:
+                raise ContractError(
+                    f"cannot enumerate {role} receipts: {directory}"
+                ) from exc
+        if len(matches) != 1:
+            raise ContractError(
+                f"expected exactly one regular {role} receipt below "
+                f"{directory}, found {matches}"
+            )
+        paths[role] = matches[0]
+    snapshot: dict[str, dict[str, Any]] = {}
+    for role, path in sorted(paths.items()):
+        captured = _regular_file_snapshot(
+            path,
+            f"{role} coordination receipt",
+            max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        )
+        assert captured is not None
+        snapshot[role] = {
+            "relative_path": path.relative_to(run_dir).as_posix(),
+            **_public_file_snapshot(captured),
+        }
+    return snapshot
 
 
 def _immutable_evidence_snapshot(
     run_dir: Path,
+    *,
+    study_storage_snapshot: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Hash every durable artifact that the completed summary announces."""
 
@@ -3405,17 +4066,182 @@ def _immutable_evidence_snapshot(
     missing: list[str] = []
     for name in IMMUTABLE_EVIDENCE_FILES:
         path = run_dir / name
-        if not path.is_file():
+        if name == "study_receipt.sqlite3" and study_storage_snapshot is not None:
+            stored = study_storage_snapshot.get(name)
+            if not isinstance(stored, Mapping):
+                missing.append(name)
+                continue
+            snapshot[name] = {
+                "size_bytes": int(stored.get("size_bytes", -1)),
+                "sha256": str(stored.get("sha256", "")),
+            }
+            continue
+        maximum = (
+            SQLITE_SNAPSHOT_MAX_BYTES
+            if path.suffix == ".sqlite3"
+            else REPORT_SNAPSHOT_MAX_BYTES
+        )
+        captured = _regular_file_snapshot(
+            path,
+            f"immutable benchmark evidence {name}",
+            max_bytes=maximum,
+            allow_missing=True,
+        )
+        if captured is None:
             missing.append(name)
             continue
-        snapshot[name] = {
-            "size_bytes": int(path.stat().st_size),
-            "sha256": _sha256_file(path),
-        }
+        snapshot[name] = _public_file_snapshot(captured)
     if missing:
         raise ContractError(
             f"immutable benchmark evidence is incomplete: {missing}")
     return snapshot
+
+
+def _hyperparameter_execution_record(
+    hyperparameter_policy: Any,
+    hyperparameter_plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Publish the complete policy-validated benchmark run plan."""
+
+    validated_plan = hyperparameter_policy.validate_run_plan(
+        dict(hyperparameter_plan)
+    )
+    if not isinstance(validated_plan, dict):
+        raise ContractError(
+            "hyperparameter policy did not return a validated run-plan object"
+        )
+    plan_sha256 = hyperparameter_policy.canonical_json_sha256(validated_plan)
+    record = {
+        "schema": BENCHMARK_HYPERPARAMETER_EXECUTION_SCHEMA,
+        "campaign_run_tag": validated_plan["campaign_run_tag"],
+        "execution_receipt_sha256":
+            validated_plan["execution_receipt_sha256"],
+        "block_reference_manifest_sha256":
+            validated_plan["block_reference_manifest_sha256"],
+        "validated_run_plan_sha256": plan_sha256,
+        "validated_run_plan": validated_plan,
+    }
+    _assert_no_scientific_report_fields(record)
+    return record
+
+
+def _validate_benchmark_hyperparameter_execution(
+    record: Any,
+    *,
+    hyperparameter_policy: Any,
+    descriptor_sha256: str,
+    protocol_core_sha256: str,
+    coordination_receipts: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Fail closed on any restart-time run/receipt/reference substitution."""
+
+    outer_fields = {
+        "schema",
+        "campaign_run_tag",
+        "execution_receipt_sha256",
+        "block_reference_manifest_sha256",
+        "validated_run_plan_sha256",
+        "validated_run_plan",
+    }
+    if not isinstance(record, Mapping) or set(record) != outer_fields:
+        raise ContractError(
+            "benchmark hyperparameter-execution fields differ from contract"
+        )
+    if record["schema"] != BENCHMARK_HYPERPARAMETER_EXECUTION_SCHEMA:
+        raise ContractError(
+            "benchmark hyperparameter-execution schema differs")
+    plan = record["validated_run_plan"]
+    if not isinstance(plan, Mapping) or set(plan) != HYPERPARAMETER_RUN_PLAN_FIELDS:
+        raise ContractError(
+            "benchmark validated run-plan fields differ from contract"
+        )
+    plan = dict(plan)
+    try:
+        policy_validated_plan = hyperparameter_policy.validate_run_plan(
+            dict(plan)
+        )
+        policy_plan_sha256 = hyperparameter_policy.canonical_json_sha256(
+            policy_validated_plan
+        )
+    except Exception as exc:
+        raise ContractError(
+            "benchmark run plan fails the registered hyperparameter policy"
+        ) from exc
+    if policy_validated_plan != plan:
+        raise ContractError(
+            "registered hyperparameter policy changed the published run plan"
+        )
+    expected_run_tag = f"benchmark-{descriptor_sha256}"
+    execution_snapshot = coordination_receipts.get("execution_block")
+    if not isinstance(execution_snapshot, Mapping):
+        raise ContractError(
+            "benchmark coordination snapshot lacks execution receipt")
+    expected_receipt_sha256 = execution_snapshot.get("sha256")
+    if (
+        not isinstance(expected_receipt_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_receipt_sha256)
+    ):
+        raise ContractError(
+            "benchmark execution receipt snapshot has invalid SHA-256")
+    plan_sha256 = _canonical_sha256(plan)
+    if (
+        record["validated_run_plan_sha256"] != plan_sha256
+        or policy_plan_sha256 != plan_sha256
+        or not re.fullmatch(r"[0-9a-f]{64}", plan_sha256)
+    ):
+        raise ContractError(
+            "benchmark validated run-plan SHA-256 differs from its contents"
+        )
+    if (
+        record["campaign_run_tag"] != expected_run_tag
+        or plan["campaign_run_tag"] != expected_run_tag
+    ):
+        raise ContractError("benchmark campaign run_tag differs")
+    if (
+        record["execution_receipt_sha256"] != expected_receipt_sha256
+        or plan["execution_receipt_sha256"] != expected_receipt_sha256
+    ):
+        raise ContractError(
+            "benchmark hyperparameter plan does not cite the exact execution "
+            "receipt bytes"
+        )
+    if (
+        record["block_reference_manifest_sha256"] is not None
+        or plan["block_reference_manifest_sha256"] is not None
+    ):
+        raise ContractError(
+            "benchmark block anchor cannot cite a reference manifest")
+
+    exact_plan_fields = {
+        "schema": HYPERPARAMETER_RUN_PLAN_SCHEMA,
+        "mode": "anchor_hpo",
+        "execution_block": EXECUTION_BLOCK,
+        "anchor_stage": ANCHOR_STAGE,
+        "stage": ANCHOR_STAGE,
+        "dataset": STUDY_DATASET_NAME,
+        "protocol_hash": descriptor_sha256,
+        "protocol_core_hash": protocol_core_sha256,
+        "architecture": "PAA_LSTM_NHiTS",
+        "seed": SEED,
+        "active_dofs": list(DOFS),
+        "effective_n_trials": USEFUL_TRIALS,
+        "effective_use_pruner": USE_PRUNER,
+        "requested_n_trials": USEFUL_TRIALS,
+        "requested_use_pruner": USE_PRUNER,
+        "hyperparameter_manifest_sha256": None,
+        "hyperparameter_source": None,
+    }
+    for key, expected in exact_plan_fields.items():
+        if plan.get(key) != expected:
+            raise ContractError(
+                f"benchmark validated run-plan field {key!r} differs")
+    if (
+        not isinstance(plan.get("policy_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", plan["policy_sha256"])
+    ):
+        raise ContractError(
+            "benchmark validated run plan lacks policy SHA-256")
+    return plan
 
 
 def _completion_pointer_history_valid(
@@ -3447,17 +4273,26 @@ def _completion_pointer_history_valid(
         return False
     path = (run_dir / archive).resolve()
     history_dir = (run_dir / "completion_pointer_history").resolve()
-    return (
-        _is_within(path, history_dir)
-        and path.is_file()
-        and _sha256_file(path) == digest
-    )
+    if not _is_within(path, history_dir):
+        return False
+    try:
+        snapshot = _regular_file_snapshot(
+            path,
+            "prior benchmark completion pointer",
+            max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        )
+    except ContractError:
+        return False
+    assert snapshot is not None
+    return snapshot["sha256"] == digest
 
 
 def _completed_summary_if_valid(
     run_dir: Path,
     *,
+    hyperparameter_policy: Any,
     descriptor_sha256: str,
+    protocol_core_sha256: str,
     git_sha: str,
     run_id: str,
     fixture_snapshot: Mapping[str, Mapping[str, Any]],
@@ -3476,19 +4311,57 @@ def _completed_summary_if_valid(
 
     summary_path = run_dir / "summary.json"
     state_path = run_dir / "run_state.json"
-    if not summary_path.exists():
-        if state_path.exists():
-            state = _read_json_mapping(
-                state_path, "incomplete benchmark run state")
+    summary_snapshot = _regular_file_snapshot(
+        summary_path,
+        "existing benchmark summary",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+        allow_missing=True,
+    )
+    if summary_snapshot is None:
+        state_snapshot = _regular_file_snapshot(
+            state_path,
+            "incomplete benchmark run state",
+            max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+            capture_bytes=True,
+            allow_missing=True,
+        )
+        if state_snapshot is not None:
+            state = _json_mapping_from_snapshot(
+                state_snapshot,
+                state_path,
+                "incomplete benchmark run state",
+            )
             if state.get("status") == "completed":
                 raise ContractError(
                     "run_state says completed but summary.json is missing")
         return None, False
-    summary = _read_json_mapping(
-        summary_path, "existing benchmark summary")
+    summary = _json_mapping_from_snapshot(
+        summary_snapshot,
+        summary_path,
+        "existing benchmark summary",
+    )
     _assert_no_scientific_report_fields(summary)
     identity = summary.get("identity", {})
     hashes = summary.get("hashes", {})
+    if not isinstance(identity, Mapping) or not isinstance(hashes, Mapping):
+        raise ContractError(
+            "existing benchmark summary lacks identity/hash mappings")
+    storage_snapshot = _storage_snapshot(run_dir)
+    coordination_snapshot = _coordination_receipt_snapshot(run_dir)
+    immutable_snapshot = _immutable_evidence_snapshot(
+        run_dir,
+        study_storage_snapshot=storage_snapshot,
+    )
+    _validate_benchmark_hyperparameter_execution(
+        summary.get("hyperparameter_execution"),
+        hyperparameter_policy=hyperparameter_policy,
+        descriptor_sha256=descriptor_sha256,
+        protocol_core_sha256=protocol_core_sha256,
+        coordination_receipts=coordination_snapshot,
+    )
+    execution_attestation = summary.get("execution_attestation")
+    capacity_preflight = summary.get("capacity_preflight")
     summary_valid = (
         summary.get("schema") == BENCHMARK_SCHEMA
         and summary.get("classification") == DISCLAIMER
@@ -3506,22 +4379,41 @@ def _completed_summary_if_valid(
             hashes["fixture_before"], fixture_snapshot)
         and _snapshot_equal(
             hashes["fixture_after"], fixture_snapshot)
-        and hashes.get("study_storage") == _storage_snapshot(run_dir)
+        and hashes.get("study_storage") == storage_snapshot
+        and hashes.get("coordination_receipts")
+        == coordination_snapshot
         and hashes.get("immutable_evidence")
-        == _immutable_evidence_snapshot(run_dir)
+        == immutable_snapshot
+        and isinstance(execution_attestation, Mapping)
+        and execution_attestation.get("receipt_sha256")
+        == coordination_snapshot["execution_block"]["sha256"]
+        and isinstance(capacity_preflight, Mapping)
+        and capacity_preflight.get("passed") is True
+        and capacity_preflight.get("envelope_file_sha256")
+        == coordination_snapshot["cuda_capacity"]["sha256"]
     )
     if not summary_valid:
         raise ContractError(
             "existing summary/storage no longer matches the "
             "immutable completed benchmark receipt")
 
-    summary_sha256 = _sha256_file(summary_path)
+    summary_sha256 = str(summary_snapshot["sha256"])
     state: dict[str, Any] | None = None
+    state_snapshot = _regular_file_snapshot(
+        state_path,
+        "benchmark completion state",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+        allow_missing=True,
+    )
     state_read_error: Exception | None = None
-    if state_path.exists():
+    if state_snapshot is not None:
         try:
-            state = _read_json_mapping(
-                state_path, "benchmark completion state")
+            state = _json_mapping_from_snapshot(
+                state_snapshot,
+                state_path,
+                "benchmark completion state",
+            )
         except Exception as exc:
             state_read_error = exc
     state_valid = (
@@ -3558,14 +4450,18 @@ def _completed_summary_if_valid(
         "archive": None,
         "sha256": None,
     }
-    if state_path.exists():
-        prior_sha256 = _sha256_file(state_path)
+    if state_snapshot is not None:
+        prior_sha256 = str(state_snapshot["sha256"])
         history_dir = run_dir / "completion_pointer_history"
         history_dir.mkdir(parents=True, exist_ok=True)
         archive_path = history_dir / (
             f"recovered-{time.time_ns()}-{uuid.uuid4().hex}.bin"
         )
-        _atomic_replace(state_path, archive_path)
+        state_bytes = state_snapshot.get("bytes")
+        if not isinstance(state_bytes, bytes):
+            raise ContractError(
+                "completion state snapshot did not retain archive bytes")
+        _atomic_bytes(archive_path, state_bytes)
         prior_pointer = {
             "status": (
                 str(state.get("status", "unknown"))
@@ -3594,9 +4490,6 @@ def _completed_summary_if_valid(
         "prior_completion_pointer": prior_pointer,
     }
     _atomic_json(state_path, repaired_state)
-    if _sha256_file(summary_path) != summary_sha256:
-        raise ContractError(
-            "summary bytes changed while repairing the completion pointer")
     return summary, True
 
 
@@ -3609,12 +4502,33 @@ def _descriptor(
     # Keep the workload hash comparable across machines: hostnames, absolute
     # paths, and copy-specific mtimes belong in the run report, not the
     # descriptor.  File bytes/sizes and source hashes are the portable identity.
-    portable_fixture = {
-        role: {
-            "size_bytes": int(record["size_bytes"]),
-            "sha256": str(record["sha256"]),
-        }
-        for role, record in sorted(fixture_before.items())
+    portable_fixture = _portable_file_identity(fixture_before)
+    core = {
+        "schema": "ttbi-r11-benchmark-protocol-core-v1",
+        "classification": DISCLAIMER,
+        "execution_blocking": {
+            "block": EXECUTION_BLOCK,
+            "anchor_stage": ANCHOR_STAGE,
+            "same_physical_host_and_gpu_within_block": True,
+        },
+        "workload": {
+            "derived_files": {
+                key: value
+                for key, value in portable_fixture.items()
+                if key.startswith("derived_")
+            },
+            "derivation_recipe": DERIVATION_RECIPE,
+            "states": N_STATES,
+            "passages_per_state": PASSAGES_PER_STATE,
+            "channels": len(DOFS),
+            "heads": len(TARGET_SUPPORTS) + len(BEARING_TARGETS),
+        },
+        "training": {
+            "architecture": "PAA_LSTM_NHiTS",
+            "seed": SEED,
+            "epoch_cap": EPOCHS,
+        },
+        "source_sha256": dict(source_hashes),
     }
     return {
         "schema": DESCRIPTOR_SCHEMA,
@@ -3622,6 +4536,13 @@ def _descriptor(
         "classification_detail": DISCLAIMER_DETAIL,
         "purpose": "production-path compute and throughput measurement only",
         "git_sha": git_sha,
+        "core": core,
+        "rung": {
+            "stage": ANCHOR_STAGE,
+            "dataset": STUDY_DATASET_NAME,
+            "execution_block": EXECUTION_BLOCK,
+            "execution_anchor": ANCHOR_STAGE,
+        },
         "fixture": {
             "files": portable_fixture,
             "expected_features_shape": list(DEFAULT_X_SHAPE),
@@ -3638,17 +4559,18 @@ def _descriptor(
             "dofs": list(DOFS),
             "task": "regression",
             "target_supports": list(TARGET_SUPPORTS),
+            "bearing_targets": list(BEARING_TARGETS),
             "seed": SEED,
         },
         "workload_size_context": {
             "benchmark_state_count": N_STATES,
-            "new_s0_state_count": 278,
-            "largest_rung_state_count": 308,
-            "s0_sample_count_ratio": 278 / N_STATES,
-            "largest_rung_sample_count_ratio": 308 / N_STATES,
+            "registered_l60_state_count": 450,
+            "registered_l99_state_count": 475,
+            "largest_rung_state_count": 475,
+            "largest_rung_sample_count_ratio": 1.0,
             "interpretation": (
-                "sample-count context only; not a guaranteed linear runtime "
-                "scaling law or an architecture-average estimate"
+                "the benchmark uses the largest registered state/sample count; "
+                "it remains throughput evidence, not a model-quality estimate"
             ),
         },
         "study_policy": {
@@ -3656,12 +4578,17 @@ def _descriptor(
             "epochs": EPOCHS,
             "pruner_enabled": USE_PRUNER,
             "useful_states": ["COMPLETE", "PRUNED"],
-            "failure_slack": MAX_FAIL_SLACK,
+            "failed_trials_allowed": 0,
+            "running_or_waiting_trials_allowed": 0,
+            "oom_policy": "fatal, uncaught, no replacement",
             "sampler_seed": SEED,
             "production_helpers": [
                 "training.pipeline._create_or_resume_study",
+                "core.hyperparameter_policy.derive_execution_plan",
                 "training.pipeline._stamp_study_protocol",
+                "training.pipeline._execute_protocol_study",
                 "training.trainer.Objective",
+                "core.capacity_preflight.ensure_capacity_preflight",
             ],
         },
         "split_policy": {
@@ -3722,9 +4649,8 @@ def _descriptor(
                 "persisted lower bound at nominal cadence; no mathematical "
                 "maximum tail because scheduling/GIL/filesystem delays apply"
             ),
-            "failed_trial_duration_policy": (
-                "retained in trial CSV but excluded from useful-trial timing "
-                "because stale recovery may include powered-off downtime"
+            "failed_trial_policy": (
+                "no completed receipt is possible when any FAIL exists"
             ),
         },
         "source_sha256": dict(source_hashes),
@@ -3734,7 +4660,7 @@ def _descriptor(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            f"{DISCLAIMER}: run the fixed R5 production-path compute benchmark"
+            f"{DISCLAIMER}: run the fixed R11 production-path compute benchmark"
         )
     )
     parser.add_argument(
@@ -3787,8 +4713,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     command_argv.extend(list(sys.argv[1:] if argv is None else argv))
     command = _render_command(command_argv)
 
-    fixture_paths = _resolve_fixture_paths(args)
-    fixture_before = _snapshot_files(fixture_paths)
+    source_fixture_paths = _resolve_fixture_paths(args)
+    source_fixture_before = _snapshot_files(source_fixture_paths)
     source_before = _source_hashes(repo)
     git_sha = _git_sha(repo)
     _assert_sources_tracked_at_head(repo)
@@ -3798,6 +4724,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             "tracked runtime source is dirty. Commit the converged code before "
             "benchmarking so every timing is attached to one immutable commit."
         )
+    output_root = (repo / OUTPUT_ROOT_RELATIVE).resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    _bootstrap_cublas_environment(repo)
+    derivation_np = importlib.import_module("numpy")
+    derived_fixture_paths = _materialize_derived_workload(
+        derivation_np,
+        source_paths=source_fixture_paths,
+        source_snapshot=source_fixture_before,
+        output_root=output_root,
+    )
+    all_fixture_paths = {
+        "source_features": source_fixture_paths["features"],
+        "source_labels": source_fixture_paths["labels"],
+        "derived_features": derived_fixture_paths["features"],
+        "derived_labels": derived_fixture_paths["labels"],
+        "derived_manifest": derived_fixture_paths["manifest"],
+    }
+    fixture_before = _snapshot_files(all_fixture_paths)
     hostname = _safe_hostname()
     descriptor = _descriptor(
         git_sha=git_sha,
@@ -3805,10 +4749,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_hashes=source_before,
     )
     descriptor_sha256 = _canonical_sha256(descriptor)
-
-    output_root = (repo / OUTPUT_ROOT_RELATIVE).resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
-    run_id = f"{git_sha}-{hostname}-r5c-{descriptor_sha256[:12]}"
+    restart_hyperparameter_policy = importlib.import_module(
+        "core.hyperparameter_policy"
+    )
+    run_id = f"{git_sha}-{hostname}-r11c-{descriptor_sha256[:12]}"
     run_dir = _require_within(
         output_root / run_id,
         output_root,
@@ -3842,7 +4786,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         completed_summary, completion_pointer_repaired = (
             _completed_summary_if_valid(
                 run_dir,
+                hyperparameter_policy=restart_hyperparameter_policy,
                 descriptor_sha256=descriptor_sha256,
+                protocol_core_sha256=_canonical_sha256(descriptor["core"]),
                 git_sha=git_sha,
                 run_id=run_id,
                 fixture_snapshot=fixture_before,
@@ -3882,27 +4828,79 @@ def main(argv: Sequence[str] | None = None) -> int:
         })
         try:
             runtime = _load_runtime(descriptor, descriptor_sha256)
+            runtime["utils"].set_global_seed(
+                SEED,
+                runtime["trainer"].TRAIN_PROTOCOL["determinism"],
+            )
             environment_record = _runtime_environment(runtime)
             fixture = _load_and_validate_fixture(
                 runtime["np"],
-                fixture_paths,
+                derived_fixture_paths,
             )
             splits = _make_workload_splits(
                 runtime["np"],
                 fixture["groups"],
             )
-            config = _build_config(descriptor, descriptor_sha256)
+            protocol_core_hash = runtime["protocol"].protocol_hash(
+                descriptor["core"]
+            )
+            if protocol_core_hash != _canonical_sha256(descriptor["core"]):
+                raise ContractError(
+                    "benchmark protocol-core hash differs between canonical "
+                    "hash implementations"
+                )
+            execution_attestation = (
+                runtime["execution_environment"].enforce_execution_block(
+                    stage=ANCHOR_STAGE,
+                    policy=runtime[
+                        "execution_environment"
+                    ].EXECUTION_BLOCK_POLICY,
+                    protocol_core_hash=protocol_core_hash,
+                    run_tag=f"benchmark-{descriptor_sha256}",
+                    receipt_dir=(
+                        run_dir / "execution_receipts"
+                    ).resolve(),
+                )
+            )
+            capacity_receipt = (
+                runtime["capacity_preflight"].ensure_capacity_preflight(
+                    execution_attestation["runtime"],
+                    receipt_dir=(
+                        run_dir / "capacity_receipts"
+                    ).resolve(),
+                )
+            )
+            config = _build_config(
+                descriptor,
+                descriptor_sha256,
+                execution_attestation["runtime"],
+                campaign_run_tag=f"benchmark-{descriptor_sha256}",
+                execution_receipt_sha256=
+                    execution_attestation["receipt_sha256"],
+            )
+            hyperparameter_plan = (
+                runtime["hyperparameter_policy"].derive_execution_plan(
+                    config,
+                    dataset_name=STUDY_DATASET_NAME,
+                    requested_n_trials=USEFUL_TRIALS,
+                    requested_use_pruner=USE_PRUNER,
+                    execution_runtime=execution_attestation["runtime"],
+                )
+            )
             study, recovered_trials = _prepare_study(
                 runtime,
                 config,
+                hyperparameter_plan,
+                capacity_receipt,
                 run_dir,
                 descriptor_sha256,
                 recover_stale=args.recover_stale,
             )
-            hpo = _optimize_useful_budget(
+            hpo = _run_registered_anchor_hpo(
                 runtime,
                 study,
                 config,
+                hyperparameter_plan,
                 fixture,
                 splits,
                 weights_dir,
@@ -3929,7 +4927,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             _close_fixture(fixture)
             fixture = None
-            fixture_after = _snapshot_files(fixture_paths)
+            fixture_after = _snapshot_files(all_fixture_paths)
             source_after = _source_hashes(repo)
             if not _snapshot_equal(fixture_before, fixture_after):
                 raise ContractError(
@@ -3944,6 +4942,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             study_receipt_path = _materialize_study_storage_receipt(
                 run_dir)
+            storage_snapshot = _storage_snapshot(run_dir)
+            coordination_snapshot = _coordination_receipt_snapshot(run_dir)
+            immutable_snapshot = _immutable_evidence_snapshot(
+                run_dir,
+                study_storage_snapshot=storage_snapshot,
+            )
+            hyperparameter_execution = _hyperparameter_execution_record(
+                runtime["hyperparameter_policy"],
+                hyperparameter_plan,
+            )
+            _validate_benchmark_hyperparameter_execution(
+                hyperparameter_execution,
+                hyperparameter_policy=runtime["hyperparameter_policy"],
+                descriptor_sha256=descriptor_sha256,
+                protocol_core_sha256=protocol_core_hash,
+                coordination_receipts=coordination_snapshot,
+            )
+            if (
+                execution_attestation.get("receipt_sha256")
+                != coordination_snapshot["execution_block"]["sha256"]
+            ):
+                raise ContractError(
+                    "execution attestation does not cite the exact published "
+                    "receipt bytes"
+                )
             completed_utc = _utc_now()
             total_wall = time.perf_counter() - started
             environment_record[
@@ -3977,6 +5000,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                 },
                 "environment": environment_record,
+                "execution_attestation": execution_attestation,
+                "capacity_preflight": {
+                    "receipt_sha256": capacity_receipt["receipt_sha256"],
+                    "envelope_file_sha256":
+                        coordination_snapshot["cuda_capacity"]["sha256"],
+                    "policy_sha256": capacity_receipt[
+                        "receipt"
+                    ]["policy_sha256"],
+                    "passed": capacity_receipt["receipt"]["passed"],
+                },
+                "hyperparameter_execution": hyperparameter_execution,
                 "runtime_output_directories": runtime_dirs,
                 "hashes": {
                     "descriptor_sha256": descriptor_sha256,
@@ -3984,9 +5018,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "source_after": source_after,
                     "fixture_before": fixture_before,
                     "fixture_after": fixture_after,
-                    "study_storage": _storage_snapshot(run_dir),
-                    "immutable_evidence":
-                        _immutable_evidence_snapshot(run_dir),
+                    "study_storage": storage_snapshot,
+                    "coordination_receipts": coordination_snapshot,
+                    "immutable_evidence": immutable_snapshot,
                 },
                 "fixture": fixture_report,
                 "splits": splits["report"],
@@ -4014,14 +5048,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "summary": "summary.json",
                 },
             }
-            final_fixture_snapshot = _snapshot_files(fixture_paths)
+            final_fixture_snapshot = _snapshot_files(all_fixture_paths)
             if not _snapshot_equal(fixture_before, final_fixture_snapshot):
                 raise ContractError(
                     "fixture changed during final report validation"
                 )
             summary["hashes"]["fixture_after"] = final_fixture_snapshot
             _atomic_json(run_dir / "summary.json", summary)
-            summary_sha256 = _sha256_file(run_dir / "summary.json")
+            published_summary = _regular_file_snapshot(
+                run_dir / "summary.json",
+                "published benchmark summary",
+                max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+            )
+            assert published_summary is not None
+            summary_sha256 = str(published_summary["sha256"])
             _atomic_json(run_dir / "run_state.json", {
                 "schema": BENCHMARK_SCHEMA,
                 "classification": DISCLAIMER,
@@ -4044,7 +5084,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 try:
                     cleanup_report = _clean_exact_trial_weights(
                         weights_dir,
-                        "r5c",
+                        "r11c",
                         study.trials,
                     )
                 except Exception:
@@ -4055,7 +5095,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
             _close_fixture(fixture)
             try:
-                fixture_after = _snapshot_files(fixture_paths)
+                fixture_after = _snapshot_files(all_fixture_paths)
             except Exception:
                 fixture_after = {}
             try:

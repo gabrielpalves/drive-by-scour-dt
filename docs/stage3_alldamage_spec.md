@@ -1,5 +1,10 @@
 # Stage 3 — "all-damage" EOV stage (build spec)
 
+> **ARCHIVAL, SUPERSEDED SPEC.** The current experiment is the R11 ten-rung
+> branched/blockwise design in `README_CAMPAIGN.md` and
+> `docs/framework_rationale.md`. Rates, Monte Carlo claims, “all damage” wording
+> and per-passage semantics below are historical and are not citable evidence.
+
 Decided 2026-07-09 (user). Purpose: a CURIOSITY/ROBUSTNESS arm for the ablation paper —
 train the champion with the most complete damage/EOV set the TTB-2D formulation supports
 and see whether scour estimation survives. The DT paper (Paper 2) keeps the lean EOV set;

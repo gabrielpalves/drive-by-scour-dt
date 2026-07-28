@@ -53,10 +53,11 @@ switch Profile_cfg.mode
         Calc.Profile.min_WaveLength = 1.524;    % [m]
         Calc.Profile.max_WaveLength = 304.8;    % [m]
         Calc.Profile.text = sprintf('FRA class %d', Profile_cfg.fra_class);
-        % Per-STATE phase lock + per-passage jitter (2026-07-12 EOV design
-        % review; consumed by B19): phase_seed -> the SAME realization for
-        % every passage of a damage state; jitter_sd_m -> additive white
-        % noise re-drawn per passage (EN 13848-2 repeatability).
+        % Per-STATE phase lock (consumed by B19): phase_seed gives the SAME
+        % physical track realization to all passages of one persistent
+        % scenario. jitter_sd_m is retained only as a dormant compatibility
+        % field and is zero in every campaign preset. EN 13848-2 repeatability
+        % is measurement-system metrology, not a physical white-noise model.
         if isfield(Profile_cfg, 'phase_seed')
             Calc.Profile.phase_seed = Profile_cfg.phase_seed;
         end

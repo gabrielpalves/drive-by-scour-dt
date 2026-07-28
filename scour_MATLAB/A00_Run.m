@@ -7,102 +7,193 @@
 clear; clc; close all
 % process_results;
 
-% Campaign environment gate (audit r4): generator numerics were validated under
-% MATLAB R2025b. Refuse a different release before any state is drawn or file is
-% written; the Python lock records the same requirement.
-% WIDENED to a VALIDATED ALLOWLIST (2026-07-25). The gate exists to stop MIXED
-% releases inside one campaign, NOT to bless one specific version -- a campaign
-% generated entirely on one validated release is homogeneous whichever release
-% that is. A release qualifies only after BOTH of the following pass ON IT:
+% Campaign environment gate (audit R11): generator numerics are locked to an
+% exact executable numerical stack, not merely a MATLAB release label. The
+% canonical identity covers MATLAB Update/build, architecture, BLAS/LAPACK, and
+% Statistics/Parallel toolbox versions. A candidate environment qualifies only
+% after BOTH of the following pass ON IT:
 %   (1) the MATLAB smoke suite: smoke_audit, smoke_geometry, smoke_stage3,
 %       smoke_familytable, smoke_b54_overlap_parity  (validates the PHYSICS);
 %   (2) generation identity vs an already-validated release: run
 %       make_micro_smoke.py on both machines, then
 %       `python compare_generation_releases.py <dirA> <dirB>` must report
-%       BIT-IDENTICAL (or a numerical verdict explicitly accepted and recorded
-%       in docs/framework_rationale.md).
+%       SEMANTICALLY-BIT-IDENTICAL (MAT containers themselves need not be
+%       byte-identical), or a numerical verdict explicitly accepted and
+%       recorded in docs/framework_rationale.md.
 % Risk areas that make (2) mandatory rather than assumed: Statistics Toolbox
 % samplers (poissrnd/wblrnd/lhsdesign) may change algorithm between releases,
 % and BLAS/LAPACK drift can accumulate over ~8.7k Newmark steps.
-% The release actually used is recorded in case_info.matlab_release of every
-% dataset, so cross-rung homogeneity stays auditable after the fact.
-%
-% VALIDATED RELEASES (add only with the evidence above):
-%   2025b -- audit r4/r5 full smoke suite; heavy smokes re-run at r9 2026-07-25.
-validated_matlab_releases = {'2025b'};
-matlab_release = version('-release');
-% Qualification escape hatch: permits an UNVALIDATED release so a machine can
-% run the smokes + micro-smoke needed to qualify it. The run is marked in
-% case_info (release_qualification_run) so its output can never be mistaken for
-% campaign data. NEVER set this for real generation.
-qualification_run = ~isempty(getenv('A00_RELEASE_QUALIFICATION'));
-if ~any(strcmp(matlab_release, validated_matlab_releases))
-    if ~qualification_run
-        error('A00:MATLABRelease', ...
-            ['Campaign generation requires a VALIDATED MATLAB release ' ...
-             '(%s); running R%s. To qualify this release run the MATLAB ' ...
-             'smoke suite and the generation-identity comparison (see the ' ...
-             'block above), then add it to validated_matlab_releases.'], ...
-            strjoin(strcat('R', validated_matlab_releases), ', '), ...
-            matlab_release);
-    end
-    fprintf(2, ['[A00] *** RELEASE-QUALIFICATION RUN on UNVALIDATED ' ...
-                'R%s ***\n      Output is NOT campaign data. Use it only ' ...
-                'for compare_generation_releases.py, then delete it.\n'], ...
-            matlab_release);
-else
-    fprintf('[A00] MATLAB release R%s (validated).\n', matlab_release);
+% Qualification NEVER widens this production script. make_micro_smoke.py emits a
+% dedicated reduced script with qualification_run=true; that output is marked in
+% the manifest AND every state, and Python rejects it from every campaign path.
+% Actual and campaign environment descriptors/digests (plus their human release
+% strings) are recorded separately. Qualification bypasses only the exact-stack
+% equality below; it does not bypass lock integrity, source identity, physics
+% gates, state validation, or output marking.
+script_dir_ = fileparts(mfilename('fullpath'));
+current_working_dir_ = local_canonical_execution_path(pwd);
+expected_working_dir_ = local_canonical_execution_path(script_dir_);
+if ~strcmp(current_working_dir_, expected_working_dir_)
+    error('A00:WorkingDirectory', ...
+        ['A00_Run must execute with the MATLAB current folder equal to its ' ...
+         'own scour_MATLAB directory. Current: %s; expected: %s. Change ' ...
+         'folder explicitly before running; A00 will not silently cd.'], ...
+        current_working_dir_, expected_working_dir_);
 end
+repository_root_ = fileparts(script_dir_);
+environment_lock_path_ = fullfile(repository_root_, 'environment', ...
+    'campaign-py313-cu128.json');
+if ~isfile(environment_lock_path_)
+    error('A00:EnvironmentLockMissing', ...
+        'Campaign environment lock is missing: %s', environment_lock_path_);
+end
+environment_lock_ = jsondecode(fileread(environment_lock_path_));
+if ~isstruct(environment_lock_) || ~isscalar(environment_lock_) || ...
+        ~isfield(environment_lock_, 'schema') || ...
+        ~strcmp(environment_lock_.schema, 'ttbi-campaign-environment-v2') || ...
+        ~isfield(environment_lock_, 'matlab_environment') || ...
+        ~isfield(environment_lock_, 'matlab_environment_sha256')
+    error('A00:EnvironmentLockFormat', ...
+        'Campaign environment lock lacks the reviewed v2 MATLAB identity.');
+end
+campaign_matlab_environment = environment_lock_.matlab_environment;
+[campaign_matlab_environment_sha256, ...
+    campaign_matlab_environment_descriptor] = ...
+    matlab_environment_identity(campaign_matlab_environment);
+locked_matlab_environment_sha256_ = ...
+    environment_lock_.matlab_environment_sha256;
+if ~ischar(locked_matlab_environment_sha256_) || ...
+        isempty(regexp(locked_matlab_environment_sha256_, ...
+            '^[0-9a-f]{64}$', 'once')) || ...
+        ~strcmp(locked_matlab_environment_sha256_, ...
+            campaign_matlab_environment_sha256)
+    error('A00:EnvironmentLockDigest', ...
+        ['matlab_environment_sha256 does not authenticate the canonical ' ...
+         'matlab_environment descriptor in the campaign lock.']);
+end
+actual_matlab_environment = current_matlab_environment();
+[actual_matlab_environment_sha256, ...
+    actual_matlab_environment_descriptor] = ...
+    matlab_environment_identity(actual_matlab_environment);
+if isempty(regexp(actual_matlab_environment.release, '^R[^[:space:]]+$', 'once')) || ...
+        isempty(regexp(campaign_matlab_environment.release, ...
+            '^R[^[:space:]]+$', 'once'))
+    error('A00:MATLABReleaseFormat', ...
+        'Actual and campaign MATLAB releases must use canonical R####a/R####b form.');
+end
+% Retain legacy no-leading-R local variables because run-folder formatting and
+% older human-readable diagnostics use ['R' matlab_release].
+matlab_release = actual_matlab_environment.release(2:end);
+campaign_matlab_release = campaign_matlab_environment.release(2:end);
+% Production is deliberately immutable/fail-closed. Only the generated MICRO
+% qualification script patches this literal to true; there is no environment
+% variable that can accidentally turn a full campaign into qualification data.
+qualification_run = false;
+% make_micro_smoke.py replaces this second immutable literal with the canonical
+% SHA-256 identity of the generated qualification source. Production must retain
+% the sentinel exactly; it can never masquerade as qualification output.
+qualification_source_sha256 = 'PRODUCTION';
+qualification_script_path_ = '';
+qualification_executed_file_sha256_ = 'PRODUCTION';
+if qualification_run %#ok<UNRCH>
+    if isempty(regexp(qualification_source_sha256, ...
+            '^[0-9a-f]{64}$', 'once'))
+        error('A00:QualificationSource', ...
+            ['Qualification mode requires make_micro_smoke.py to stamp its ' ...
+             'canonical lowercase source SHA-256.']);
+    end
+    qualification_script_path_ = mfilename('fullpath');
+    if ~endsWith(qualification_script_path_, '.m')
+        qualification_script_path_ = [qualification_script_path_ '.m'];
+    end
+    if ~isfile(qualification_script_path_)
+        error('A00:QualificationExecutableMissing', ...
+            'Cannot read the executing qualification script: %s', ...
+            qualification_script_path_);
+    end
+    % The generated script hashes the exact bytes it is executing after
+    % canonicalising ONLY its two unavoidable self-references (the full stamped
+    % SHA and the derived 16-character result-folder token).  The placeholder
+    % strings are assembled from fragments so they do not themselves create
+    % additional canonicalisation matches in the hashed template.
+    qualification_sha_placeholder_ = ...
+        ['<QUALIFICATION_' 'SOURCE_SHA256>'];
+    qualification_folder_placeholder_ = ...
+        ['<QUALIFICATION_' 'SOURCE_FOLDER>'];
+    [executed_qualification_source_sha256_, ...
+        qualification_executed_file_sha256_] = ...
+        local_qualification_script_identity(qualification_script_path_, ...
+            qualification_source_sha256, qualification_source_sha256(1:16), ...
+            qualification_sha_placeholder_, ...
+            qualification_folder_placeholder_);
+    if ~strcmp(executed_qualification_source_sha256_, ...
+            qualification_source_sha256)
+        error('A00:QualificationExecutableMutated', ...
+            ['The executable qualification script bytes do not authenticate ' ...
+             'their embedded qualification_source_sha256 (%s ~= %s).'], ...
+            executed_qualification_source_sha256_, ...
+            qualification_source_sha256);
+    end
+    fprintf(2, ['[A00] *** RELEASE-QUALIFICATION RUN on ' ...
+                'R%s (environment %s) ***\n      Output is NOT campaign data. Use it only ' ...
+                'for compare_generation_releases.py.\n'], ...
+            matlab_release, actual_matlab_environment_sha256);
+elseif ~strcmp(actual_matlab_environment_sha256, ...
+        campaign_matlab_environment_sha256)
+    error('A00:CampaignMATLABEnvironment', ...
+        ['This campaign is locked to environment %s (%s), but this machine is ' ...
+         '%s (%s). All ten rungs must use one exact executable numerical stack. ' ...
+         'Use make_micro_smoke.py --qualification only to generate marked ' ...
+         'cross-environment comparison fixtures.'], ...
+        campaign_matlab_environment_sha256, ...
+        campaign_matlab_environment.release, ...
+        actual_matlab_environment_sha256, actual_matlab_environment.release);
+else
+    fprintf('[A00] MATLAB environment %s (%s; exact campaign lock).\n', ...
+        actual_matlab_environment_sha256, actual_matlab_environment.release);
+end
+[generator_source_root_sha256, generator_source_digest_lines, ...
+    generator_source_file_count] = generator_source_root();
+fprintf('[A00] generator source root %s (%d reviewed scour_MATLAB files).\n', ...
+    generator_source_root_sha256, generator_source_file_count);
 
 % =========================================================================
 % Simulation setup
 % =========================================================================
 % ===== STAGE PRESET — the paper-case selector ============================
-% Pick ONE. Each preset maps to a CASE presented in the paper and sets the
-% damage-defining toggles below (geometry, which damages are TARGETS vs EOV
-% nuisances). Everything else (passage counts, ranges, variability) is a
-% stage-independent knob kept at its default further down. This is the single
-% place to switch between paper cases.
+% Pick ONE active rung. Each preset sets the geometry, labelled bridge targets,
+% and randomized/logged environmental or operational variability (EOV).
 %
-%   'stage0_multiscour' — 2 independent scours, 3-span/60 m, NO other damage.
-%                         The localisation gate. == the dataset already run.
-%   'stage1_bearing'    — + abutment bearing as a LABELLED TARGET (scour-vs-
-%                         bearing disentanglement). Adds data.bearing_vector.
-%   'stage1_eov'        — scour target only, but crack + rail-profile turned on
-%                         as randomized EOV NUISANCES (confounder-robustness /
-%                         "when does scour detection break?" study).
-%   'stage1_full'       — bearing target AND crack+profile EOV nuisances.
-%   'stage2_4span'      — scale-up: 4-span/100 m, 3 internal piers, bearing
-%                         target + EOV nuisances.
-%   'stage3_alldamage'  — "kitchen-sink" robustness arm (ablation paper only):
-%                         Stage-1 geometry/targets + crack + psd_fra + TRACK-
-%                         LAYER damage (ballast patches, hanging sleepers,
-%                         rail pads) + wheel OOR/flats. All nuisances, logged.
-%                         Spec: docs/stage3_alldamage_spec.md.
-% ===== THE ABLATION LADDER (2026-07-14 design; user-approved) ============
-% ONE factor changes per rung, so any degradation is ATTRIBUTABLE. The bridge
-% maintainer's questions in order: can I localise scour? does a bearing fool
-% me? does a crack fool me? do BOTH? does rail roughness? does track damage?
-% does the train itself? Then repeat the key rungs on the bigger bridge.
+% The L60 design is BRANCHED, not one linear "one factor per rung" ladder:
+%   s0 -> s11 -> s13 contrasts bearing then crack conditional on bearing;
+%   s0 -> s12 -> s13 contrasts crack then bearing conditional on crack;
+%   s13 -> s14 -> s15 -> s16 then adds, in order, per-state FRA roughness,
+%   track-layer variability, and wheel polygonization.
+% Thus s0->s11 and s0->s12 are separate main-effect contrasts; the two paths
+% into s13 expose conditional effects rather than a unique linear predecessor.
+%
+% The L99.6 design is a blockwise scale/stress test, not component attribution:
+% s21->s22 adds bearing+crack together; s22->s23 adds the complete modeled EOV
+% block (roughness + track layer + polygonization).
 %
 %   L60 / 3-span ladder (scour piers 2,3)
 %     s0_scour       scour only .................... baseline + architecture selection
 %     s11_bear       + bearing (HEAD)
 %     s12_crack      + crack (nuisance, no bearing)
-%     s13_bearcrack  + bearing + crack ............. all BRIDGE damages
+%     s13_bearcrack  + bearing + crack ............. three modeled bridge-condition mechanisms
 %     s14_prof       + rail profile (FRA-4, per-state) ...... the ROUGHNESS rung
 %     s15_track      + track-layer damage (ballast / hanging sleepers / pads)
-%     s16_all        + wheel OOR + flats ........... ALL damages
+%     s16_all        + wheel polygonization ........ all modeled vertical-pathway EOVs
 %   L99.6 / 4-span scale-up (scour piers 2,3,4)
 %     s21_scour4     scour only
-%     s22_bearcrack4 + bearing + crack ............. all BRIDGE damages
-%     s23_all4       all damages
+%     s22_bearcrack4 + bearing + crack ............. bridge-condition block
+%     s23_all4       + complete modeled EOV block
 %
 % HEADS = scour (per pier) + bearing (per abutment) ONLY. Crack, rail profile,
 % track-layer and wheel damage are NUISANCES: randomized, logged, never
-% estimated - the network must be INVARIANT to them, not report them. (Cracks
-% are visually inspectable; submerged scour is not - that is where drive-by
-% earns its keep.) Rationale: docs/framework_rationale.md.
+% estimated. They support an empirical robustness evaluation under confounding
+% variability; perfect invariance is neither assumed nor required. Rationale:
+% docs/framework_rationale.md.
 STAGE = 's0_scour';
 
 % Defaults; each rung below only switches ON what it adds.
@@ -121,12 +212,12 @@ switch STAGE
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='off';    use_crack_eov=true;  profile_mode='fixed';
     case 's13_bearcrack'
-        % All BRIDGE damages (Fernandes-comparable set: scour + bearing + crack).
+        % Three modeled bridge-condition mechanisms: scour, bearing, and crack.
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='target'; use_crack_eov=true;  profile_mode='fixed';
     case 's14_prof'
-        % THE ROUGHNESS RUNG: adds ONLY the rail profile (per-STATE FRA-4
-        % realization + per-passage jitter) on top of s13. Isolates the
+        % THE ROUGHNESS RUNG: adds ONLY the per-STATE FRA-4 rail-profile
+        % realization on top of s13. Isolates the
         % roughness effect that collapsed the sprung channels in the deprecated
         % L100 pilot - the single most important open question in the chain.
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
@@ -137,11 +228,9 @@ switch STAGE
         bearing_mode='target'; use_crack_eov=true;  profile_mode='psd_fra';
         use_track_eov=true;
     case 's16_all'
-        % + TRAIN (wheel OOR) = ALL damages. Split from s15 so a drop is
-        % attributable to the rail vs the train. NOTE (audit 2026-07-17):
-        % use_oor_eov now delivers POLYGONIZATION ONLY - flats are disabled
-        % (oor_flats_enabled=false below) until the solver supports the
-        % separation/impact they cause.
+        % Adds wheel POLYGONIZATION to s15, completing the modeled vertical-
+        % pathway EOV block. Flats remain disabled (oor_flats_enabled=false)
+        % until the solver supports the separation/impact they cause.
         damage_mode='multi_scour'; L_bridge=60;  num_spans=3; scour_supports=[2 3];
         bearing_mode='target'; use_crack_eov=true;  profile_mode='psd_fra';
         use_track_eov=true;    use_oor_eov=true;
@@ -190,39 +279,49 @@ Dano  = linspace(0.0, 0.60, 61);  % used only when damage_mode == 'single_scour'
 n_states_multi   = 250;     % number of independent joint damage states (LHS)
 dano_max         = 0.60;    % per-support max scour fraction
 include_anchors  = true;    % prepend healthy + single-pier sweeps (localisation extremes)
-n_anchor_levels  = 4;       % single-pier anchor levels per scoured support
+n_anchor_levels  = 5;       % anchor severities; 5 replicas -> 3/1/1 train/val/test
 damage_seed      = 1;       % RNG seed for a REPRODUCIBLE damage-state grid
 
 % ===== Feature A (2026-07-19): explicit state FAMILIES =====================
-% Every state carries a `state_family` identity tag written by the GENERATOR
+% Every state carries a `state_family` identity tag written by the GENERATOR.
+% The five-family INVENTORY is fixed within a geometry in every rung; a
+% bearing_only/nuisance_only row remains a latent design stratum when its
+% mechanism is OFF. Only active physics changes across paired rungs, never
+% sample size, row order, UID inventory, or scour realization.
 % (not derived from labels downstream — with per-STATE persistent nuisances a
 % zero-head state still carries a crack/profile/track fingerprint, so `y`
 % alone cannot identify families; that was the flaw in the pre-redesign
 % threshold-based probe). Families:
 %   target_healthy  all heads zero; nuisances follow the rung's normal policy
 %                   EXCEPT crack, which is forced OFF (clean baseline states).
-%   scour_only      exactly ONE pier scoured (4 levels x n_anchor_reps);
+%   scour_only      exactly ONE pier scoured (5 levels x n_anchor_reps);
 %                   bearing zero, crack forced OFF (controlled probe).
-%   bearing_only    exactly ONE abutment seized (4 levels x n_anchor_reps);
+%   bearing_only    exactly ONE abutment seized (5 levels x n_anchor_reps);
 %                   scour zero, crack forced OFF (controlled probe).
 %   nuisance_only   all heads zero, crack forced ON (the false-positive probe:
 %                   does the model report damage when only a nuisance exists?).
-%                   Only generated at rungs with use_crack_eov (crack is the
-%                   only per-state nuisance worth controlling: the FRA profile
+%                   Always present as a latent stratum; crack activates only
+%                   when use_crack_eov=true. The FRA profile
 %                   class is FIXED at 4 — only its phase varies — and track
 %                   damage is present w.p. ~1 under its Poisson rates).
 %   joint           the LHS block; crack drawn naturally (p = crack_p).
 % WHY: the stratified split (core/dataset.py) guarantees every family lands in
 % train / inner-val / outer-test, so the disentanglement and false-positive
 % probes can never be silently empty (audit R6 C8C loud-guard now a guarantee),
-% and 1 healthy state becomes 12 independent ones (50 correlated passages of a
-% single state are NOT 50 healthy states — Codex R7.1 correction).
-n_healthy_states  = 12;     % target_healthy states (were: 1)
-n_anchor_reps     = 2;      % replicas per (target, level) anchor — so every
-                            % (family, target) stratum spans all 3 partitions
-n_nuisance_states = 6;      % nuisance_only states (0 when use_crack_eov=false)
+% and 50 healthy rows are independent states (50 correlated passages of one
+% state are NOT 50 healthy states).
+n_healthy_states  = 50;     % 20% outer -> 10 independent healthy diagnostics
+n_anchor_reps     = 5;      % each (family,target,level): 3/1/1 train/val/test
+n_nuisance_states = 50;     % 20% outer -> 10 independent nuisance diagnostics
 
 Npass = 50;                 % passages per damage state (operational variability)
+% Operational memory guard (R11): each independent TTBI solve has a large
+% process-private matrix footprint. MATLAB's automatic 16-worker pool exhausted
+% 32 GB even for the 17-state micro qualification run. Keep the process pool
+% explicitly bounded; every RNG namespace is keyed by semantic StateUID below, so
+% scheduling cannot change the generated draws. This value is fingerprinted and
+% recorded, making any deliberate retuning a fresh, auditable run.
+max_parfor_workers = 4;
 
 % ===== Bearing damage (abutment rotational stiffness, Nm/rad) =====
 % MODE is set by the STAGE preset; these are the numeric knobs it uses.
@@ -293,16 +392,20 @@ crack_lc         = 0.0;           % half-length [m] each side; <=0 -> single ele
 % 'fixed'        legacy measured profile — byte-identical baseline (Type 2).
 % 'fixed_scaled' measured profile x amplitude factor drawn per passage.
 % 'psd_fra'      profile REGENERATED from the FRA PSD; severity = FRA class.
-% EOV DESIGN REVIEW 2026-07-12: track geometry evolves over MGT, not between
-% trains (EN 13848-2 pass-to-pass repeatability <=0.5 mm @95%; Sato/Shenton) ->
-% ONE class + ONE phase realization drawn per damage STATE and held for its
-% passages (profile_draw='per_state'; B19 seeds the phase draw per state).
-% Class set FIXED at FRA class 4 = roughest geometry permissible at 70-90 km/h
-% (classes 5/6 are premium track, too smooth for a scour-prone regional line).
+% EOV DESIGN REVIEW 2026-07-12, wording corrected 2026-07-27: ONE class + ONE
+% phase realization is drawn per damage STATE and held for its passages
+% (profile_draw='per_state'; B19 seeds the phase draw per state). This is an
+% explicit scenario-persistence assumption, not an inference from EN 13848-2
+% measurement-system repeatability. Any physical persistence claim in the paper
+% requires its own track-evolution evidence.
+% Class set FIXED at FRA class 4 as the pre-registered roughness benchmark.
+% It is not claimed to be the legal or physically worst permissible condition;
+% any service/speed interpretation must be conditioned on the applicable rule.
 % The old per-passage class+phase redraw over {4,5,6} is DEPRECATED (it is what
 % collapsed the sprung channels in the L100 Stage-2 pilot).
 profile_draw         = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
-% AUDIT FIX 2026-07-17: physical profile jitter DISABLED (was 0.5). The 0.5 mm
+% AUDIT FIX 2026-07-17: former 0.5 mm per-passage white profile perturbation
+% DISABLED. The 0.5 mm
 % white noise misread EN 13848-2 - that figure is the MEASURING SYSTEM's
 % repeatability, not physical track change between trains - and, being
 % spectrally white on a profile band-limited at 1.524 m, it contributed ~zero
@@ -310,8 +413,8 @@ profile_draw         = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
 % axle forcing up to the solver Nyquist, loading exactly the wheel channels).
 % Noise belongs to the OBSERVATION model: load-time sensor noise in
 % core/dataset.py (docs/framework_rationale.md). If a physical pass-to-pass
-% perturbation is ever wanted, it must be BAND-LIMITED (EN 13848 D1: 3-25 m,
-% sigma ~ 0.18 mm per run), not white.
+% perturbation is ever wanted, it must be separately justified, band-limited,
+% versioned and validated against an appropriate physical evolution model.
 profile_jitter_sd_mm = 0;            % per-passage additive white noise [mm] - keep 0 (see above)
 profile_int_range    = [0.5 2.0];    % 'fixed_scaled' amplitude range
 profile_fra_classes  = 4;            % 'psd_fra' class set (scalar = fixed class)
@@ -334,9 +437,10 @@ profile_fra_classes  = 4;            % 'psd_fra' class set (scalar = fixed class
 track_draw        = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
 track_L_app       = 30;          % window margin BEFORE the deck [m] (local frame)
 track_L_after     = 30;          % window margin AFTER the deck [m] (local frame)
-% ===== COUNTS: now ANCHORED (deep research 2026-07-15) ===================
+% ===== INFERENCE-BACKED MODELING PRIORS (deep research 2026-07-15) ========
 % Source: papers/'Track Defect Prevalence Data Search' (Gemini Deep Research;
-% derivations flagged INFERENCE but each built on a cited anchor). It RESOLVED
+% each derivation is an INFERENCE from cited anchors, not a measured population
+% constant). This resolves
 % the prevalence paradox that blocked us: the cited "~50% of concrete sleepers
 % show some voiding" and our ~9% mechanical model are BOTH right, because most
 % voids are SUB-THRESHOLD. Void taxonomy: <1.0 mm = accommodation (rail/fastener
@@ -366,10 +470,10 @@ track_L_after     = 30;          % window margin AFTER the deck [m] (local frame
 % RATES are per 100 m and are SCALED BY THE MODELLED WINDOW below (our track is
 % 120 m at L60 / 159.6 m at L99.6 - drawing a fixed count regardless of length
 % was itself an error).
-% ⚠ Report-internal inconsistency, resolved in our favour of its own derivation:
+% Report-internal inconsistency, resolved in favour of its own derivation:
 % its summary table claims P(no hanging group)~0.25 while its text recommends
-% lambda 2-3 (which gives P(0)=0.05-0.14). We follow the DERIVATION (lambda=2.5).
-% ✅ VERIFIED 2026-07-19: the "FI>30 on 10-20%" Slideshare anchor was replaced
+% lambda 2-3 (which gives P(0)=0.05-0.14). The active prior uses lambda=3.0.
+% VERIFIED 2026-07-19: the "FI>30 on 10-20%" Slideshare anchor was replaced
 % by the citable envelope above (see docs/research_brief_gpr_fouling.md).
 % Patch length U(5,20) m also now CITED: FRA empirical fouled-section lengths
 % 1.5-33.5 m (DOT/FRA/ORD-22/01) + 2.4 m GPR minimum feature (Guo et al. 2023,
@@ -378,10 +482,10 @@ track_L_after     = 30;          % window margin AFTER the deck [m] (local frame
 % recommends Poisson lambda 2.0-3.0 ("intermediate degradation cycle"), but its
 % own table demands 5-10% of sleepers impactfully unsupported. lambda*3 sleepers
 % per group / 167 per 100 m => lambda must be >= 2.78 for >=5%, and <= 3.0 to
-% stay in the recommended range. lambda = 3.0 is the only value satisfying BOTH
-% (gives 5.4%). MC-verified.
-hang_rate_100m    = 3.0;         % unsupported-sleeper GROUPS per 100 m (Poisson)
-ballast_rate_100m = 1.2;         % fouled PATCHES per 100 m (Poisson; = 15% length / 12.5 m)
+% stay in the recommended range. lambda = 3.0 is the only value satisfying BOTH;
+% its analytic expected unsupported-sleeper share is 3*3/167 = 5.4%.
+hang_rate_100m    = 3.0;         % inferred Poisson prior: groups per 100 m
+ballast_rate_100m = 1.2;         % inferred Poisson prior: patches per 100 m
 ballast_patch_len = [5 20];      % patch length U(5,20) m (cited)
 % Fouling <-> voiding are STRONGLY correlated (bidirectional: fouling -> mud
 % pumping -> lubrication -> void; void -> impact -> pulverisation -> fouling).
@@ -404,15 +508,14 @@ hang_trans_margin = 15;          % density-spike zone +-15 m of abutments (cited
 pad_chi_range     = [1.0 3.5];   % pad aging stiffness multiplier bounds
 pad_weibull       = [1.8 2.2];   % chi_pad ~ Weibull(lambda,k), clipped to range
 pad_beta_range    = [0.8 1.2];   % pad damping multiplier
-% Pad failures: the cited 0.5% is an ANNUAL INCIDENCE RATE, not a snapshot
-% prevalence (2026-07-15 report). Secondary lines renew small components on a
-% 3-5 yr cadence, so failures ACCUMULATE: observed snapshot prevalence = 1.5-3.0%
-% of fastening positions. Our old 0.005 (=> ~0.83 pads/100 m) was ~4x
-% SUB-representative of real regional-line noise; the report asks for ~2-5 failed
-% positions per 100 m, which 0.02 delivers (0.02 * 167 = 3.3 per 100 m).
-pad_p_fail        = 0.02;        % per-pad SNAPSHOT failure prevalence (report 1.5-3.0%)
+% Pad failures: the cited 0.5% is an ANNUAL INCIDENCE RATE, not snapshot
+% prevalence. Combining that anchor with an assumed 3-5 year renewal cadence
+% motivates an inferred 1.5-3.0% snapshot range; p=0.02 is the modeling prior
+% used here (expected 3.3 failed positions per 100 m), not a measured network
+% prevalence.
+pad_p_fail        = 0.02;        % inferred per-pad snapshot modeling prior
 
-% ===== Wheel flats + polygonization (Stage 3; use_oor_eov) =====
+% ===== Wheel out-of-roundness EOV (polygonization active; flats disabled) ===
 % LITERATURE-VERIFIED (deep research 2026-07-09; docs/stage3_alldamage_spec.md):
 % ~12% of in-service wheels carry a flat; braking couples axles within a bogie.
 % Generative model: independent per-bogie slide events (q), leading axle always
@@ -460,7 +563,16 @@ vel_min = 70; vel_max = 90; % min and max velocity [km/h]
 % scour-rate vector for file DC. This unifies the parfor body and the labelling:
 % the saved label is always data.scour_vector = DamageStates(DC,:).
 n_supp = num_spans + 1;
-n_bear = 2 * strcmp(bearing_mode, 'target');  % bearing label dims (left,right)
+n_latent_bear = 2;  % always draw left/right latent fixity, even when head is OFF
+state_identity_version = 'semantic-state-v1';
+joint_lhs_design = 'master-scour-plus-two-bearing-v1';
+random_stream_schedule_version = 'uid-named-substreams-v2';
+state_stream_names = {'operations','crack','profile-state','track','profile-phase'};
+passage_stream_names = {'profile-passage','oor-passage'};
+if ~strcmp(damage_mode, 'multi_scour') || ~include_anchors
+    error(['A00: generation-rules-v6 campaign stages require multi_scour with ' ...
+        'the complete fixed five-family anchor inventory.']);
+end
 % Fixity->k_r conversion reference (see bearing_fixity_max above). A03 is a pure
 % function, so probe it for the beam properties actually used.
 Beam_probe  = A03_Bridge(struct('Prop', struct('L', L_bridge, 'num_spans', num_spans)));
@@ -479,8 +591,16 @@ if strcmp(damage_mode, 'single_scour')
     StateFamily  = [{'target_healthy'}; repmat({'scour_only'}, numel(Dano) - 1, 1)];
     AnchorTarget = [0; repmat(central, numel(Dano) - 1, 1)];
     AnchorLevel  = [0; (1:numel(Dano) - 1)'];
+    StateUID = cell(numel(Dano), 1);
+    StateUID{1} = local_state_uid(L_bridge, num_spans, scour_supports, ...
+        'target_healthy', 0, 0, 1);
+    for level_ = 1:numel(Dano)-1
+        StateUID{level_ + 1} = local_state_uid(L_bridge, num_spans, ...
+            scour_supports, 'scour_only', central, level_, 1);
+    end
+    LatentBearingFixity = zeros(numel(Dano), n_latent_bear);
 else  % multi_scour
-    rng(damage_seed);                         % reproducible joint grid
+    rng(damage_seed, 'twister');              % reproducible MASTER joint grid
     n_tgt = numel(scour_supports);
     % Feature A (2026-07-19): anchors are built WITH their family identity —
     % four aligned accumulators (scour rows, bearing-fixity rows, family tag,
@@ -490,9 +610,10 @@ else  % multi_scour
     fam_  = cell(0, 1);                       % state_family tag per anchor row
     atgt_ = zeros(0, 1);                      % scour: pier idx | bearing: 1=L,2=R
     alvl_ = zeros(0, 1);                      % severity level idx (1..n_anchor_levels)
-    n_nuis_here = n_nuisance_states * double(use_crack_eov);   % crack rungs only
+    uid_  = cell(0, 1);                       % stable semantic identity (NOT row/DC)
+    n_nuis_here = n_nuisance_states;       % fixed latent inventory in every rung
     if include_anchors
-        % (1) target_healthy — 12 independent all-zero-head states. Each gets
+        % (1) target_healthy — independent all-zero-head states. Each gets
         % its OWN per-state EOV draws (speed/temp/vehicle + profile/track), so
         % "healthy" spans train/val/test as genuinely distinct states.
         anchors_s  = [anchors_s;  zeros(n_healthy_states, n_supp)]; %#ok<AGROW>
@@ -500,6 +621,10 @@ else  % multi_scour
         fam_  = [fam_;  repmat({'target_healthy'}, n_healthy_states, 1)]; %#ok<AGROW>
         atgt_ = [atgt_; zeros(n_healthy_states, 1)];                %#ok<AGROW>
         alvl_ = [alvl_; zeros(n_healthy_states, 1)];                %#ok<AGROW>
+        for rep_ = 1:n_healthy_states
+            uid_{end+1, 1} = local_state_uid(L_bridge, num_spans, ... %#ok<AGROW>
+                scour_supports, 'target_healthy', 0, 0, rep_);
+        end
         % (2) scour_only — per target pier: n_anchor_levels severities x
         % n_anchor_reps replicas (replication is what lets the stratified split
         % place every (family, pier) stratum in all three partitions).
@@ -513,14 +638,19 @@ else  % multi_scour
                 fam_  = [fam_;  repmat({'scour_only'}, n_anchor_levels, 1)]; %#ok<AGROW>
                 atgt_ = [atgt_; repmat(scour_supports(ti), n_anchor_levels, 1)]; %#ok<AGROW>
                 alvl_ = [alvl_; (1:n_anchor_levels)'];                 %#ok<AGROW>
+                for level_ = 1:n_anchor_levels
+                    uid_{end+1, 1} = local_state_uid(L_bridge, ... %#ok<AGROW>
+                        num_spans, scour_supports, 'scour_only', ...
+                        scour_supports(ti), level_, rep_);
+                end
             end
         end
-        % (3) bearing_only — same structure per abutment (1=left, 2=right).
-        if n_bear > 0
-            levels_b = linspace(bearing_fixity_max / n_anchor_levels, ...
-                                bearing_fixity_max, n_anchor_levels)';
-            for bi = 1:2
-                for rep_ = 1:n_anchor_reps
+        % (3) bearing_only latent stratum: always present; bearing_mode
+        % decides whether its stored fixity enters the physics.
+        levels_b = linspace(bearing_fixity_max / n_anchor_levels, ...
+                            bearing_fixity_max, n_anchor_levels)';
+        for bi = 1:2
+            for rep_ = 1:n_anchor_reps
                     blk = zeros(n_anchor_levels, 2);
                     blk(:, bi) = levels_b;
                     anchors_bf = [anchors_bf; blk];                        %#ok<AGROW>
@@ -528,37 +658,58 @@ else  % multi_scour
                     fam_  = [fam_;  repmat({'bearing_only'}, n_anchor_levels, 1)]; %#ok<AGROW>
                     atgt_ = [atgt_; repmat(bi, n_anchor_levels, 1)];       %#ok<AGROW>
                     alvl_ = [alvl_; (1:n_anchor_levels)'];                 %#ok<AGROW>
-                end
+                    for level_ = 1:n_anchor_levels
+                        uid_{end+1, 1} = local_state_uid(L_bridge, ... %#ok<AGROW>
+                            num_spans, scour_supports, 'bearing_only', ...
+                            bi, level_, rep_);
+                    end
             end
         end
         % (4) nuisance_only — all heads zero, crack FORCED ON (see the CrackOn
-        % pre-draw below). Zero states at rungs without the crack EOV.
+        % pre-draw below). The stratum stays present but dormant without crack.
         if n_nuis_here > 0
             anchors_s  = [anchors_s;  zeros(n_nuis_here, n_supp)]; %#ok<AGROW>
             anchors_bf = [anchors_bf; zeros(n_nuis_here, 2)];      %#ok<AGROW>
             fam_  = [fam_;  repmat({'nuisance_only'}, n_nuis_here, 1)]; %#ok<AGROW>
             atgt_ = [atgt_; zeros(n_nuis_here, 1)];                %#ok<AGROW>
             alvl_ = [alvl_; zeros(n_nuis_here, 1)];                %#ok<AGROW>
+            for rep_ = 1:n_nuis_here
+                uid_{end+1, 1} = local_state_uid(L_bridge, ... %#ok<AGROW>
+                    num_spans, scour_supports, 'nuisance_only', 0, 0, rep_);
+            end
         end
     end
-    % (5) ONE joint LHS over scour + bearing targets = broad joint coverage.
-    % Bearing dims are sampled in FIXITY space (bounded, near-linear in response,
-    % geometry-normalised) and inverted to k_r for the physics.
-    lhs = lhsdesign(n_states_multi, n_tgt + n_bear);
+    % (5) ONE geometry-level MASTER LHS over scour + TWO LATENT bearing
+    % dimensions. The dimensionality is invariant across bearing_mode, so the
+    % first n_tgt columns (scour) are bit-identical in bearing-OFF and
+    % bearing-TARGET rungs. The final two columns are always drawn and stored;
+    % bearing_mode decides only whether those latent fixities enter the physics.
+    % This is the common-random-number (CRN) contract for paired rung contrasts.
+    lhs = lhsdesign(n_states_multi, n_tgt + n_latent_bear);
     joint_s = zeros(n_states_multi, n_supp);
     joint_s(:, scour_supports) = lhs(:, 1:n_tgt) * dano_max;
-    joint_bf = zeros(n_states_multi, 2);
-    if n_bear > 0
-        joint_bf = lhs(:, n_tgt+1:end) * bearing_fixity_max;
+    joint_bf = lhs(:, n_tgt+1:n_tgt+n_latent_bear) * bearing_fixity_max;
+    joint_uid_ = cell(n_states_multi, 1);
+    for joint_ = 1:n_states_multi
+        joint_uid_{joint_} = local_state_uid(L_bridge, num_spans, ...
+            scour_supports, 'joint', 0, joint_, 1);
     end
     DamageStates       = [anchors_s; joint_s];
-    BearingFixityMulti = [anchors_bf; joint_bf];
-    BearingStatesMulti = fix2k(BearingFixityMulti);      % k_r [Nm/rad]
+    LatentBearingFixity = [anchors_bf; joint_bf];
     StateFamily  = [fam_;  repmat({'joint'}, n_states_multi, 1)];
     AnchorTarget = [atgt_; zeros(n_states_multi, 1)];
     AnchorLevel  = [alvl_; zeros(n_states_multi, 1)];
+    StateUID     = [uid_; joint_uid_];
 end
 n_states = size(DamageStates, 1);
+expected_states_ = n_healthy_states + ...
+    n_tgt * n_anchor_levels * n_anchor_reps + ...
+    n_latent_bear * n_anchor_levels * n_anchor_reps + ...
+    n_nuisance_states + n_states_multi;
+if n_states ~= expected_states_
+    error('A00: fixed five-family inventory has %d states; expected %d.', ...
+        n_states, expected_states_);
+end
 % Family table must line up with the damage matrix ROW FOR ROW — a mismatch
 % here would silently mislabel every downstream probe, so hard-assert it.
 if numel(StateFamily) ~= n_states || numel(AnchorTarget) ~= n_states || ...
@@ -566,28 +717,49 @@ if numel(StateFamily) ~= n_states || numel(AnchorTarget) ~= n_states || ...
     error('A00: state-family table (%d/%d/%d) does not match n_states=%d.', ...
         numel(StateFamily), numel(AnchorTarget), numel(AnchorLevel), n_states);
 end
+if numel(StateUID) ~= n_states || ...
+        ~isequal(size(LatentBearingFixity), [n_states, n_latent_bear]) || ...
+        numel(unique(StateUID)) ~= n_states
+    error(['A00: semantic state identity/latent-bearing table is malformed ' ...
+        '(%d UIDs, %d unique, latent size %s, n_states=%d).'], ...
+        numel(StateUID), numel(unique(StateUID)), ...
+        mat2str(size(LatentBearingFixity)), n_states);
+end
+StateSeedID = local_state_seed_ids(StateUID, damage_seed);
+[StateNamedStreamSeedID, PassageNamedStreamSeedID] = ...
+    local_named_stream_seed_ids(StateSeedID, StateUID, Npass, ...
+        random_stream_schedule_version, state_stream_names, ...
+        passage_stream_names);
+PassageNamedStreamSeedIDFlat = reshape(PassageNamedStreamSeedID, n_states, []);
 
-% ---- Per-state crack ACTIVATION, pre-drawn (Feature A, 2026-07-19) --------
-% Drawn OUTSIDE the parfor from its own seeded stream so that (a) the family
-% design can FORCE it (OFF for target_healthy / scour_only / bearing_only —
-% they are controlled probes; ON for nuisance_only — the false-positive probe),
-% (b) it is part of the fingerprint + the Python stratification table, and
-% (c) the joint block keeps the natural prevalence p = crack_p. The crack's
-% LOCATION / intensity are still drawn from the per-state stream inside the
-% parfor (only the on/off decision moved out).
-rng(damage_seed + 424243);              % independent stream: activation only
-CrackOn = false(n_states, 1);
-if use_crack_eov && strcmp(crack_draw, 'per_state')
-    is_joint_ = strcmp(StateFamily, 'joint');
-    CrackOn(is_joint_) = rand(sum(is_joint_), 1) <= crack_p;
-    CrackOn(strcmp(StateFamily, 'nuisance_only')) = true;
-elseif use_crack_eov && any(strcmp(StateFamily, 'nuisance_only'))
+% ---- Per-state crack ACTIVATION, keyed by stable semantic UID ------------
+% The fixed latent design is: controlled anchors OFF, nuisance_only ON, and
+% joint UID-hash Bernoulli(p). The rung toggle only activates/deactivates that
+% same stored design; row insertion and family activation cannot redraw it.
+LatentCrackOn = false(n_states, 1);
+is_joint_ = strcmp(StateFamily, 'joint');
+joint_indices_ = find(is_joint_);
+for state_ = reshape(joint_indices_, 1, [])
+    LatentCrackOn(state_) = local_state_uniform(StateUID{state_}, ...
+        damage_seed, 'latent-crack-v1') <= crack_p;
+end
+LatentCrackOn(strcmp(StateFamily, 'nuisance_only')) = true;
+CrackOn = logical(use_crack_eov) & LatentCrackOn;
+if use_crack_eov && ~strcmp(crack_draw, 'per_state')
     % Guard (2026-07-19 self-review): the DEPRECATED per-passage crack redraw
     % ignores CrackOn, so nuisance_only states would NOT get their forced crack
     % and the family semantics would silently break. Refuse the combination.
     error(['A00: nuisance_only anchor states require crack_draw=''per_state'' ' ...
         '(the family design forces per-state crack activation); ' ...
         '''per_passage'' is deprecated and incompatible with Feature A.']);
+end
+if strcmp(profile_mode, 'psd_fra') && ~strcmp(profile_draw, 'per_state')
+    error(['A00: generation-rules-v6 requires profile_draw=''per_state''; ' ...
+        'the deprecated per-passage profile branch is outside the CRN design.']);
+end
+if use_track_eov && ~strcmp(track_draw, 'per_state')
+    error(['A00: generation-rules-v6 requires track_draw=''per_state''; ' ...
+        'the deprecated per-passage track branch is outside the CRN design.']);
 end
 
 % Bearing state per file (n_states x 2 = [left,right]), any damage_mode:
@@ -602,8 +774,8 @@ switch bearing_mode
         if strcmp(damage_mode, 'single_scour')
             error('A00: bearing_mode=''target'' requires damage_mode=''multi_scour''.');
         end
-        BearingStates = BearingStatesMulti;
-        BearingFixity = BearingFixityMulti;
+        BearingFixity = LatentBearingFixity;
+        BearingStates = fix2k(BearingFixity);
     otherwise, error('A00: unknown bearing_mode "%s"', bearing_mode);
 end
 
@@ -659,8 +831,47 @@ case_name = sprintf('%s_L%g_st%d', STAGE, L_bridge, n_states);
 case_desc = sprintf('L%g_%dspan_%s_scourS%s_bear%s%s_dano0-%gpct_states%d_Npass%d_var%s', ...
     L_bridge, num_spans, damage_mode, supp_tag, bear_tag, eov_tag, ...
     dano_max*100, n_states, Npass, var_tag);
+% A qualification bypass must remain a genuinely MICRO run. This check occurs
+% before mkdir/save, so manually flipping qualification_run in the production
+% script cannot emit a full-size dataset.
+if qualification_run && (n_states > 64 || Npass > 5)
+    error('A00:QualificationMustBeMicro', ...
+        ['Release qualification is restricted to <=64 states and <=5 ' ...
+         'passages/state (got %d x %d). Use make_micro_smoke.py.'], ...
+        n_states, Npass); %#ok<UNRCH>
+end
 run_folder = fullfile('Results', case_name);
 if ~exist(run_folder, 'dir'), mkdir(run_folder); end
+if qualification_run
+    qualification_evidence_path_ = ...
+        fullfile(run_folder, 'qualification_executed.m');
+    if isfile(qualification_evidence_path_)
+        if ~strcmp(local_file_sha256(qualification_evidence_path_), ...
+                qualification_executed_file_sha256_)
+            error('A00:QualificationEvidenceCollision', ...
+                ['Existing qualification_executed.m is not the exact script ' ...
+                 'being executed. Use a fresh output folder.']);
+        end
+    else
+        [copied_, copy_message_] = copyfile(qualification_script_path_, ...
+            qualification_evidence_path_, 'f');
+        if ~copied_
+            error('A00:QualificationEvidenceCopy', ...
+                'Could not preserve executing script bytes: %s', copy_message_);
+        end
+    end
+    if ~strcmp(local_file_sha256(qualification_evidence_path_), ...
+            qualification_executed_file_sha256_)
+        error('A00:QualificationEvidenceCopy', ...
+            'qualification_executed.m is not a byte-exact executable copy.');
+    end
+    qualification_host_receipt_ = local_qualification_host_receipt( ...
+        actual_matlab_environment_sha256, qualification_source_sha256, ...
+        qualification_executed_file_sha256_);
+    local_write_qualification_host_receipt( ...
+        fullfile(run_folder, 'qualification_host_receipt.json'), ...
+        qualification_host_receipt_);
+end
 
 % ---- Generator schema tag (audit 2026-07-17) ----------------------------
 % Bump this string whenever the generator physics or the saved format changes.
@@ -690,16 +901,38 @@ if ~exist(run_folder, 'dir'), mkdir(run_folder); end
 % nuisance_only / joint + pre-drawn CrackOn; anchors 4 levels x 2 reps) with the
 % family table in damage_states.mat + per-file state_family, and the Python-side
 % unified protocol hash + family-stratified split + deployment selection.
-% State COUNTS changed (s0=278 ... s22/s23=308) — r7 data is a different design.
+% Historical R8 state counts were s0=278 ... s22/s23=308. The R11 fixed-CRN
+% universe below supersedes them with 450 states (L60) / 475 (L99.6).
 % Bumped R9 (2026-07-25, audit-R5 convergence): the user elected to discard
 % and regenerate the complete campaign, so every pre-R9 dataset is deliberately
 % orphaned. The two overlapping legacy rule markers are replaced by ONE
 % unconditional, general
 % generation-behaviour version. This is a provenance-contract change; it does
 % not itself alter the converged simulation equations or sampling distributions.
+% Historical R10 (2026-07-27; superseded by R11 below): one exact MATLAB
+% release per campaign became an
+% executable contract. Qualification is micro-only; release/mode are required
+% in manifest + every state and are resume invariants. Python rejects missing
+% or qualification provenance before loading, caching, or creating a study.
+% generation-rules-v3 makes the process-pool contract fail-closed and skips all
+% pool/parfor work on a fully validated resume while still rebuilding digests.
+% Bumped R11 (2026-07-27): executable-environment identity replaces the coarse
+% release gate. Every state is bound to canonical actual/campaign environment
+% descriptors, the reviewed MATLAB source/asset root, and (for micro fixtures)
+% the generated qualification-source identity. generation-rules-v4 denoted
+% that fail-closed format/environment/source contract.
+% generation-rules-v5 additionally persists the exact JSON bytes hashed into
+% gen_fingerprint, so Python can inspect and enforce every registered campaign
+% knob instead of treating the fingerprint as an opaque self-consistent token.
+% generation-rules-v6 introduces the strong common-random-number state design:
+% stable semantic UIDs/seeds, a geometry-level scour+two-bearing master LHS,
+% UID-keyed latent bearing/crack variables that survive inactive rungs, and
+% collision-gated named RNG substreams. The entire five-family inventory is
+% fixed within geometry: 450 states on L60 and 475 on L99.6. Joint outer-test
+% UIDs are the primary paired rung contrasts; controlled families are diagnostics.
 % _EXPECTED_GEN_SCHEMA in core/dataset.py mirrors this string.
-gen_schema = 'audit-2026-07-25-r9';
-generation_behavior_version = 'generation-rules-v1';
+gen_schema = 'audit-2026-07-27-r11';
+generation_behavior_version = 'generation-rules-v6';
 
 % ---- Config fingerprint (audit R5 2026-07-17: CANONICAL HASH) -----------
 % A schema match alone does not prove the CONFIG matches. Instead of a
@@ -714,9 +947,22 @@ fp_cfg = struct( ...
     ... % ONE unconditional rule-only revision. Bump whenever generator
     ... % behaviour changes without a corresponding knob/value change.
     'generation_behavior_version', generation_behavior_version, ...
+    'campaign_matlab_release', ['R' campaign_matlab_release], ...
+    'campaign_matlab_environment_sha256', ...
+        campaign_matlab_environment_sha256, ...
+    'generator_source_root_sha256', generator_source_root_sha256, ...
+    'qualification_source_sha256', qualification_source_sha256, ...
     'STAGE', STAGE, 'damage_mode', damage_mode, ...
     'L_bridge', L_bridge, 'num_spans', num_spans, ...
     'scour_supports', scour_supports, 'n_states', n_states, 'Npass', Npass, ...
+    'state_identity_version', state_identity_version, ...
+    'joint_lhs_design', joint_lhs_design, ...
+    'n_latent_bearing_dims', n_latent_bear, ...
+    'random_stream_schedule_version', random_stream_schedule_version, ...
+    ... % Wrap cell-array values so struct() remains scalar (not 1x5/1x2).
+    'state_stream_names', {state_stream_names}, ...
+    'passage_stream_names', {passage_stream_names}, ...
+    'max_parfor_workers', max_parfor_workers, ...
     'dano_max', dano_max, 'include_anchors', include_anchors, ...
     'n_anchor_levels', n_anchor_levels, 'damage_seed', damage_seed, ...
     'n_healthy_states', n_healthy_states, 'n_anchor_reps', n_anchor_reps, ...
@@ -766,13 +1012,18 @@ fp_cfg.BearingFixity = BearingFixity;
 fp_cfg.StateFamily   = StateFamily;
 fp_cfg.AnchorTarget  = AnchorTarget;
 fp_cfg.AnchorLevel   = AnchorLevel;
+fp_cfg.StateUID      = StateUID;
+fp_cfg.StateSeedID   = StateSeedID;
+fp_cfg.StateNamedStreamSeedID = StateNamedStreamSeedID;
+fp_cfg.PassageNamedStreamSeedIDFlat = PassageNamedStreamSeedIDFlat;
+fp_cfg.LatentBearingFixity = LatentBearingFixity;
+fp_cfg.LatentCrackOn = LatentCrackOn;
 fp_cfg.CrackOn       = CrackOn;
-% MATLAB release remains separate environment provenance. It is fingerprinted
-% for track-EOV rungs because the vector/interpolation implementation used there
-% is release-sensitive; it is not a second generation-behaviour version.
-if use_track_eov
-    fp_cfg.matlab_release = ['R' matlab_release];
-end
+% The ACTUAL MATLAB environment stays separate from the configuration
+% fingerprint: qualification compares one configuration across executable
+% environments. Resume and Python enforce actual identity explicitly, so this
+% separation cannot permit mixing. Campaign environment, reviewed source root,
+% and qualification-source identity above ARE run-defining contract values.
 % Profile ASSET provenance (audit R6 C7): the fixed-profile stages (Type==2,
 % profile_mode 'fixed'/'fixed_scaled') read the rail irregularity from an
 % external .mat (B19_GenerateProfile.m:118, load('Calc.ProfileData15_05.mat')).
@@ -795,15 +1046,55 @@ if exist(profile_asset_, 'file')
 else
     fp_cfg.profile_asset_sha256 = 'ABSENT';
 end
-gen_fingerprint = local_sha256(jsonencode(fp_cfg));
+generation_config_json = jsonencode(fp_cfg);
+gen_fingerprint = local_sha256(generation_config_json);
 
 % ---- Resume-safety guard: never mix schemas OR configs in one folder -----
 existing_ci_ = fullfile(run_folder, 'case_info.mat');
 if exist(existing_ci_, 'file')
     prev_ = load(existing_ci_); prev_ci_ = prev_.case_info;
-    prev_schema_ = ''; prev_fp_ = '';
+    prev_schema_ = ''; prev_fp_ = ''; prev_release_ = '';
+    prev_campaign_release_ = ''; prev_qualification_ = [];
+    prev_actual_env_descriptor_ = ''; prev_actual_env_sha_ = '';
+    prev_campaign_env_descriptor_ = ''; prev_campaign_env_sha_ = '';
+    prev_generator_source_root_ = ''; prev_qualification_source_ = '';
+    prev_generator_source_lines_ = ''; prev_generator_source_count_ = [];
     if isfield(prev_ci_, 'gen_schema'),      prev_schema_ = prev_ci_.gen_schema; end
     if isfield(prev_ci_, 'gen_fingerprint'), prev_fp_ = prev_ci_.gen_fingerprint; end
+    if isfield(prev_ci_, 'matlab_release'),  prev_release_ = prev_ci_.matlab_release; end
+    if isfield(prev_ci_, 'campaign_matlab_release')
+        prev_campaign_release_ = prev_ci_.campaign_matlab_release;
+    end
+    if isfield(prev_ci_, 'release_qualification_run')
+        prev_qualification_ = prev_ci_.release_qualification_run;
+    end
+    if isfield(prev_ci_, 'actual_matlab_environment_descriptor')
+        prev_actual_env_descriptor_ = ...
+            prev_ci_.actual_matlab_environment_descriptor;
+    end
+    if isfield(prev_ci_, 'actual_matlab_environment_sha256')
+        prev_actual_env_sha_ = prev_ci_.actual_matlab_environment_sha256;
+    end
+    if isfield(prev_ci_, 'campaign_matlab_environment_descriptor')
+        prev_campaign_env_descriptor_ = ...
+            prev_ci_.campaign_matlab_environment_descriptor;
+    end
+    if isfield(prev_ci_, 'campaign_matlab_environment_sha256')
+        prev_campaign_env_sha_ = ...
+            prev_ci_.campaign_matlab_environment_sha256;
+    end
+    if isfield(prev_ci_, 'generator_source_root_sha256')
+        prev_generator_source_root_ = prev_ci_.generator_source_root_sha256;
+    end
+    if isfield(prev_ci_, 'generator_source_digest_lines')
+        prev_generator_source_lines_ = prev_ci_.generator_source_digest_lines;
+    end
+    if isfield(prev_ci_, 'generator_source_file_count')
+        prev_generator_source_count_ = prev_ci_.generator_source_file_count;
+    end
+    if isfield(prev_ci_, 'qualification_source_sha256')
+        prev_qualification_source_ = prev_ci_.qualification_source_sha256;
+    end
     if ~strcmp(prev_schema_, gen_schema)
         error(['A00 RESUME ABORTED: folder "%s" holds data from generator ' ...
             'schema "%s", but this code is "%s". Move or delete the old ' ...
@@ -816,6 +1107,42 @@ if exist(existing_ci_, 'file')
             'configuration.\n  existing: %s\n  current : %s\nUse a fresh ' ...
             'folder.'], run_folder, prev_fp_, gen_fingerprint);
     end
+    if ~strcmp(prev_release_, ['R' matlab_release]) || ...
+            ~strcmp(prev_campaign_release_, ['R' campaign_matlab_release]) || ...
+            ~isscalar(prev_qualification_) || ...
+            ~islogical(prev_qualification_) || ...
+            prev_qualification_ ~= qualification_run || ...
+            ~strcmp(prev_actual_env_descriptor_, ...
+                actual_matlab_environment_descriptor) || ...
+            ~strcmp(prev_actual_env_sha_, ...
+                actual_matlab_environment_sha256) || ...
+            ~strcmp(prev_campaign_env_descriptor_, ...
+                campaign_matlab_environment_descriptor) || ...
+            ~strcmp(prev_campaign_env_sha_, ...
+                campaign_matlab_environment_sha256) || ...
+            ~strcmp(prev_generator_source_root_, ...
+                generator_source_root_sha256) || ...
+            ~strcmp(prev_generator_source_lines_, ...
+                generator_source_digest_lines) || ...
+            ~isscalar(prev_generator_source_count_) || ...
+            prev_generator_source_count_ ~= generator_source_file_count || ...
+            ~strcmp(prev_qualification_source_, qualification_source_sha256)
+        error(['A00 RESUME ABORTED: folder "%s" has different MATLAB ' ...
+            'environment/source/mode provenance (actual release=%s, campaign ' ...
+            'release=%s, qual=%s, actual env=%s, campaign env=%s, source=%s, ' ...
+            'qualification source=%s). Current run is actual=R%s, ' ...
+            'campaign=R%s, qual=%d, actual env=%s, campaign env=%s, source=%s, ' ...
+            'qualification source=%s. Use a FRESH ' ...
+            'folder; provenance may never be restamped around existing states.'], ...
+            run_folder, prev_release_, prev_campaign_release_, ...
+            mat2str(prev_qualification_), prev_actual_env_sha_, ...
+            prev_campaign_env_sha_, prev_generator_source_root_, ...
+            prev_qualification_source_, matlab_release, ...
+            campaign_matlab_release, qualification_run, ...
+            actual_matlab_environment_sha256, ...
+            campaign_matlab_environment_sha256, ...
+            generator_source_root_sha256, qualification_source_sha256);
+    end
 end
 
 % --- Manifest: machine-readable (.mat) + human-readable (.txt) -----------
@@ -823,17 +1150,37 @@ case_info = struct( ...
     'case_name', case_name, 'case_desc', case_desc, 'stage', STAGE, ...
     'gen_schema', gen_schema, ...
     'gen_fingerprint', gen_fingerprint, ...
+    'generation_config_json', generation_config_json, ...
     'generation_behavior_version', generation_behavior_version, ...
     'matlab_release', ['R' matlab_release], ...
-    ... % true only for A00_RELEASE_QUALIFICATION runs on an UNVALIDATED
-    ... % release: marks output that must never be used as campaign data.
+    'campaign_matlab_release', ['R' campaign_matlab_release], ...
+    'actual_matlab_environment_descriptor', ...
+        actual_matlab_environment_descriptor, ...
+    'actual_matlab_environment_sha256', ...
+        actual_matlab_environment_sha256, ...
+    'campaign_matlab_environment_descriptor', ...
+        campaign_matlab_environment_descriptor, ...
+    'campaign_matlab_environment_sha256', ...
+        campaign_matlab_environment_sha256, ...
+    'generator_source_root_sha256', generator_source_root_sha256, ...
+    'generator_source_digest_lines', generator_source_digest_lines, ...
+    'generator_source_file_count', generator_source_file_count, ...
+    'qualification_source_sha256', qualification_source_sha256, ...
+    ... % true only in a generated, reduced qualification script.
     'release_qualification_run', qualification_run, ...
     'oor_flats_enabled', oor_flats_enabled, ...
     'timestamp', tempo_inicial_str, ...
     'damage_mode', damage_mode, ...
     'L_bridge_m', L_bridge, 'num_spans', num_spans, ...
     'num_supports', n_supp, 'scour_supports', mat2str(scour_supports), ...
+    'state_identity_version', state_identity_version, ...
+    'joint_lhs_design', joint_lhs_design, ...
+    'n_latent_bearing_dims', n_latent_bear, ...
+    'random_stream_schedule_version', random_stream_schedule_version, ...
+    'state_stream_names', strjoin(state_stream_names, ','), ...
+    'passage_stream_names', strjoin(passage_stream_names, ','), ...
     'n_states', n_states, 'passages_per_state', Npass, ...
+    'max_parfor_workers', max_parfor_workers, ...
     'scour_dano_max_frac', dano_max, ...
     'n_target_healthy', sum(strcmp(StateFamily, 'target_healthy')), ...  % Feature A
     'n_scour_only',     sum(strcmp(StateFamily, 'scour_only')), ...
@@ -856,7 +1203,7 @@ case_info = struct( ...
     'profile_int_range', mat2str(profile_int_range), ...
     'profile_fra_classes', mat2str(profile_fra_classes), ...
     'use_track_eov', use_track_eov, 'track_draw', track_draw, ...
-    'track_L_after', track_L_after, ...
+    'track_L_app', track_L_app, 'track_L_after', track_L_after, ...
     'ballast_rate_100m', ballast_rate_100m, ...
     'ballast_patch_len', mat2str(ballast_patch_len), ...
     'ballast_trans_mult', ballast_trans_mult, ...
@@ -888,8 +1235,12 @@ save(fullfile(run_folder, 'case_info.mat'), 'case_info');
 % damage matrices — core/dataset.read_state_table() consumes them for the
 % stratified split and the family-identity disentanglement probe.
 save(fullfile(run_folder, 'damage_states.mat'), 'DamageStates', 'BearingStates', ...
-    'BearingFixity', 'k_ref_bear', 'scour_supports', ...
-    'StateFamily', 'AnchorTarget', 'AnchorLevel', 'CrackOn');
+    'BearingFixity', 'LatentBearingFixity', 'k_ref_bear', 'scour_supports', ...
+    'StateFamily', 'AnchorTarget', 'AnchorLevel', 'StateUID', 'StateSeedID', ...
+    'StateNamedStreamSeedID', 'PassageNamedStreamSeedID', ...
+    'PassageNamedStreamSeedIDFlat', ...
+    'random_stream_schedule_version', 'state_stream_names', ...
+    'passage_stream_names', 'LatentCrackOn', 'CrackOn');
 fid = fopen(fullfile(run_folder, 'case_info.txt'), 'w');
 fn = fieldnames(case_info);
 fprintf(fid, '%% TTBI dataset — case manifest\n');
@@ -937,9 +1288,11 @@ if exist(marker_path, 'file'), delete(marker_path); end
 %     static); wheel flats exceed the uplift threshold 12-38x. Watch item:
 %     tens of kN or sustained => the tail is heavier than believed — revisit
 %     (unilateral contact vs censor-with-report), do NOT raise again.
-% NOT in fp_cfg (deliberate): a stricter-gate dataset is a strict subset of
-% what this gate accepts, so pre-recalibration states remain valid and a
-% partial run RESUMES seamlessly under the patched generator.
+% These literals are not duplicated as independent fp_cfg fields, but their
+% exact source bytes ARE authenticated by generator_source_root_sha256, which
+% is inside fp_cfg. Therefore any future gate edit changes the fingerprint and
+% requires a fresh run; a partial campaign can never resume silently across
+% different contact-acceptance criteria.
 F_CONTACT_TOL_N   = 24000;   % FATAL above this peak tension [N] (20% static)
 F_CONTACT_FRACTOL = 0.002;   % FATAL above this fraction of path samples in tension
 saved_files = dir(fullfile(run_folder, '*.mat'));
@@ -952,15 +1305,52 @@ for k = 1:length(saved_files)
     fpath_ = fullfile(run_folder, saved_files(k).name);
     vinfo_ = whos('-file', fpath_);            % variable list only (cheap)
     vnames_ = {vinfo_.name};
-    if ~all(ismember({'file_gen_schema','file_gen_fingerprint'}, vnames_))
+    if ~all(ismember({'file_gen_schema','file_gen_fingerprint', ...
+            'file_state_uid','file_state_seed_id', ...
+            'file_random_stream_schedule_version', ...
+            'file_matlab_release','file_campaign_matlab_release', ...
+            'file_release_qualification_run', ...
+            'file_actual_matlab_environment_sha256', ...
+            'file_campaign_matlab_environment_sha256', ...
+            'file_generator_source_root_sha256', ...
+            'file_qualification_source_sha256'}, vnames_))
         error(['A00 RESUME ABORTED: state %d file "%s" lacks provenance vars ' ...
-            '(pre-R5 / foreign format). Use a FRESH folder.'], dc_idx, saved_files(k).name);
+            '(pre-R11 / foreign format). Use a FRESH folder.'], dc_idx, saved_files(k).name);
     end
-    S_ = load(fpath_, 'file_gen_schema', 'file_gen_fingerprint');
+    S_ = load(fpath_, 'file_gen_schema', 'file_gen_fingerprint', ...
+        'file_state_uid', 'file_state_seed_id', ...
+        'file_random_stream_schedule_version', ...
+        'file_matlab_release', 'file_campaign_matlab_release', ...
+        'file_release_qualification_run', ...
+        'file_actual_matlab_environment_sha256', ...
+        'file_campaign_matlab_environment_sha256', ...
+        'file_generator_source_root_sha256', ...
+        'file_qualification_source_sha256');
     if ~strcmp(S_.file_gen_schema, gen_schema) || ...
-            ~strcmp(S_.file_gen_fingerprint, gen_fingerprint)
+            ~strcmp(S_.file_gen_fingerprint, gen_fingerprint) || ...
+            ~strcmp(S_.file_state_uid, StateUID{dc_idx}) || ...
+            ~isa(S_.file_state_seed_id, 'uint32') || ...
+            ~isscalar(S_.file_state_seed_id) || ...
+            S_.file_state_seed_id == 0 || ...
+            S_.file_state_seed_id ~= StateSeedID(dc_idx) || ...
+            ~strcmp(S_.file_random_stream_schedule_version, ...
+                random_stream_schedule_version) || ...
+            ~strcmp(S_.file_matlab_release, ['R' matlab_release]) || ...
+            ~strcmp(S_.file_campaign_matlab_release, ...
+                ['R' campaign_matlab_release]) || ...
+            ~isscalar(S_.file_release_qualification_run) || ...
+            ~islogical(S_.file_release_qualification_run) || ...
+            S_.file_release_qualification_run ~= qualification_run || ...
+            ~strcmp(S_.file_actual_matlab_environment_sha256, ...
+                actual_matlab_environment_sha256) || ...
+            ~strcmp(S_.file_campaign_matlab_environment_sha256, ...
+                campaign_matlab_environment_sha256) || ...
+            ~strcmp(S_.file_generator_source_root_sha256, ...
+                generator_source_root_sha256) || ...
+            ~strcmp(S_.file_qualification_source_sha256, ...
+                qualification_source_sha256)
         error(['A00 RESUME ABORTED: state %d file "%s" has a DIFFERENT ' ...
-            'schema/fingerprint than this run (foreign/old/mixed). Use a ' ...
+            'schema/fingerprint/release/mode than this run (foreign/old/mixed). Use a ' ...
             'FRESH folder — never merge states from different runs.'], ...
             dc_idx, saved_files(k).name);
     end
@@ -984,7 +1374,20 @@ for k = 1:length(saved_files)
     % catch it HERE where it can still be regenerated cheaply.
     req_ = {'AcelPrimVag','AcelRodaPrimVag','PitchPrimVag','scour_vector', ...
             'bearing_fixity','bearing_vector','scour_supports','state_family', ...
+            'state_uid','state_seed_id','latent_bearing_fixity', ...
+            'latent_crack_on','crack_on','random_stream_schedule_version', ...
+            'state_named_stream_seed_id','passage_named_stream_seed_id', ...
             'contact_log','gen_schema','gen_fingerprint', ...
+            'matlab_release','campaign_matlab_release', ...
+            'release_qualification_run', ...
+            'actual_matlab_environment_descriptor', ...
+            'actual_matlab_environment_sha256', ...
+            'campaign_matlab_environment_descriptor', ...
+            'campaign_matlab_environment_sha256', ...
+            'generator_source_root_sha256', ...
+            'generator_source_digest_lines', ...
+            'generator_source_file_count', ...
+            'qualification_source_sha256', ...
             'DimAcel','DimSpace','crop_start','crop_end','bridge_samp','L_bridge_eff'};
     if ~isstruct(d_) || ~all(isfield(d_, req_))
         miss_ = req_(~isfield(d_, req_));
@@ -996,9 +1399,31 @@ for k = 1:length(saved_files)
     % gen_schema/gen_fingerprint (not just the cheap top-level vars) must equal
     % this run's — catches a file whose top-level stamp was doctored.
     if ~strcmp(char(d_.gen_schema), gen_schema) || ...
-            ~strcmp(char(d_.gen_fingerprint), gen_fingerprint)
+            ~strcmp(char(d_.gen_fingerprint), gen_fingerprint) || ...
+            ~strcmp(char(d_.matlab_release), ['R' matlab_release]) || ...
+            ~strcmp(char(d_.campaign_matlab_release), ...
+                ['R' campaign_matlab_release]) || ...
+            ~isscalar(d_.release_qualification_run) || ...
+            ~islogical(d_.release_qualification_run) || ...
+            d_.release_qualification_run ~= qualification_run || ...
+            ~strcmp(char(d_.actual_matlab_environment_descriptor), ...
+                actual_matlab_environment_descriptor) || ...
+            ~strcmp(char(d_.actual_matlab_environment_sha256), ...
+                actual_matlab_environment_sha256) || ...
+            ~strcmp(char(d_.campaign_matlab_environment_descriptor), ...
+                campaign_matlab_environment_descriptor) || ...
+            ~strcmp(char(d_.campaign_matlab_environment_sha256), ...
+                campaign_matlab_environment_sha256) || ...
+            ~strcmp(char(d_.generator_source_root_sha256), ...
+                generator_source_root_sha256) || ...
+            ~strcmp(char(d_.generator_source_digest_lines), ...
+                generator_source_digest_lines) || ...
+            ~isscalar(d_.generator_source_file_count) || ...
+            d_.generator_source_file_count ~= generator_source_file_count || ...
+            ~strcmp(char(d_.qualification_source_sha256), ...
+                qualification_source_sha256)
         error(['A00 RESUME ABORTED: state %d file "%s" data.gen_schema/fingerprint ' ...
-            'disagree with this run (doctored/mixed). Use a FRESH folder.'], ...
+            'or release/mode disagree with this run (doctored/mixed). Use a FRESH folder.'], ...
             dc_idx, saved_files(k).name);
     end
     % EVERY signal channel + contact_log must have exactly Npass passages (audit
@@ -1070,6 +1495,29 @@ for k = 1:length(saved_files)
         error(['A00 RESUME ABORTED: state %d file "%s" state_family "%s" != ' ...
             'this run''s "%s" — mislabelled/foreign state file.'], dc_idx, ...
             saved_files(k).name, char(d_.state_family), StateFamily{dc_idx});
+    end
+    if ~strcmp(char(d_.state_uid), StateUID{dc_idx}) || ...
+            ~isscalar(d_.state_seed_id) || ...
+            ~isa(d_.state_seed_id, 'uint32') || ...
+            d_.state_seed_id ~= StateSeedID(dc_idx) || ...
+            ~strcmp(char(d_.random_stream_schedule_version), ...
+                random_stream_schedule_version) || ...
+            ~isequal(d_.state_named_stream_seed_id, ...
+                StateNamedStreamSeedID(dc_idx, :)) || ...
+            ~isequal(d_.passage_named_stream_seed_id, reshape( ...
+                PassageNamedStreamSeedID(dc_idx, :, :), ...
+                Npass, numel(passage_stream_names))) || ...
+            ~isequal(d_.latent_bearing_fixity, ...
+                LatentBearingFixity(dc_idx, :)) || ...
+            ~isscalar(d_.latent_crack_on) || ...
+            ~islogical(d_.latent_crack_on) || ...
+            d_.latent_crack_on ~= LatentCrackOn(dc_idx) || ...
+            ~isscalar(d_.crack_on) || ~islogical(d_.crack_on) || ...
+            d_.crack_on ~= CrackOn(dc_idx)
+        error(['A00 RESUME ABORTED: state %d file "%s" has a different ' ...
+            'semantic UID/seed or latent/active CRN state. A renamed, shifted, ' ...
+            'or pre-v6 state may not be resumed into this run.'], ...
+            dc_idx, saved_files(k).name);
     end
     % (c) Range sanity (defence-in-depth; equality above already implies this
     %     when DamageStates itself is sane — this also guards THAT assumption):
@@ -1144,20 +1592,49 @@ end
 % =========================================================================
 %  Parallel loop (PARFOR)  — one file per damage state
 % =========================================================================
-parfor DC = 1:n_states
-    if completed(DC)
-        fprintf('Skipping state %d — result already exists.\n', DC);
-        continue;
+if all(completed)
+    fprintf(['Resume: all %d states are already valid; skipping pool creation ' ...
+        'and generation while rebuilding completion artefacts.\n'], n_states);
+else
+    pool_ = gcp('nocreate');
+    if ~isempty(pool_) && (~isa(pool_, 'parallel.ProcessPool') || ...
+            pool_.NumWorkers > max_parfor_workers)
+        fprintf(['Replacing existing %s (%d workers) with a bounded process ' ...
+            'pool (max %d) to prevent TTBI worker-memory exhaustion.\n'], ...
+            class(pool_), pool_.NumWorkers, max_parfor_workers);
+        delete(pool_);
+        pool_ = [];
     end
+    if isempty(pool_)
+        cluster_ = parcluster('Processes');
+        pool_workers_ = min(max_parfor_workers, cluster_.NumWorkers);
+        pool_ = parpool(cluster_, pool_workers_);
+    end
+    if ~isa(pool_, 'parallel.ProcessPool') || ...
+            pool_.NumWorkers > max_parfor_workers
+        error(['A00: generation requires a parallel.ProcessPool with at most ' ...
+            '%d workers; got %s with %d workers.'], ...
+            max_parfor_workers, class(pool_), pool_.NumWorkers);
+    end
+    pool_workers_ = pool_.NumWorkers;
+    fprintf('Generation pool: %d process workers (configured maximum %d).\n', ...
+        pool_workers_, max_parfor_workers);
 
-    % 1. Local initializations for PARFOR transparency
-    Damage = struct();
-    data = struct();
-    data2save = struct();
+    parfor (DC = 1:n_states, pool_workers_)
+        if completed(DC)
+            fprintf('Skipping state %d — result already exists.\n', DC);
+            continue;
+        end
 
-    % Reproducible per-state RNG stream (speeds, temps, vehicle props and the
-    % nuisance-EOV draws below all depend only on damage_seed + state index).
-    rng(damage_seed * 100000 + DC);
+        % 1. Local initializations for PARFOR transparency
+        Damage = struct();
+        data = struct();
+        data2save = struct();
+
+    % Reproducible semantic-state RNG stream. It is keyed by StateSeedID, NOT
+    % row/DC, so adding/removing other family rows cannot perturb a matched
+    % state's operational or nuisance-EOV draws.
+    rng(double(StateNamedStreamSeedID(DC, 1)), 'twister'); % operations
 
     % Noise definition
     Damage.desvio = Desvio * use_signal_noise;
@@ -1275,6 +1752,7 @@ parfor DC = 1:n_states
         % block). Only the deprecated 'per_passage' branch still rolls a rand()
         % here. Location/intensity stay drawn from the per-state stream below.
         if use_crack_eov && (strcmp(crack_draw, 'per_passage') || j_pass == 1)
+            rng(double(StateNamedStreamSeedID(DC, 2)), 'twister'); % crack
             if strcmp(crack_draw, 'per_passage')
                 crack_now_ = rand() <= crack_p;   % DEPRECATED legacy behaviour
             else
@@ -1319,6 +1797,8 @@ parfor DC = 1:n_states
         % Rail profile: amplitude factor or FRA class + phase realization.
         Profile_cfg = struct('mode', profile_mode);
         if strcmp(profile_mode, 'fixed_scaled')
+            rng(double(PassageNamedStreamSeedID(DC, j_pass, 1)), ...
+                'twister'); % profile-passage
             Damage.profile_intensity = profile_int_range(1) + diff(profile_int_range)*rand();
             ProfileLog(j_pass) = Damage.profile_intensity;
         elseif strcmp(profile_mode, 'psd_fra')
@@ -1330,10 +1810,12 @@ parfor DC = 1:n_states
                 % 2026-07-17; see profile_jitter_sd_mm above) - measurement
                 % noise is injected at LOAD time in core/dataset.py.
                 if j_pass == 1
+                    rng(double(StateNamedStreamSeedID(DC, 3)), ...
+                        'twister'); % profile-state
                     state_fra_class = profile_fra_classes(randi(numel(profile_fra_classes)));
                 end
                 Profile_cfg.fra_class   = state_fra_class;
-                Profile_cfg.phase_seed  = 1e9 + damage_seed*100000 + DC;
+                Profile_cfg.phase_seed  = double(StateNamedStreamSeedID(DC, 5));
                 Profile_cfg.jitter_sd_m = profile_jitter_sd_mm / 1000;
             else   % DEPRECATED per-passage class + phase redraw
                 Profile_cfg.fra_class = profile_fra_classes(randi(numel(profile_fra_classes)));
@@ -1350,6 +1832,7 @@ parfor DC = 1:n_states
         % passage loop); 'per_passage' redraw is DEPRECATED.
         if use_track_eov
           if strcmp(track_draw, 'per_passage') || j_pass == 1
+            rng(double(StateNamedStreamSeedID(DC, 4)), 'twister'); % track
             Tk = struct();
             % -- ballast fouling/degradation patches --
             % Sampled over the WHOLE modelled track, not just the bridge span
@@ -1453,6 +1936,8 @@ parfor DC = 1:n_states
         % Wheel flats + polygonization: literature-anchored draws (consumed by
         % B25). Wheels 1-2 = leading bogie (axles 1,2); 3-4 = trailing bogie.
         if use_oor_eov
+            rng(double(PassageNamedStreamSeedID(DC, j_pass, 2)), ...
+                'twister'); % oor-passage
             Fl_ = zeros(0, 5);          % [veh wheel length_m depth_m phase]
             Po_ = zeros(0, 5);          % [veh wheel order amp_m phase]
             for v_ = 1:Nveh
@@ -1503,11 +1988,33 @@ parfor DC = 1:n_states
         % making the deck rigid to the vehicle. Recording f1 in every file makes
         % that class of bug impossible to miss. Expect ~4.1 Hz (L60/L40) or
         % ~2.8 Hz (L99.6). If it reads tens of Hz, STOP - check A03 rho / B43 A.
-        if j_pass == 1 && isfield(Beam_local, 'Modal') && ...
-                isfield(Beam_local.Modal, 'f') && ~isempty(Beam_local.Modal.f)
+        if j_pass == 1
+            if ~isfield(Beam_local, 'Modal') || ...
+                    ~isfield(Beam_local.Modal, 'f') || isempty(Beam_local.Modal.f)
+                error('A00: Beam.Modal.f is missing; deck-frequency attestation failed.');
+            end
             beam_f1 = Beam_local.Modal.f(1);
+            if ~isfinite(beam_f1) || beam_f1 < 0.2 || beam_f1 > 15
+                error(['A00: implausible deck f1 %.6g Hz at state %d. ' ...
+                    'Check A03 rho, B43 area and the modal assembly.'], ...
+                    beam_f1, DC);
+            end
+            if strcmp(StateFamily{DC}, 'target_healthy')
+                if L_bridge < 80
+                    healthy_f1_bounds_ = [3, 6];       % L60: nominal ~4.18 Hz
+                else
+                    healthy_f1_bounds_ = [2, 4];       % L99.6: nominal ~2.75 Hz
+                end
+                if beam_f1 < healthy_f1_bounds_(1) || ...
+                        beam_f1 > healthy_f1_bounds_(2)
+                    error(['A00: healthy deck f1 %.6g Hz outside [%g,%g] Hz ' ...
+                        'for L=%.3g m. Refusing to authenticate a likely ' ...
+                        'mass/stiffness regression.'], beam_f1, ...
+                        healthy_f1_bounds_(1), healthy_f1_bounds_(2), L_bridge);
+                end
+            end
             if DC == 1
-                fprintf('[CHECK] deck f1 = %.2f Hz (healthy state; expect a few Hz)\n', beam_f1);
+                fprintf('[CHECK] deck f1 = %.2f Hz (healthy state; sanity gate passed)\n', beam_f1);
             end
         end
 
@@ -1583,6 +2090,17 @@ parfor DC = 1:n_states
     % Feature A (2026-07-19): the state's FAMILY identity, self-describing per
     % file (the Python loader cross-checks it against damage_states.mat).
     data2save.state_family = StateFamily{DC};
+    % Strong-CRN semantic identity (generation-rules-v6). These values are
+    % independent of the state's row/DC and are cross-checked on resume/load.
+    data2save.state_uid = StateUID{DC};
+    data2save.state_seed_id = StateSeedID(DC);
+    data2save.random_stream_schedule_version = random_stream_schedule_version;
+    data2save.state_named_stream_seed_id = StateNamedStreamSeedID(DC, :);
+    data2save.passage_named_stream_seed_id = reshape( ...
+        PassageNamedStreamSeedID(DC, :, :), Npass, numel(passage_stream_names));
+    data2save.latent_bearing_fixity = LatentBearingFixity(DC, :);
+    data2save.latent_crack_on = LatentCrackOn(DC);
+    data2save.crack_on = CrackOn(DC);
     % Bearing label ([left,right] Nm/rad; zeros unless bearing_mode='target'/'fixed')
     data2save.beam_f1_Hz = beam_f1;           % deck 1st nat. freq [Hz] - sanity anchor
     data2save.bearing_vector = bear_vec;      % k_r [Nm/rad] (the physics)
@@ -1598,6 +2116,21 @@ parfor DC = 1:n_states
     data2save.contact_log  = ContactLog;
     data2save.gen_schema   = gen_schema;      % generator schema (resume/loader guard)
     data2save.gen_fingerprint = gen_fingerprint;  % full config fingerprint (per-file provenance)
+    data2save.matlab_release = ['R' matlab_release];
+    data2save.campaign_matlab_release = ['R' campaign_matlab_release];
+    data2save.actual_matlab_environment_descriptor = ...
+        actual_matlab_environment_descriptor;
+    data2save.actual_matlab_environment_sha256 = ...
+        actual_matlab_environment_sha256;
+    data2save.campaign_matlab_environment_descriptor = ...
+        campaign_matlab_environment_descriptor;
+    data2save.campaign_matlab_environment_sha256 = ...
+        campaign_matlab_environment_sha256;
+    data2save.generator_source_root_sha256 = generator_source_root_sha256;
+    data2save.generator_source_digest_lines = generator_source_digest_lines;
+    data2save.generator_source_file_count = generator_source_file_count;
+    data2save.qualification_source_sha256 = qualification_source_sha256;
+    data2save.release_qualification_run = qualification_run;
     % Contact was hard-gated PER PASSAGE inside the loop above (audit R7 P5), so
     % by here every passage is within tolerance and finite. NOTE on Codex's R6
     % framing: col 2 = (F_onTrack_max>0) and col 4 = F_onTrack_max derive from the
@@ -1619,7 +2152,12 @@ parfor DC = 1:n_states
     data2save.Velocidade = Velocidade;
     data2save.VehiclesProps = x_veh;
 
-    save_progress(data2save, DC, run_folder, gen_schema, gen_fingerprint);
+        save_progress(data2save, DC, run_folder, gen_schema, gen_fingerprint, ...
+            ['R' matlab_release], ['R' campaign_matlab_release], ...
+            qualification_run, actual_matlab_environment_sha256, ...
+            campaign_matlab_environment_sha256, ...
+            generator_source_root_sha256, qualification_source_sha256);
+    end
 end
 
 % Mark end time of the run
@@ -1640,12 +2178,25 @@ for dc_ = 1:n_states
     if exist(fullfile(run_folder, sprintf('%04d.mat', dc_)), 'file'), present_ = present_ + 1; end
 end
 if present_ == n_states
+    % Re-read every reviewed generator byte immediately before authenticating
+    % outputs.  A source edit during a long run must leave an incomplete,
+    % untrainable folder rather than a completion marker carrying the start-time
+    % source identity.
+    [completion_source_root_, completion_source_lines_, ...
+        completion_source_count_] = generator_source_root();
+    if ~strcmp(completion_source_root_, generator_source_root_sha256) || ...
+            ~strcmp(completion_source_lines_, generator_source_digest_lines) || ...
+            completion_source_count_ ~= generator_source_file_count
+        error('A00:GeneratorSourceChangedDuringRun', ...
+            ['Reviewed generator bytes changed during execution. Refusing to ' ...
+             'write file_digests.mat or _GENERATION_COMPLETE. Start a fresh run.']);
+    end
     % Source content integrity (audit R7.1 P4; sidecars completed in audit r4):
     % SHA-256 EVERY state file PLUS the two run-defining sidecars consumed by
     % Python (case_info.mat and damage_states.mat). Build a 'digest_lines' blob
     % ("filename:<sha>\n...") + a ROOT = SHA-256 of it, save file_digests.mat,
-    % and put the root as LINE 3 of the marker. Older r8 datasets have a
-    % state-only table; Python accepts those honestly but records the scope.
+    % and put the root as LINE 3 of the marker. R11 requires this exact v2
+    % scope; legacy state-only tables are deliberately rejected.
     state_fnames_ = arrayfun(@(k) sprintf('%04d.mat', k), (1:n_states)', ...
         'UniformOutput', false);
     fnames_ = [state_fnames_; {'case_info.mat'; 'damage_states.mat'}];
@@ -1654,13 +2205,25 @@ if present_ == n_states
         sha_ = local_file_sha256(fullfile(run_folder, fnames_{k_}));
         lines_{k_} = sprintf('%s:%s', fnames_{k_}, sha_);
     end
-    digest_lines = strjoin(sort(lines_), sprintf('\n'));   % sorted, '\n'-joined
+    digest_lines = strjoin(sort(lines_), newline);   % sorted, LF-joined
     root_ = local_sha256(digest_lines);
     file_digests = struct('schema', 'source-digests-v2', ...
         'scope', 'NNNN.mat+case_info.mat+damage_states.mat', ...
-        'digest_lines', digest_lines, 'root', root_); %#ok<NASGU>
+        'digest_lines', digest_lines, 'root', root_);
     save(fullfile(run_folder, 'file_digests.mat'), 'file_digests');
 
+    % Close the second completion boundary too: no source byte may change while
+    % sidecar/state digests are being computed and serialized.
+    [marker_source_root_, marker_source_lines_, marker_source_count_] = ...
+        generator_source_root();
+    if ~strcmp(marker_source_root_, generator_source_root_sha256) || ...
+            ~strcmp(marker_source_lines_, generator_source_digest_lines) || ...
+            marker_source_count_ ~= generator_source_file_count
+        delete(fullfile(run_folder, 'file_digests.mat'));
+        error('A00:GeneratorSourceChangedDuringRun', ...
+            ['Reviewed generator bytes changed before completion-marker write. ' ...
+             'The stale digest table was removed; start a fresh run.']);
+    end
     tmp_marker_ = fullfile(run_folder, '._GENERATION_COMPLETE.tmp');
     fid_ = fopen(tmp_marker_, 'w');
     fprintf(fid_, '%s\n%s\n%s\n', gen_schema, gen_fingerprint, root_);
@@ -1676,20 +2239,300 @@ end
 % =========================================================================
 %  Local functions
 % =========================================================================
+function uid = local_state_uid(L_bridge, num_spans, scour_supports, ...
+        family, target, level, replica)
+    % Stable semantic identity: deliberately excludes STAGE and row/DC.
+    % Corresponding states therefore retain one identity across rung-specific
+    % row insertions (bearing_only/nuisance_only) and across L60 presets.
+    uid = sprintf(['ttbi-state-v1|Lmm=%06d|spans=%d|scour=%s|' ...
+        'family=%s|target=%02d|level=%04d|rep=%03d'], ...
+        round(1000 * L_bridge), num_spans, sprintf('%02d', scour_supports), ...
+        family, target, level, replica);
+end
+
+function ids = local_state_seed_ids(state_uids, damage_seed)
+    % Map semantic UIDs to reproducible uint32 RNG seeds. SHA-256 makes row
+    % order irrelevant; the explicit collision gate turns the tiny truncation
+    % risk into a fail-closed generation error rather than silent dependence.
+    if ~isscalar(damage_seed) || ~isfinite(damage_seed) || ...
+            damage_seed < 0 || damage_seed ~= round(damage_seed)
+        error('A00: damage_seed must be one nonnegative integer.');
+    end
+    ids = zeros(numel(state_uids), 1, 'uint32');
+    for k = 1:numel(state_uids)
+        h = local_sha256(sprintf( ...
+            'ttbi-state-seed-v1|damage_seed=%.0f|%s', ...
+            damage_seed, state_uids{k}));
+        ids(k) = uint32(hex2dec(h(1:8)));
+    end
+    if any(ids == 0) || numel(unique(ids)) ~= numel(ids)
+        error(['A00: StateSeedID collision in this design. Change the explicit ' ...
+            'state-seed derivation version (zero is also reserved); never ' ...
+            'resolve it by row/DC.']);
+    end
+end
+
+function [state_seeds, passage_seeds] = local_named_stream_seed_ids( ...
+        state_seed_ids, state_uids, Npass, schedule_version, ...
+        state_names, passage_names)
+    % Namespace-separated SHA-derived uint32 seeds. Every state/component pair
+    % gets its own deterministic stream; adding a random draw inside one
+    % component cannot shift operations or any other EOV. Zero and any collision
+    % across the complete design are fail-closed before generation starts.
+    n_states_ = numel(state_seed_ids);
+    state_seeds = zeros(n_states_, numel(state_names), 'uint32');
+    passage_seeds = zeros(n_states_, Npass, numel(passage_names), 'uint32');
+    for i_ = 1:n_states_
+        for stream_ = 1:numel(state_names)
+            key_ = sprintf('%s|root=%u|uid=%s|stream=%s', ...
+                schedule_version, state_seed_ids(i_), state_uids{i_}, ...
+                state_names{stream_});
+            state_seeds(i_, stream_) = local_seed32(key_);
+        end
+        for pass_ = 1:Npass
+            for stream_ = 1:numel(passage_names)
+                key_ = sprintf('%s|root=%u|uid=%s|stream=%s|pass=%05d', ...
+                    schedule_version, state_seed_ids(i_), state_uids{i_}, ...
+                    passage_names{stream_}, pass_);
+                passage_seeds(i_, pass_, stream_) = local_seed32(key_);
+            end
+        end
+    end
+    all_ids_ = [state_seed_ids(:); state_seeds(:); passage_seeds(:)];
+    if any(all_ids_ == 0) || numel(unique(all_ids_)) ~= numel(all_ids_)
+        error(['A00: named RNG substream seed collision/zero in the complete ' ...
+            'design. Bump random_stream_schedule_version; do not use DC or ' ...
+            'silently accept correlated namespaces.']);
+    end
+end
+
+function seed = local_seed32(key)
+    h = local_sha256(key);
+    seed = uint32(hex2dec(h(1:8)));
+end
+
+function u = local_state_uniform(uid, damage_seed, namespace)
+    % Deterministic U[0,1) variate keyed by UID and a named latent variable.
+    % Thirteen hex digits fit exactly in binary64 (52 bits).
+    h = local_sha256(sprintf('%s|damage_seed=%.0f|%s', ...
+        namespace, damage_seed, uid));
+    u = hex2dec(h(1:13)) / 16^13;
+end
+
 function h = local_sha256(str)
     % SHA-256 hex digest of a char row vector (audit R5 canonical fingerprint).
+    h = local_sha256_bytes(uint8(str));
+end
+
+function normalized = local_canonical_execution_path(raw_path)
+    % Resolve dot/parent components and normalize case/separators before the
+    % fail-closed execution-root comparison. Do not mutate MATLAB's cwd here:
+    % an implicit cd would make unreviewed path shadowing hard to diagnose.
+    file_ = javaObject('java.io.File', char(raw_path));
+    normalized = char(file_.getCanonicalPath());
+    normalized = strrep(normalized, '\', '/');
+    is_drive_root_ = ~isempty(regexp(normalized, '^[A-Za-z]:/$', 'once'));
+    while numel(normalized) > 1 && endsWith(normalized, '/') && ...
+            ~is_drive_root_
+        normalized(end) = [];
+    end
+    if ispc
+        normalized = lower(normalized);
+    end
+end
+
+function receipt = local_qualification_host_receipt( ...
+        actual_environment_sha256, qualification_source_sha256, ...
+        qualification_executed_file_sha256)
+    % Qualification-only operational provenance. Host identity is intentionally
+    % absent from gen_schema/gen_fingerprint: it proves where a micro response
+    % was produced without requiring equal CPUs for the scientific campaign.
+    declared_host_id_ = strtrim(getenv('TTBI_QUALIFICATION_HOST_ID'));
+    if isempty(regexp(declared_host_id_, ...
+            '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', 'once'))
+        error('A00:QualificationHostID', ...
+            ['Qualification requires TTBI_QUALIFICATION_HOST_ID to be an ' ...
+             'explicit stable host label (1-64 ASCII letters/digits/._-). ' ...
+             'Use a different label for every independently qualified PC.']);
+    end
+
+    hostname_ = strtrim(getenv('COMPUTERNAME'));
+    if isempty(hostname_)
+        hostname_ = strtrim(getenv('HOSTNAME'));
+    end
+    if isempty(hostname_)
+        try
+            address_ = javaMethod('getLocalHost', 'java.net.InetAddress');
+            hostname_ = char(address_.getHostName());
+        catch
+            hostname_ = 'unavailable';
+        end
+    end
+    cpu_identifier_ = strtrim(getenv('PROCESSOR_IDENTIFIER'));
+    if isempty(cpu_identifier_)
+        cpu_identifier_ = computer('arch');
+    end
+    computer_arch_ = computer('arch');
+
+    logical_processors_ = str2double(strtrim(getenv('NUMBER_OF_PROCESSORS')));
+    if ~isfinite(logical_processors_) || logical_processors_ < 1 || ...
+            logical_processors_ ~= round(logical_processors_)
+        try
+            runtime_ = javaMethod('getRuntime', 'java.lang.Runtime');
+            logical_processors_ = double(runtime_.availableProcessors());
+        catch
+            logical_processors_ = 1;
+        end
+    end
+    try
+        matlab_max_threads_ = double(maxNumCompThreads);
+    catch
+        % Diagnostic only: retain an explicit, conservative available value if
+        % this MATLAB release removes the legacy query.
+        matlab_max_threads_ = logical_processors_;
+    end
+    if ~isfinite(matlab_max_threads_) || matlab_max_threads_ < 1 || ...
+            matlab_max_threads_ ~= round(matlab_max_threads_)
+        error('A00:QualificationThreadDiagnostic', ...
+            'MATLAB thread diagnostic must be one positive integer.');
+    end
+
+    hostname_ = local_qualification_host_text(hostname_, 'hostname');
+    cpu_identifier_ = local_qualification_host_text( ...
+        cpu_identifier_, 'cpu_identifier');
+    computer_arch_ = local_qualification_host_text( ...
+        computer_arch_, 'computer_arch');
+    descriptor_ = strjoin({ ...
+        'schema=ttbi-matlab-qualification-host-v1', ...
+        ['declared_host_id=' declared_host_id_], ...
+        ['hostname=' hostname_], ...
+        ['cpu_identifier=' cpu_identifier_], ...
+        sprintf('logical_processors=%d', logical_processors_), ...
+        sprintf('matlab_max_threads=%d', matlab_max_threads_), ...
+        ['computer_arch=' computer_arch_], ...
+        ['actual_matlab_environment_sha256=' actual_environment_sha256], ...
+        ['qualification_source_sha256=' qualification_source_sha256], ...
+        ['qualification_executed_file_sha256=' ...
+            qualification_executed_file_sha256]}, newline);
+    receipt = struct( ...
+        'schema', 'ttbi-matlab-qualification-host-v1', ...
+        'declared_host_id', declared_host_id_, ...
+        'hostname', hostname_, ...
+        'cpu_identifier', cpu_identifier_, ...
+        'logical_processors', logical_processors_, ...
+        'matlab_max_threads', matlab_max_threads_, ...
+        'computer_arch', computer_arch_, ...
+        'actual_matlab_environment_sha256', actual_environment_sha256, ...
+        'qualification_source_sha256', qualification_source_sha256, ...
+        'qualification_executed_file_sha256', ...
+            qualification_executed_file_sha256, ...
+        'canonical_descriptor', descriptor_, ...
+        'host_diagnostic_sha256', local_sha256(descriptor_));
+end
+
+function value = local_qualification_host_text(value, label)
+    value = strtrim(char(value));
+    if isempty(value) || numel(value) > 1024 || ...
+            contains(value, newline) || contains(value, char(13)) || ...
+            contains(value, char(0))
+        error('A00:QualificationHostDiagnostic', ...
+            'Qualification host diagnostic %s is empty or noncanonical.', label);
+    end
+end
+
+function local_write_qualification_host_receipt(path, receipt)
+    encoded_ = [jsonencode(receipt), newline];
+    expected_bytes_ = reshape( ...
+        unicode2native(encoded_, 'UTF-8'), 1, []);
+    if isfile(path)
+        fid_ = fopen(path, 'rb');
+        if fid_ < 0
+            error('A00:QualificationHostReceiptRead', ...
+                'Cannot read existing host receipt: %s', path);
+        end
+        observed_bytes_ = reshape(fread(fid_, Inf, '*uint8'), 1, []);
+        fclose(fid_);
+        if ~isequal(observed_bytes_, expected_bytes_)
+            error('A00:QualificationHostReceiptCollision', ...
+                ['Existing qualification_host_receipt.json differs from this ' ...
+                 'host/run identity. Use a fresh output folder.']);
+        end
+        return
+    end
+    temp_path_ = [path '.tmp'];
+    if isfile(temp_path_)
+        error('A00:QualificationHostReceiptTemp', ...
+            'Stale host-receipt temporary file exists: %s', temp_path_);
+    end
+    fid_ = fopen(temp_path_, 'wb');
+    if fid_ < 0
+        error('A00:QualificationHostReceiptWrite', ...
+            'Cannot create host receipt temporary file: %s', temp_path_);
+    end
+    wrote_ = fwrite(fid_, expected_bytes_, 'uint8');
+    close_status_ = fclose(fid_);
+    if wrote_ ~= numel(expected_bytes_) || close_status_ ~= 0
+        error('A00:QualificationHostReceiptWrite', ...
+            'Could not persist complete host receipt bytes: %s', temp_path_);
+    end
+    [moved_, move_message_] = movefile(temp_path_, path, 'f');
+    if ~moved_
+        error('A00:QualificationHostReceiptWrite', ...
+            'Could not atomically install host receipt: %s', move_message_);
+    end
+    if ~strcmp(local_file_sha256(path), ...
+            local_sha256_bytes(expected_bytes_))
+        error('A00:QualificationHostReceiptWrite', ...
+            'Persisted host receipt bytes failed verification.');
+    end
+end
+
+function [canonical_sha, raw_sha] = local_qualification_script_identity( ...
+        fpath, stamped_sha, stamped_folder, sha_placeholder, folder_placeholder)
+    % Authenticate exact executing bytes while canonicalising only the two
+    % generated self-reference tokens used by make_micro_smoke.py.
+    fid = fopen(fpath, 'rb');
+    if fid < 0
+        error('A00:QualificationExecutableMissing', ...
+            'Cannot open qualification executable: %s', fpath);
+    end
+    cleaner = onCleanup(@() fclose(fid)); %#ok<NASGU>
+    bytes = reshape(fread(fid, Inf, '*uint8'), 1, []);
+    raw_sha = local_sha256_bytes(bytes);
+    canonical = local_replace_unique_bytes(bytes, ...
+        reshape(unicode2native(stamped_sha, 'UTF-8'), 1, []), ...
+        reshape(unicode2native(sha_placeholder, 'UTF-8'), 1, []), ...
+        'full qualification SHA');
+    canonical = local_replace_unique_bytes(canonical, ...
+        reshape(unicode2native(stamped_folder, 'UTF-8'), 1, []), ...
+        reshape(unicode2native(folder_placeholder, 'UTF-8'), 1, []), ...
+        'qualification folder token');
+    canonical_sha = local_sha256_bytes(canonical);
+end
+
+function output = local_replace_unique_bytes(input, needle, replacement, label)
+    matches = strfind(input, needle);
+    if numel(matches) ~= 1
+        error('A00:QualificationCanonicalization', ...
+            'Expected exactly one %s in executable bytes; found %d.', ...
+            label, numel(matches));
+    end
+    first = matches(1);
+    output = [input(1:first-1), replacement, ...
+        input(first+numel(needle):end)];
+end
+
+function h = local_sha256_bytes(bytes)
     md = java.security.MessageDigest.getInstance('SHA-256');
-    raw = md.digest(uint8(str));               % Java byte[] -> MATLAB int8
+    raw = md.digest(reshape(uint8(bytes), [], 1)); % Java byte[] -> MATLAB int8
     h = lower(sprintf('%02x', typecast(int8(raw), 'uint8')));
 end
 
 function h = local_file_sha256(fpath)
     % SHA-256 hex digest of a file's raw BYTES (audit R6 C7: profile-asset hash).
-    fid = fopen(fpath, 'r');
+    fid = fopen(fpath, 'rb');
     if fid < 0, error('local_file_sha256: cannot open %s', fpath); end
     cleaner = onCleanup(@() fclose(fid));
     bytes = fread(fid, Inf, '*uint8');
-    md = java.security.MessageDigest.getInstance('SHA-256');
-    raw = md.digest(bytes);                     % Java byte[] -> MATLAB int8
-    h = lower(sprintf('%02x', typecast(int8(raw), 'uint8')));
+    h = local_sha256_bytes(bytes);
 end

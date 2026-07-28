@@ -119,6 +119,82 @@ MUTATIONS = (
         ),
     ),
     Mutation(
+        name="float32 matmul precision setter ignores executable policy",
+        target="core/utils.py",
+        checker="check_environment_lock.py",
+        original=(
+            '    torch.set_float32_matmul_precision('
+            'policy["float32_matmul_precision"])'
+        ),
+        mutant=(
+            '    torch.set_float32_matmul_precision("highest")'
+            "  # MUTANT: ignore numeric-mode policy"
+        ),
+        evidence=(
+            "[FAIL] numeric-mode setters and post-assertions are explicit"
+        ),
+    ),
+    Mutation(
+        name="CUDA matmul TF32 setter ignores executable policy",
+        target="core/utils.py",
+        checker="check_environment_lock.py",
+        original=(
+            "    torch.backends.cuda.matmul.allow_tf32 = \\\n"
+            '        policy["cuda_matmul_allow_tf32"]'
+        ),
+        mutant=(
+            "    torch.backends.cuda.matmul.allow_tf32 = False"
+            "  # MUTANT: ignore numeric-mode policy"
+        ),
+        evidence=(
+            "[FAIL] numeric execution mode is derived from its executable policy"
+        ),
+    ),
+    Mutation(
+        name="cuDNN TF32 setter ignores executable policy",
+        target="core/utils.py",
+        checker="check_environment_lock.py",
+        original=(
+            '    torch.backends.cudnn.allow_tf32 = '
+            'policy["cudnn_allow_tf32"]'
+        ),
+        mutant=(
+            "    torch.backends.cudnn.allow_tf32 = False"
+            "  # MUTANT: ignore numeric-mode policy"
+        ),
+        evidence=(
+            "[FAIL] numeric execution mode is derived from its executable policy"
+        ),
+    ),
+    Mutation(
+        name="float32 matmul precision postcondition launders actual state",
+        target="core/utils.py",
+        checker="check_environment_lock.py",
+        original=(
+            "            torch.get_float32_matmul_precision(),"
+        ),
+        mutant=(
+            '            policy["float32_matmul_precision"],'
+            "  # MUTANT: launder actual numeric mode"
+        ),
+        evidence=(
+            "[FAIL] numeric-mode postcondition mismatch hard-fails"
+        ),
+    ),
+    Mutation(
+        name="cuDNN runtime equality launders the locked value",
+        target="core/environment.py",
+        checker="check_environment_lock.py",
+        original=(
+            "    actual_cudnn = torch.backends.cudnn.version()"
+        ),
+        mutant=(
+            '    actual_cudnn = spec.get("cudnn_runtime")'
+            "  # MUTANT: ignore runtime"
+        ),
+        evidence="[FAIL] cuDNN runtime mismatch hard-fails",
+    ),
+    Mutation(
         name="trainer objective call bypasses TRAIN_PROTOCOL objective policy",
         target="training/trainer.py",
         checker="check_campaign_controls.py",
@@ -163,6 +239,64 @@ MUTATIONS = (
             "determinism policy"
         ),
     ),
+    Mutation(
+        name="run plan accepts a missing campaign run tag",
+        target="core/hyperparameter_policy.py",
+        checker="check_hyperparameter_policy.py",
+        original=(
+            "    if not isinstance(campaign_run_tag, str):\n"
+            "        raise HyperparameterPolicyError(\n"
+            '            "campaign run plan lacks its exact run_tag"\n'
+            "        )"
+        ),
+        mutant=(
+            "    if False:  # MUTANT: run-plan run_tag guard disabled\n"
+            "        raise HyperparameterPolicyError(\n"
+            '            "campaign run plan lacks its exact run_tag"\n'
+            "        )"
+        ),
+        evidence="mutation survived: campaign run-plan loses run_tag",
+    ),
+    Mutation(
+        name="run plan accepts an invalid execution receipt digest",
+        target="core/hyperparameter_policy.py",
+        checker="check_hyperparameter_policy.py",
+        original=(
+            '    if not _is_sha256(value["execution_receipt_sha256"]):\n'
+            "        raise HyperparameterPolicyError(\n"
+            '            "campaign run plan lacks a valid execution receipt '
+            'SHA-256"\n'
+            "        )"
+        ),
+        mutant=(
+            "    if False:  # MUTANT: execution-receipt guard disabled\n"
+            "        raise HyperparameterPolicyError(\n"
+            '            "campaign run plan lacks a valid execution receipt '
+            'SHA-256"\n'
+            "        )"
+        ),
+        evidence="mutation survived: campaign run-plan carries invalid receipt",
+    ),
+    Mutation(
+        name="follower run plan accepts a missing block-reference digest",
+        target="core/hyperparameter_policy.py",
+        checker="check_hyperparameter_policy.py",
+        original=(
+            "    elif not _is_sha256(block_reference_sha):\n"
+            "        raise HyperparameterPolicyError(\n"
+            '            "follower run plan lacks a valid block-reference '
+            'manifest SHA-256"\n'
+            "        )"
+        ),
+        mutant=(
+            "    elif False:  # MUTANT: follower reference guard disabled\n"
+            "        raise HyperparameterPolicyError(\n"
+            '            "follower run plan lacks a valid block-reference '
+            'manifest SHA-256"\n'
+            "        )"
+        ),
+        evidence="mutation survived: follower run-plan loses reference",
+    ),
 )
 
 
@@ -170,12 +304,15 @@ BASELINE_EVIDENCE = {
     "check_campaign_controls.py": "CAMPAIGN CONTROLS: ALL PASS",
     "check_weighted_head_mse.py": "WEIGHTED HEAD MSE: ALL PASS",
     "check_environment_lock.py": "ENVIRONMENT LOCK: ALL PASS",
+    "check_hyperparameter_policy.py":
+        "PASS: hyperparameter policy derivation/authentication/mutations",
 }
 
 ROOT_INPUTS = (
     "check_campaign_controls.py",
     "check_weighted_head_mse.py",
     "check_environment_lock.py",
+    "check_hyperparameter_policy.py",
     "comprehensive_ablation_multidamage.py",
 )
 FORBIDDEN_TEMP_ENTRIES = (

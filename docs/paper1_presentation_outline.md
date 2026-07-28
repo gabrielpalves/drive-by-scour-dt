@@ -1,5 +1,8 @@
 # SHM-group talk — staged ablation for drive-by damage ID (slide plan)
 
+> **NON-AUTHORITATIVE HISTORICAL TALK OUTLINE.** It inherits the superseded
+> pre-R11 paper outline and must not be used as current methods or results.
+
 Audience: Prof. Todd + the UCSD SHM group. Goal: convey the **staged ablation design**, the
 **classification → regression** move, the **champion-selection metric**, the **tests we run**,
 and the **whys** — at a level that invites methodological critique. ~15–20 min + questions.

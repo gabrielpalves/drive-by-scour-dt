@@ -157,9 +157,188 @@ MUTATIONS = (
         group="artifact",
         target="training/pipeline.py",
         checker="check_artifact_provenance.py",
-        original="if mismatches:",
-        mutant="if False:  # MUTANT: accumulated provenance mismatches ignored",
+        original=(
+            "if mismatches:\n"
+            "        raise RuntimeError(\n"
+            "            f\"{config.get('name')}: champion package provenance "
+            "mismatch: \"\n"
+            "            f\"{mismatches}\")"
+        ),
+        mutant=(
+            "if False:  # MUTANT: accumulated provenance mismatches ignored\n"
+            "        raise RuntimeError(\n"
+            "            f\"{config.get('name')}: champion package provenance "
+            "mismatch: \"\n"
+            "            f\"{mismatches}\")"
+        ),
         evidence="[FAIL] metadata protocol-descriptor tamper rejected",
+    ),
+    Mutation(
+        name="standalone artifact verifier ignores the external block-reference pin",
+        group="artifact",
+        target="core/artifact_provenance.py",
+        checker="check_artifact_provenance.py",
+        original=(
+            "if (\n"
+            "        expected_block_reference_manifest_sha256\n"
+            "        is not _EXPECTED_BLOCK_REFERENCE_UNSET\n"
+            "    ):"
+        ),
+        mutant=(
+            "if False:  # MUTANT: external block-reference expectation ignored"
+        ),
+        evidence=(
+            "[FAIL] standalone follower package rejects reference B "
+            "for package A"
+        ),
+    ),
+    Mutation(
+        name="cross-rung analyzer trusts a coherently substituted internal reference",
+        group="artifact",
+        target="core/cross_rung_inference.py",
+        checker="check_cross_rung_inference.py",
+        original=(
+            "if champion_canonical_sha != expected_reference_sha:"
+        ),
+        mutant=(
+            "if False:  # MUTANT: independently retained trust root ignored"
+        ),
+        evidence=(
+            "[FAIL] coherent champion+frozen+seven-pin substitution still "
+            "fails external root"
+        ),
+    ),
+    Mutation(
+        name="cross-rung analyzer ignores follower frozen-reference lineage",
+        group="artifact",
+        target="core/cross_rung_inference.py",
+        checker="check_cross_rung_inference.py",
+        original=(
+            "        or frozen.get(\"block_reference_manifest_sha256\")\n"
+            "        != expected_artifact_reference"
+        ),
+        mutant=(
+            "        or False  "
+            "# MUTANT: frozen block-reference lineage ignored"
+        ),
+        evidence=(
+            "[FAIL] follower frozen selection citing another block reference "
+            "is rejected"
+        ),
+    ),
+    Mutation(
+        name="cross-rung analyzer ignores block-reference lineage on CSV rows",
+        group="artifact",
+        target="core/cross_rung_inference.py",
+        checker="check_cross_rung_inference.py",
+        original=(
+            "    if any(\n"
+            "        row.get(\"block_reference_manifest_sha256\")\n"
+            "        != expected_csv_reference\n"
+            "        for row in rows\n"
+            "    ):"
+        ),
+        mutant=(
+            "    if False:  "
+            "# MUTANT: per-row block-reference lineage ignored"
+        ),
+        evidence=(
+            "[FAIL] anchor metric row must retain the canonical empty "
+            "anti-cycle reference"
+        ),
+    ),
+    Mutation(
+        name="benchmark restart trusts unvalidated hyperparameter lineage",
+        group="artifact",
+        target="benchmark_r5_compute.py",
+        checker="check_benchmark_contract.py",
+        original=(
+            "    _validate_benchmark_hyperparameter_execution(\n"
+            "        summary.get(\"hyperparameter_execution\"),"
+        ),
+        mutant=(
+            "    _trust_benchmark_hyperparameter_execution(\n"
+            "        summary.get(\"hyperparameter_execution\"),"
+        ),
+        evidence=(
+            "[FAIL] live benchmark satisfies every static R11 invariant"
+        ),
+    ),
+    Mutation(
+        name="benchmark study receipt regresses to a split stat/hash read",
+        group="artifact",
+        target="benchmark_r5_compute.py",
+        checker="check_benchmark_contract.py",
+        original=(
+            "    captured = _regular_file_snapshot(\n"
+            "        receipt,\n"
+            '        "immutable study receipt",'
+        ),
+        mutant=(
+            "    captured = _unsafe_split_file_snapshot(\n"
+            "        receipt,\n"
+            '        "immutable study receipt",'
+        ),
+        evidence=(
+            "[FAIL] live benchmark satisfies every static R11 invariant"
+        ),
+    ),
+    Mutation(
+        name="champion writer publishes before validating its trust-root payload",
+        group="artifact",
+        target="comprehensive_ablation_multidamage.py",
+        checker="check_execution_blocking.py",
+        original=(
+            "    payload = _validate_reference_payload_for_publication(payload)"
+        ),
+        mutant=(
+            "    payload = payload  "
+            "# MUTANT: trust-root publication validator bypassed"
+        ),
+        evidence=(
+            "[FAIL] invalid champion payload is rejected before immutable "
+            "publication"
+        ),
+    ),
+    Mutation(
+        name="protocol updater treats an orphaned lock file as a live writer",
+        group="artifact",
+        target="comprehensive_ablation_multidamage.py",
+        checker="check_execution_blocking.py",
+        original=(
+            "        descriptor = os.open(\n"
+            "            lock_path,\n"
+            "            os.O_CREAT | os.O_RDWR | "
+            'getattr(os, "O_BINARY", 0),'
+        ),
+        mutant=(
+            "        if lock_path.exists() and lock_path.stat().st_size == 0:\n"
+            "            raise RuntimeError("
+            '"MUTANT: orphaned lock blocks restart")\n'
+            "        descriptor = os.open(\n"
+            "            lock_path,\n"
+            "            os.O_CREAT | os.O_RDWR | "
+            'getattr(os, "O_BINARY", 0),'
+        ),
+        evidence=(
+            "[FAIL] orphaned legacy lock file cannot block a valid crash "
+            "restart"
+        ),
+    ),
+    Mutation(
+        name="campaign JSON snapshot silently accepts duplicate evidence keys",
+        group="artifact",
+        target="comprehensive_ablation_multidamage.py",
+        checker="check_execution_blocking.py",
+        original="            object_pairs_hook=unique_object,",
+        mutant=(
+            "            object_pairs_hook=dict,  "
+            "# MUTANT: duplicate JSON keys collapse silently"
+        ),
+        evidence=(
+            "[FAIL] reference publication rejects duplicate frozen-selection "
+            "JSON keys"
+        ),
     ),
     Mutation(
         name="environment verifier accepts package-version drift",
@@ -196,10 +375,40 @@ MUTATIONS = (
         target="core/environment.py",
         checker="check_environment_lock.py",
         original=(
-            'if spec.get("schema") != "ttbi-campaign-environment-v1":'
+            'if spec.get("schema") != _LOCK_SCHEMA:'
         ),
         mutant="if False:  # MUTANT: lock-schema guard disabled",
         evidence="[FAIL] unsupported environment-lock schema hard-fails",
+    ),
+    Mutation(
+        name="environment loader accepts descriptor/SHA disagreement",
+        group="environment",
+        target="core/environment.py",
+        checker="check_environment_lock.py",
+        original="if expected_matlab_sha != actual_matlab_sha:",
+        mutant=(
+            "if False:  # MUTANT: MATLAB descriptor authentication disabled"
+        ),
+        evidence=(
+            "[FAIL] descriptor mutation without matching SHA hard-fails"
+        ),
+    ),
+    Mutation(
+        name="environment descriptor accepts unauthenticated extra fields",
+        group="environment",
+        target="core/environment.py",
+        checker="check_environment_lock.py",
+        original=(
+            "if not isinstance(environment, dict) or set(environment) != set(\n"
+            "        _MATLAB_ENVIRONMENT_FIELDS\n"
+            "    ):"
+        ),
+        mutant=(
+            "if not isinstance(environment, dict) or "
+            "not set(_MATLAB_ENVIRONMENT_FIELDS).issubset(set(environment)):"
+            "  # MUTANT: extra fields ignored"
+        ),
+        evidence="[FAIL] extra MATLAB descriptor field hard-fails",
     ),
 )
 
@@ -207,6 +416,10 @@ MUTATIONS = (
 BASELINE_EVIDENCE = {
     "check_statistical_inference.py": "STATISTICAL INFERENCE: ALL PASS",
     "check_artifact_provenance.py": "ARTIFACT PROVENANCE: ALL PASS",
+    "check_cross_rung_inference.py": "CROSS-RUNG INFERENCE: ALL PASS",
+    "check_benchmark_contract.py":
+        "R11 COMPUTE BENCHMARK CONTRACT: ALL PASS",
+    "check_execution_blocking.py": "EXECUTION BLOCKING: ALL PASS",
     "check_environment_lock.py": "ENVIRONMENT LOCK: ALL PASS",
 }
 
@@ -227,7 +440,16 @@ def _source_paths() -> list[Path]:
         root = REPO / package
         if root.is_dir():
             paths.update(root.rglob("*.py"))
-    paths.add(REPO / "environment" / "campaign-py313-cu128.json")
+    # The R11 provenance root is itself an executable dependency of the
+    # artifact checker: it reads the reviewed manifest and hashes every listed
+    # Python file plus both environment inputs.  Copy the manifest and the
+    # requirements lock explicitly so the isolated baseline exercises the
+    # production provenance path instead of failing before any guard is tested.
+    paths.update({
+        REPO / "bundle_source_files.txt",
+        REPO / "environment" / "campaign-py313-cu128.json",
+        REPO / "requirements-campaign-py313-cu128.txt",
+    })
     return sorted(
         (path for path in paths if path.is_file()),
         key=lambda path: path.relative_to(REPO).as_posix(),

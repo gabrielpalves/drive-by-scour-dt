@@ -1,31 +1,35 @@
 # Track-layer damage EOV — sampling specification (from NotebookLM deep research)
 
-> **UPDATE 2026-07-15 — THE COUNTS ARE NOW ANCHORED; the (Extrapolation) flags below are
-> RESOLVED.** Second deep-research pass (Gemini, too large for NotebookLM) →
+> **UPDATE 2026-07-15 — BASELINE COUNTS IMPLEMENTED; evidence limits retained
+> below.** Second deep-research pass (Gemini, too large for NotebookLM) →
 > `papers/Track Defect Prevalence Data Search.{md,docx}`; prompt =
-> `docs/deep_research_prompt_track_counts.md`. Headline: **the prevalence paradox is
-> resolved** — the cited "~50% of concrete sleepers show some voiding" and our ~9%
+> `docs/deep_research_prompt_track_counts.md`. Working reconciliation: the cited
+> "~50% of concrete sleepers show some voiding" and our ~9%
 > mechanical model are BOTH right, because most voids are **sub-threshold**. Void taxonomy:
 > **<1.0 mm** = accommodation (absorbed by rail/fastener elasticity); **1.0–2.5 mm** =
 > dynamic-impact threshold (a 1–2 mm void raises adjacent sleeper–ballast contact force by
 > **up to 70%** and wheel loads **~85%**); **>2.5 mm** = critical. Only **10–20% of
 > visibly-settled sleepers exceed 1.5–2.0 mm** ⇒ **impactfully unsupported = 5–10% of
-> sleepers**. Superseding values now in `A00_Run.m` (MC-verified, `scratchpad/
-> check_track_stats.py`):
+> sleepers**. The baseline values below are implemented in `A00_Run.m`. The
+> previously cited `scratchpad/check_track_stats.py` is not present in this
+> repository, so this document does not claim a reproducible Monte Carlo
+> verification:
 >
-> | Quantity | OLD (un-cited) | NEW (anchored) |
+> | Quantity | OLD (un-cited) | CURRENT IMPLEMENTED PRIOR |
 > |---|---|---|
-> | hanging-sleeper groups | DU{0..3} per state (fixed) | **Poisson λ = 3.0 per 100 m**, window-scaled |
-> | ballast fouled patches | DU{0..2} per state (fixed) | **Poisson λ = 1.2 per 100 m**, window-scaled (= 15% of length ÷ 12.5 m mean patch; GPR: FI>30 on **10–20%** of route) |
-> | failed pads | `p=0.005`/pad (annual RATE misread as snapshot) | **`p=0.02`/pad** = snapshot **prevalence 1.5–3.0%** (0.5%/yr **incidence** × 3–5 yr renewal cadence on secondary lines) ⇒ ~3–4 positions/100 m |
+> | hanging-sleeper groups | DU{0..3} per state (fixed) | **Poisson λ = 3.0 per 100 m**, window-scaled modeling prior |
+> | ballast fouled patches | DU{0..2} per state (fixed) | **Poisson λ = 1.2 per 100 m**, window-scaled inferred prior; evidence update below |
+> | failed pads | 0.5%/yr annual incidence misread as a snapshot probability | **`p=0.02`/pad** = implemented snapshot-probability **modeling prior**, inferred from 0.5%/yr incidence × a 3–5 yr cadence rather than measured as a snapshot prevalence ⇒ ~3–4 positions/100 m |
 > | fouling ↔ voiding | independent (a documented vulnerability) | **coupled**: hanging-group density **×3 inside a fouled patch** (mud pumping → loss of support; bidirectional feedback) |
 > | ballast near bridge | uniform | **×3 within 20 m of an abutment** (deck runoff into the joint + impact; corrective work there is 4–8× more frequent, settlement rate 3–4×) |
 > | counts vs window length | fixed count regardless of length | **rates per 100 m, scaled by the modelled window** (120 m at L60, 159.6 m at L99.6) — the old fixed draw was itself an error |
 >
-> **λ = 3.0 reconciles a self-inconsistency in the report**: it recommends Poisson λ = 2.0–3.0
+> **λ = 3.0 was chosen to reconcile a self-inconsistency in the report**: it
+> recommends Poisson λ = 2.0–3.0
 > ("intermediate degradation cycle") but its own table demands 5–10% of sleepers impactfully
 > unsupported. λ·3 sleepers per group / 167 ⇒ λ ≥ 2.78 for ≥5%, and ≤ 3.0 to stay in range —
-> **λ = 3.0 is the only value satisfying both** (yields 5.4%; MC-verified). Its table also
+> **λ = 3.0 is the only value satisfying both under that mean-group-size
+> calculation** (expected share 5.4%; not a preserved MC result). Its table also
 > claims P(no hanging group) ≈ 0.25, which contradicts its own λ (0.05–0.14) — we followed the
 > derivation, not the table.
 >
@@ -53,23 +57,24 @@
 > * **Secondary-line vulnerability now citable**: ballast design life 25 yr (main) vs up to
 >   50 yr (secondary rural) — Musgrave 2024 (Network Rail perspective, DOI
 >   10.17265/2328-2142/2024.05.004).
-> * **Honesty mechanism**: λ ∈ {0.6, 1.2, 2.4} sensitivity sweep (= 7.5–30% of length)
->   spans the plausible regional band of the envelope; report λ=1.2 as a
+> * **Planned sensitivity (not implemented or run):** a future
+>   λ ∈ {0.6, 1.2, 2.4} sweep would span about 7.5–30% of length. The current
+>   campaign implements λ=1.2 only; report it as an inferred
 >   conservative-representative choice, not a measured constant.
 > Everything in the report's own spec table remains flagged INFERENCE (derived), though
 > each derivation rests on a cited anchor — an honest improvement over pure assumption,
 > but say so in the paper.
 >
-> **Crack (secondary question) — prevalence CONFIRMED, location CORRECTED.** P(crack)=0.25
-> validated (spans with a macroscopic EI loss in the Sinha 5–30% band ≈ **20–30%** of an aged
-> concrete/composite inventory; marginal non-structural cracks reach 70–80% but cause no
-> modelled EI drop). **Location: our uniform draw was WRONG** — but not for the reason we
-> first thought. Our moving-load |M| envelope favours mid-span ~2:1; real crack prevalence is
-> **hogging-dominated >4:1–5:1**, because over an internal support the deck's **top fibre** is
-> in tension (concrete's weakest mode) *and* takes the deck runoff/chlorides, while mid-span
-> soffit cracks tend to close under compression. **Eurocode 4 mandates** analysing a cracked
-> section over **15% of the span each side of internal supports**. Now implemented:
-> hogging:sagging = **4:1**, placed within **±17.5% of a span** about the chosen section.
+> **Crack (secondary question) — modeling priors retained, location
+> support-weighted.** `P(crack)=0.25` is a modeling prior informed by a reported
+> **20–30%** range for aged concrete/composite inventory with macroscopic
+> stiffness-affecting cracks; it is not a directly validated prevalence for this
+> campaign population. The location prior weights hogging regions because the
+> deck top fibre is in tension over internal supports and is exposed to
+> runoff/chlorides. Eurocode 4's cracked-section treatment motivates using a
+> support-region window; it does **not** supply occurrence odds. The implemented
+> **4:1 hogging:sagging weight is therefore an explicit design prior**, with
+> locations placed within **±17.5% of a span** about the chosen section.
 
 Transcribed 2026-07-09 from the NotebookLM answer (notebook "Probabilistic Graphical
 Models for Predictive Digital Twins at Scale", 106 sources incl. the Track-Layer Deep
@@ -81,12 +86,15 @@ source mapping against the deep-research report "Track-Layer Degradation in
 Train-Track-Bridge Interaction Models..."). CITED (solid): void-depth range + lognormal
 params; 50% voiding prevalence (Augustin et al.; Li & Sun); ballast dry/wet multiplier
 ranges; GRF theta_x = 3-15 m (typ. 10); patch length U(5,20) m; pad Weibull(1.8, 2.2);
-damping [0.8,1.2]; k->0 pad failure; P=0.5% of fastening positions PER YEAR; ARIMA(5,1,0);
+damping [0.8,1.2]; k->0 pad failure; annual incidence anchor P=0.5% of
+fastening positions, distinct from the implemented snapshot prior `p=0.02`;
+ARIMA(5,1,0);
 max 3 consecutive failed pads; **hanging-sleeper density spikes within 15 m of bridge
 transitions**. EXTRAPOLATED (assumptions, state as such): 1-3 sleeper groups /100 m;
 group sizes above 5 (cited range = 1-5 consecutive, 5 = wheel-load critical limit);
-1-2 ballast patches /100 m; patch upper bound 25 m (cited 20 m); 0.83 failed pads/100 m
-(arithmetic); 2 m clustering near joints. Corrections are applied in the table below.
+1-2 ballast patches /100 m; patch upper bound 25 m (cited 20 m); about 3.3 failed
+pads/100 m under the implemented `p=0.02` snapshot prior (arithmetic); 2 m
+clustering near joints. Corrections are applied in the table below.
 
 ## Sampling specification (per 100 m of track; sleeper spacing 0.6 m ⇒ ~167 sleepers)
 
@@ -147,11 +155,15 @@ group sizes above 5 (cited range = 1-5 consecutive, 5 = wheel-load critical limi
   spring (k_p,i → 0).
 - **Severity:** aging χ_pad ∈ [1.0, 3.5] with **Weibull(λ = 1.8, k = 2.2)** (the
   [1.0, 3.5] range is a synthesis of two cited ranges [1.2, 3.5] and [1.0, 3.0]);
-  damping β_pad ∈ [0.8, 1.2]; failed pad: k = 0 with per-pad probability P = 0.005.
-  **NOTE (verified): P = 0.5% of fastening positions PER YEAR** — using it as a
-  snapshot Bernoulli assumes ~1 year between inspections; state that assumption.
+  damping β_pad ∈ [0.8, 1.2]; failed pad: k = 0 with implemented per-pad
+  snapshot probability **p = 0.02**.
+  **Evidence boundary:** 0.5% of fastening positions per year is an incidence
+  anchor, not a snapshot probability. The `p=0.02` campaign value is an inferred
+  standing-prevalence modeling prior based on a 3–5 year cadence, not a measured
+  snapshot estimate.
 - **Count:** aging applies globally across all ~167 sleepers/100 m; failures
-  ≈ 0.83 pads per 100 m *(Extrapolation: 167 × 0.005 Bernoulli)*.
+  have expectation ≈ 3.34 pads per 100 m under the implemented prior
+  *(167 × 0.02 Bernoulli)*.
 - **Clustering:** sleeper-to-sleeper aging variation via an ARIMA(5,1,0) spatial noise
   model, clustered within ~2 m of rail joints; failures independent, capped at
   max 3 consecutive.
@@ -159,11 +171,12 @@ group sizes above 5 (cited range = 1-5 consecutive, 5 = wheel-load critical limi
 ## (i) Channel / frequency sensitivity
 - **Unsprung (axle-box/wheel):** 300–3000 Hz, dominated by rail-pad state (pad dynamic
   stiffness controls the rail's pinned-pinned resonance, ~800–1200 Hz).
-- **Sprung (bogie/car-body — our champion channels):** suspension low-passes above
-  ~30 Hz; **completely insensitive to rail-pad aging**; they capture 0.5–30 Hz —
-  bounce/pitch modes (10–30 Hz) excited by low-frequency harmonics of severe
-  hanging-sleeper gap closures, plus the global profile dips associated with ballast
-  fouling (0.5–30 Hz).
+- **Sprung (bogie/car-body — historically selected channels):** suspension
+  low-passes above ~30 Hz, so reduced sensitivity to rail-pad aging is the
+  hypothesis to test, not an assumed zero response. These channels capture
+  0.5–30 Hz bounce/pitch modes excited by low-frequency harmonics of severe
+  hanging-sleeper gap closures, plus the global profile dips associated with
+  ballast fouling (0.5–30 Hz).
 
 ## (ii) Confounding verdict — the key finding
 **Mimicry is real and lands in our band.** Localized ballast fouling and hanging-sleeper
@@ -173,9 +186,10 @@ deck-deflection signatures (1–15 Hz)**. Classifiers trained without track defe
 misclassify track settlement as structural scour (false alarms).
 
 **Separable?** Yes, per the sources, via:
-1. **Domain randomization** — inject these damages into the TTBI training set as EOVs
-   (exactly our crack/profile mechanism) so the network learns invariance to localized
-   track anomalies and keys on the longer-wavelength global deflection signature;
+1. **Domain randomization** — inject these damages into the TTBI training set as
+   EOVs (exactly our crack/profile mechanism), then evaluate whether scour
+   performance remains robust to localized track anomalies; this does not
+   guarantee mathematical invariance;
 2. Signal decoupling (Augmented Kalman filter / SMC "apparent profile" isolation /
    band-stop around the sleeper-passing frequency f = v/0.6) — the non-ML alternative.
 
@@ -191,11 +205,15 @@ top-down interpolation). **Our model is NOT that**: it is a CNN + `MultiRatePool
 (parallel max-pools at rates 1/2/4, concatenated — core/models.py); no stacked blocks,
 no backcasts. Usable claims for the paper: (1) multi-rate pooling gives the head
 simultaneous coarse/fine views, favouring long-wavelength global-deflection content;
-(2) domain randomization forces invariance — a HYPOTHESIS this stage tests (success
-criterion: flat scour MSE + low false-alarm rate under track EOVs). Do NOT quote the
+(2) domain randomization may improve nuisance robustness — a hypothesis this
+stage tests (success criterion: flat scour MSE + low false-alarm rate under
+track EOVs), not an invariance guarantee. Do NOT quote the
 hierarchical-interpolation mechanism.
 
-## Implementation notes (TTB-2D mapping — to design before the stage)
+## Historical implementation-planning notes
+
+This section records the pre-stage design notes. Current code and the audited
+campaign contract supersede any future-tense statement below.
 - Our track layers (`TrackProp_Zhai…`) are currently SCALAR per-layer properties applied
   uniformly to every sleeper; per-sleeper multipliers (needed for all three damages)
   require threading per-sleeper stiffness vectors into the track/model matrices
@@ -203,6 +221,7 @@ hierarchical-interpolation mechanism.
 - The bilinear gap contact (true hanging sleeper) is nonlinear; start with the
   linearised zero/reduced-stiffness version (standard in the literature for moderate
   voids) and note the simplification.
-- Sample per passage (like crack/profile) unless decided otherwise; log draws in the
-  .mat like `crack_log`/`profile_log` (they are nuisances, NOT labels).
+- Current campaign policy samples persistent crack/profile/track conditions per
+  state and logs the draws; they are nuisances, not labels. Vehicle-side wheel
+  conditions remain per-passage.
 - Keep MATLAB and Python (TTBI_2D) implementations mirrored — parity audited 2026-07-09.

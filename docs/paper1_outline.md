@@ -1,384 +1,495 @@
-# Paper 1 — Outline & Draft Skeleton (v2, staged multi-damage)
+# Paper 1 — R11 manuscript outline
 
-**Working title:** *A staged, physics-matched ablation for drive-by identification of
-scour and bearing damage in multi-span railway bridges*
+> **Planning document; no R11 results yet (2026-07-27).**
+>
+> All pre-R11 numerical results, champions, figures, and datasets are excluded.
+> Populate the results section only from authenticated outputs of the complete
+> regenerated campaign. The authoritative methods draft is
+> `docs/paper1_methodology.md`; the dispatch verdict is
+> `docs/audit_r5_results.md`.
 
-(Alt, if the reviewer wants the architecture foregrounded: *Multi-rate temporal pooling as a
-physics-matched inductive bias for drive-by railway-bridge damage identification: a staged
-architecture-and-sensor ablation*.)
+## Working title
 
-**Status:** updated 2026-07-15 to the final **10-rung ladder**, the anchored EOV design, the
-load-time noise model, and the corrected crack prior. Supersedes the v1 skeleton
-(single-scour classification only). Results below come from the *superseded* Stage-0/Stage-1
-datasets and the L100 pilot — the whole campaign is being **regenerated from scratch** on the
-new ladder, so treat every §5 number as a *direction*, not a final value, until it lands.
-Numbers marked ⚠ need a check at write-time (see the verify list).
+**Common-random-number ablation of architectures and vehicle response
+channels for multi-pier railway-bridge scour monitoring**
 
-**Target venue:** TBD (confirm with advisor). Ranked fit — MSSP (top; signal-processing +
-drive-by community) → Structural Health Monitoring (Sage) → CACIE (ML angle) → Engineering
-Structures (application) → Sensors (fast fallback). Framing knob: MSSP wants the
-signal/physics novelty foregrounded; CACIE the ML; Eng. Struct. the application.
+Alternative, after results justify it:
 
----
+**Drive-by estimation of multi-pier support-stiffness loss under competing
+bridge, track, and vehicle mechanisms**
 
-## 0. The one-paragraph story (say this first, in the talk and the abstract)
+Avoid “damage depth,” “all damages,” “N-HiTS architecture,”
+“hardware-optimal sensors,” and “zero-shot robustness” in the title.
 
-Drive-by monitoring turns an in-service train into a mobile sensor for the bridges it
-crosses. Prior work (esp. the Fernandes line) establishes that vehicle accelerations carry a
-detectable scour signature. We ask the *engineering-design* questions that come next and
-answer them with a **staged ablation** that changes **one factor at a time**: (1) *which*
-architecture suits this signal, and why — we isolate each block and argue **multi-rate
-temporal pooling (N-HiTS) as a physics-matched inductive bias**; (2) *how few* on-board
-sensors suffice — a full sensor-economy sweep gives **two sensors ≈ eight**; (3) can a single
-pass **localise and quantify** scour at **several independent piers** — yes, at ~99%
-localisation; (4) does a **co-located bearing** damage confound the scour estimate — we add a
-bearing head and measure the **cross-leakage**; and (5) how does the method behave when
-**environmental/operational variability (EOV)** — track roughness, cracks — is injected as
-*domain randomisation*. Along the way we (a) move from coarse **classification** to
-**continuous ordinal regression**, the natural state for a downstream digital twin, and (b)
-select the champion by a **robustness criterion** (median error + collapse-rate + UCB) rather
-than the single luckiest tuning trial. A recurring, literature-consistent finding: under
-realistic **per-passage roughness**, suspension-filtered car-body/bogie channels lose the
-quasi-static scour signature while **unsprung (axle-level) channels retain it** — and a
-**mixed unsprung+sprung sensor pair** recovers performance via a residual (profile-reference)
-mechanism.
+## One-sentence paper claim
 
----
+Under a registered 2-D TTBI simulation, fixed semantic state populations,
+full-array-calibrated hyperparameters, and a state-grouped test firewall, the
+study quantifies how registered architecture/response-channel-subset choices and
+seven modeled L60 mechanism additions change achievable multi-pier
+support-stiffness-loss estimation after rung-specific retraining.
 
-## 1. Contributions (state these explicitly in the intro)
+This is the intended scope, not a result. The abstract must replace “quantifies”
+with the observed effect sizes only after the complete campaign.
 
-1. **A staged ablation methodology for drive-by damage ID.** We select the architecture ONCE
-   on the simplest task and then FIX it, so every later rung varies exactly one scientific
-   factor. The ladder follows the questions a bridge maintainer actually asks — *can I
-   localise scour? does a bearing fool me? a crack? both? does rail roughness? track damage?
-   the train itself?* — and answers each with a number rather than a hope. This isolates
-   *what causes what* in a way a monolithic "train on everything" experiment cannot.
-   **(The organising contribution.)** Ten rungs:
-   `s0_scour → s11_bear → s12_crack → s13_bearcrack → s14_prof → s15_track → s16_all`
-   (L60/3-span), then `s21_scour4 → s22_bearcrack4 → s23_all4` (L99.6/4-span).
-2. **A physics-matched architectural inductive bias.** N-HiTS multi-rate pooling mirrors the
-   two-timescale physics of the drive-by signal — high-frequency wheel/rail-contact transients
-   vs. the low-frequency modal/quasi-static deflection induced by support-stiffness loss — and
-   is the consistent top performer across sensor sets and across the classification→regression
-   change. Spatial embedding (Space2Vec) and recurrence (LSTM) do **not** help the strong
-   channels and can hurt them. Reframes the architecture choice as *physics*, not tuning luck.
-3. **A sensor-economy result: 2 ≈ 8, and a physics of *which* two.** A single-DOF → leave-one-
-   out → pair → forward sweep shows a two-sensor pair matches the full array, and identifies
-   which channels carry the signature and which are dead weight — with an interpretable,
-   suspension-chain explanation.
-4. **Multi-pier localisation + quantification from one pass**, and a **scour–bearing
-   disentanglement** measurement (per-head error + a **cross-leakage** metric: how much false
-   scour a seized bearing induces, the safety-critical direction).
-5. **A robustness-based model-selection criterion** (median error + IQR + **collapse-rate**,
-   with a UCB variant), rather than the single luckiest Optuna trial — rewards models that are
-   *reliably* good and exposes fragile single-sensor configs a point estimate would hide.
-6. **A literature-anchored EOV domain-randomisation design** — every nuisance parameter cited
-   or derived-from-cited, with the draw *frequency* itself argued from physics (persistent
-   conditions per state, not per passage; EN 13848-2, Sato/Shenton) — and an empirical,
-   physically-explained result that **per-passage roughness collapses sprung-channel scour
-   regression while unsprung channels survive**, with a **mixed-pair fusion** remedy.
-   *(Report the direction now; final magnitudes after the regeneration.)*
-7. **A separation of likelihood from prior.** Inter-pier scour is physically dependent, yet we
-   train on an **independent** LHS: the network must learn `p(response | state)`, and baking
-   the correlation `p(state)` into it would (i) let the model infer a pier's condition without
-   evidence and (ii) destroy the localisation claim it is meant to test. The dependence is
-   modelled *mechanistically* in the digital twin (shared flood driver), not in the training
-   set — a modularity argument we believe generalises to other multi-damage SHM learners.
+## Contributions to test
 
-> Positioning vs. Fernandes (prior art): they establish drive-by scour *feasibility* (and a
-> multi-damage *classification*). We answer *which architecture and why*, *how few sensors*,
-> *can we localise across piers and disentangle a second damage*, and *how to select and
-> stress-test the model* — as a staged, one-factor-at-a-time study. See the delta table in §3.
+1. **A fixed-population CRN experiment.** L60 uses 450 semantic states at every
+   rung and L99.6 uses 475, with identical latent designs, UID-stable splits,
+   and named random substreams within each geometry.
+2. **A compute-feasible, anchor-only HPO policy.** Free 100-trial HPO is
+   restricted to the full eight-DOF input at independent L60/s0 and L99/s21
+   anchors; every other candidate and follower uses one exact frozen singleton
+   trial. Architecture comparisons remain conditional on separate finite
+   equal-budget searches and the registered seed set.
+3. **A four-arm architecture experiment with an actual pooling control.** The
+   plain CNN/GAP arm tests whether the implemented multi-rate pooling adds value;
+   the module is described as N-HiTS-inspired, not as full N-HiTS.
+4. **A two-channel response-subset study with a full-array control.** Conclusions
+   are conditional on the registered full-array-calibrated policy and the
+   symmetric relative-noise stress. The code selects channels/DOFs, not physical
+   transducer count, packages, mounts, placement, or sensor technologies.
+5. **Multi-target estimation and confounding diagnostics.** The task estimates
+   pier-specific support-stiffness loss, identifies the most affected pier, and
+   measures bearing error and scour↔bearing leakage where bearing heads exist.
+6. **Seven paired L60 mechanism contrasts.** The primary analysis uses the exact
+   common outer-joint StateUIDs, paired training seeds, 100,000 state-first
+   bootstrap replicates, and Bonferroni familywise intervals.
+7. **Transparent physics and claim boundaries.** Scour is stiffness loss, crack
+   is a uniform damaged-element \(EI\) block, hanging sleepers are linear
+   support removal, and L99.6 is a blockwise scale/stress experiment.
 
----
+Do not state these as successful findings before the registered analyses exist.
 
-## 2. Introduction (draft beats)
+## 1. Introduction
 
-- Scour = a leading cause of bridge failure worldwide, submerged and invisible, accelerating
-  with climate-driven flood frequency; visual inspection misses early subsurface erosion
-  between cycles. [Kamariotis 2024; HEC-18; Lamb 2019; Prendergast & Gavin]
-- Direct SHM (structure-mounted sensors) is costly to deploy per-bridge across a network;
-  **drive-by / indirect** SHM turns an in-service train into a mobile sensor, scalable over a
-  line, and is attractive precisely where bridges are a small, outsourced fraction of the
-  route (motivating anecdote: Ferrovia Tereza Cristina, ~160 km). [reviews: Malekjafarian/
-  OBrien; Corbally & Malekjafarian; Fernandes 2024–2026]
-- Gap: detection *feasibility* is established, but the **design questions** a network operator
-  faces before deployment are open — which architecture, how few sensors, can one pass handle
-  several piers, does a second damage confound the estimate, and how does the method behave
-  under realistic operational variability. Existing work typically fixes a black-box CNN and
-  compares a couple of sensor positions.
-- Our answer: a **staged ablation** (the six contributions). Roadmap sentence.
+### Motivation
 
----
+- Scour threatens railway-bridge availability and safety, while conventional
+  inspection can be intermittent and difficult during hydraulic events.
+- Drive-by monitoring can reuse an in-service vehicle, but feasibility alone
+  does not answer the implemented design questions: which modeled response
+  channels and architecture, what is gained by the full response array, which
+  pier, and what happens when other mechanisms share the signal pathway?
+- A naive ablation can be misleading if rungs use different state inventories,
+  passages from one state leak across splits, every candidate receives an
+  independent HPO lottery, or nuisance randomness is unpaired.
 
-## 3. Related work + the Fernandes delta table
+### Gap
 
-**VERIFIED DRAFT: see `docs/paper1_related_work.md`** — per-paper summaries (2024 JCSHM DAE;
-2025 IJSSD multi-damage PAA+CNN classification; 2026a ASCE speed→~100% car body; 2026b LATAM
-CNN-LSTM on the real Canelas bridge), the verified Table 1, the drop-in delta paragraph, and
-honesty guardrails. **v2 additions to fold in:** the roughness/axle-box strand that grounds
-our EOV + fusion findings — see `papers/Drive-By Scour ML Literature Design` and
-`paper1_related_work.md` §"Roughness, suspension filtering, and sensor fusion". Key anchors:
-profile is held FIXED-per-scenario in published drive-by ML (Locke 2020; NuBe-DBBM / Sarwar &
-Cantero; Fernandes fixed FRA-4); axle-box acceleration retains the geometry the suspension
-filters out; two-axle/TSD residual methods cancel roughness by fusing axles (OBrien/Keenahan).
+Position the paper against primary drive-by scour work by Cantero, Fernandes
+and collaborators, plus relevant bearing/track-roughness studies. Existing work
+already establishes important feasibility, PAA, EOV, and sensor-placement
+precedents; do not claim those concepts as new. The methodological delta is the
+registered architecture/response-channel-subset experiment with fixed semantic
+populations, common random numbers, separate execution blocks, and paired
+state-level inference. Physical sensor-placement optimization remains outside
+the implemented experiment.
 
-**Delta in one line:** Fernandes establishes *feasibility* and multi-damage *classification*
-(PAA, CNN/CNN-LSTM, Bayesian opt, multi-run robustness, EOVs incl. track profile, car-body-vs-
-bogie). Our advances: the **staged one-factor-at-a-time design**, the **component-level
-architecture ablation** (Space2Vec / LSTM / **N-HiTS pooling as two-timescale physics**), the
-**full sensor-economy ablation → 2 ≈ 8**, **multi-pier localisation + scour–bearing leakage**,
-the **classification→ordinal-regression** move, the **collapse-rate/UCB** selection, and the
-**roughness→sprung-collapse / unsprung-survival + mixed-pair fusion** finding. Do NOT claim
-they lack robustness/EOV/PAA/sensor comparison — they have all four; our delta is the
-*systematic, staged* character. (Full table + guardrails in `paper1_related_work.md`.)
+### Research questions
 
----
+- RQ1: Under the registered full-array calibration, which architecture and
+  two-channel response subset minimize inner-validation scour MSE at each
+  geometry anchor?
+- RQ2: What performance is lost or gained by using the selected two-channel subset
+  rather than the full eight-DOF response array?
+- RQ3: How accurately can one passage estimate multiple pier-specific
+  stiffness-loss targets and localize the most affected pier?
+- RQ4: How do bearing, crack, persistent FRA-4 profile variability, track-layer
+  mechanisms, and wheel polygonization change achievable L60 performance?
+- RQ5: How does the method behave in the separate four-span L99.6 scale/stress
+  block?
 
-## 4. Methodology
+### Claimed scope in the introduction
 
-**FULL DRAFT PROSE: see `docs/paper1_methodology.md`** (v2 in progress — being expanded to the
-regression formulation, the staged design, the champion metric, and the EOV design). The
-beats below are the summary.
+Say “modeled support-stiffness loss” rather than physical scour depth. Say
+“response channel/DOF” rather than physical sensor count or placement. Say
+“performance under rung-specific retraining” rather than zero-shot OOD
+robustness.
 
-**4.1 Physical model — TTBI.** Cantero 2-D train–track–bridge interaction (TTB-2D / VEqMon2D);
-multi-span Euler–Bernoulli deck on spring supports; Zhai layered ballasted track; 5-vehicle
-planar train, sensors on the **leading** vehicle, 8 DOFs (vertical accel: car-body, 2 bogies,
-2 wheelsets; pitch rate: car-body, 2 bogies). ⚠ **Bridge dynamics sanity-check REQUIRED**:
-the deck `ρ·A = 9.6 kg/m` in isolation implies an unrealistically high fundamental — confirm
-the as-built (deck+track+ballast) fundamental frequency is physically representative (few Hz)
-from the model's own `B09`/`B56` output before submission; report it and the effective spans.
+## 2. Related work
 
-**4.2 Damage models.**
-- **Scour** = vertical support-stiffness loss at a target pier, `k_v(d)=(1−d)·k_v0`
-  (⚠ `k_v0≈3.44e8 N/m`), `d∈[0,60%]`; lowers global stiffness / quasi-static deflection under
-  the moving load. [Prendergast & Gavin; Kamariotis 2024; Fernandes]
-- **Bearing** (Stage 1+) = abutment **rotational** spring, healthy `k_r=0` (free), seizure →
-  large `k_r`; mechanism identical to Fernandes 2025 and Khan 2022, sampled continuously over
-  `[0,1e9]` Nm/rad and regressed as a **seized-%** head. The `1e9` anchor = Fernandes's
-  minimum drive-by-detectable seized bearing; our own sensitivity sweep (below) shows it maps
-  to ~0–31% analytic fixity — a documented **range** limitation, not a noise floor.
-- **Crack** (Stage 1c+) = damaged-element EI reduction (uniform I drop on the affected ~0.3 m
-  element(s), cf. Fernandes et al. 2025), a **nuisance/EOV** (not a label). ⚠ 2026-07-17: do NOT
-  cite this as Sinha — Sinha/Friswell/Edwards (2002) is a *tapered* (piecewise-linear) EI model
-  parametrized by crack depth; ours is the classical damaged-element benchmark.
-- **Track-layer + wheel OOR** (Stage 3) = ballast/hanging-sleeper/pad + wheel-flat nuisances.
+Organize by four strands:
 
-**4.3 From classification to regression (a deliberate reformulation).** The single-scour
-architecture study framed severity as **61 ordinal classes** (0–60% in 1% steps) scored by MSE
-on the class index — ordinal because a 41-vs-42% confusion is cheap and 5-vs-55% is not. The
-multi-damage study drops the discretisation and regresses **continuous per-target heads**
-(one per scoured pier + one per bearing), MSE loss. Why: (i) multiple independent piers make a
-joint-class scheme combinatorial; (ii) continuous severity is the state a **digital twin**
-tracks; (iii) it exposes **per-pier / per-head** error and a **localisation** read directly.
-Same backbone, same PAA front end — only the head and loss change (`core/task.py`).
+1. drive-by bridge/railway monitoring and TTBI simulation;
+2. scour-as-support-stiffness-loss and bridge frequency/deflection response;
+3. multi-damage/confounder studies, including bearing and damaged-element
+   crack representations;
+4. preprocessing, architecture, uncertainty, and sensor placement in drive-by
+   ML.
 
-**4.4 EOV as literature-anchored domain randomisation.** *(Full spec: methodology §A.3.)*
-Persistent **conditions** — the track-profile realisation, any crack, the track-layer state —
-are drawn **once per damage state** and held across its passages (track geometry evolves over
-MGT, not between trains: EN 13848-2 ≤0.5 mm repeatability; Sato/Shenton), plus a small
-per-passage jitter; only *operational* variability is redrawn per passage (speed, temperature,
-vehicle properties, wheel damage). Profile fixed at **FRA 4**. **This corrects the first
-scale-up pilot**, which redrew a fresh profile+class and crack *every passage* — the direct
-cause of its sprung-channel collapse (§5.5). Track-layer numbers are now **anchored** via a
-resolution of the *prevalence paradox*: the reported "~50% of sleepers show some voiding" and
-a ~9% mechanical model are both right because most voids are **sub-threshold** (impact
-threshold 1.0–2.5 mm; only 10–20% of settled sleepers exceed 1.5–2.0 mm ⇒ **5–10%
-impactfully unsupported**) → Poisson λ=3.0 groups and λ=1.2 fouled patches per 100 m, pads at
-**snapshot prevalence** 2% (the cited 0.5% is an annual *incidence* rate), fouling↔voiding
-**coupled ×3**, ballast **×3** near abutments. ⚠ one pivotal GPR figure needs a source
-re-check.
+### Literature attribution guardrails
 
-**4.5 Measurement noise as a load-time observation model (not baked into the physics).**
-Generation is **noise-free**: the generator saves the **raw time-domain** signal plus the
-space-transform/crop parameters, and the interpolation, crop and noise injection all happen at
-**load time** — so the sensor model is configurable per channel and per experiment without
-ever regenerating data. **A reportable finding:** adding noise before vs after the time→space
-interpolation is **not** equivalent — because the interpolation is linear, time-domain noise
-becomes band-limited/coloured and speed-dependent (≈0.67× variance but ≈**1.46× the energy
-surviving PAA** vs white noise added after). Same nominal 5%, different perturbation; we
-state the model explicitly rather than leave it implicit. Future work: an **additive
-datasheet-anchored** floor. *(EN 61373 severities describe the vibration ENVIRONMENT for
-qualification — range/reliability — **not** an acquisition noise floor.)*
+- Cite Cantero for the applicable TTBI formulation/version.
+- Cite Fernandes only for mechanisms and methods actually shared with the
+  implementation.
+- Do not cite Sinha for the uniform damaged-element crack block; explain that
+  Sinha's model is tapered and crack-depth parameterized.
+- Do not use EN 13848-2 measurement repeatability as a physical rail-profile
+  change model.
+- Describe FRA class 4 as the registered benchmark, not the universally
+  roughest permissible track.
+- Distinguish hanging-sleeper support removal from a nonlinear
+  void-depth/gap-impact model.
 
-**4.5b Damage-location priors, and a correction we report.** Scour (piers), bearing
-(abutments) and hanging sleepers (cited ±15 m transition spike) carry location priors by
-construction or citation. For the **crack** we first drew uniformly and justified it from the
-computed **moving-load |M| envelope** (broad: only ~2–4% of the range ever sees |M|<35% of
-max; peaks favour mid-span ~2:1). That was **wrong — the envelope is the wrong lens**: it
-answers *where bending is large*, not *where concrete fails*. Real cracking is
-**hogging-dominated >4:1** (top-fibre tension over supports + runoff/chlorides; mid-span
-soffit cracks close under compression), and **Eurocode 4 mandates** a cracked section over 15%
-of span each side of internal supports. Now: hogging:sagging **4:1**, ±17.5% of a span.
+The verified paper-by-paper comparison belongs in
+`docs/paper1_related_work.md`; re-check all final citations against primary
+sources.
 
-**4.6 Signal preprocessing — PAA.** Per-channel standardisation fitted on the training split
-only (fixed 80/20, seed 42, **grouped by damage state** — 2026-07-17: validation holds out
-whole states/files, never passages of a trained state, so val = unseen-state generalisation),
-then **PAA to 512 segments** as a structural low-pass filter:
-smooths high-frequency rail/wheel content, preserves the deflection-basin signature, ~10×
-length reduction. (CWT scalogram branch as a 2-D comparator.) [Fernandes 2025 PAA precedent]
+## 3. Methods
 
-**4.7 The ablated architecture.** Shared 1-D CNN backbone + three toggle-able blocks —
-**Space2Vec** (spatial-position embedding), **LSTM** (recurrence), **N-HiTS multi-rate
-pooling** (the physics-matched block). *The inductive-bias argument:* the drive-by signal is
-two-timescale (fast wheel–rail transients over slow deflection); multi-rate pooling represents
-both by construction, letting the model read the slow scour/bearing component without
-discarding the fast one. Tested in §5.1.
+### 3.1 Registered TTBI model
 
-**4.8 Architecture policy + the ladder (select once, then fix).** All arms run at `s0_scour`
-(the architecture-selection rung, and the paper's architecture table); the winner is **fixed**
-for every later rung, which then varies only its one scientific factor. Ladder and the three
-design decisions (crack = nuisance; profile = its own rung; all-damages split track/train) in
-methodology §A.2. **Heads = scour + bearing only**; crack, profile, track and wheel damage are
-nuisances the network must be *invariant* to. Re-runs are, by policy, **from scratch** (tagged
-studies) — never silent extension.
+- 2-D vertical train–track–bridge coupling;
+- L60 three-span and L99.6 four-span bridges;
+- five-vehicle train, leading-vehicle measurements;
+- eight candidate response DOFs;
+- exact authorized physical parameters, mesh, solver, time step, crop, and
+  healthy modal-frequency sanity checks;
+- bilateral-contact limitation, flats disabled, contact diagnostics and
+  time-step closure.
 
-**4.9 Inter-pier scour: independent in training, dependent only in the twin.** See
-methodology §A.6 — the likelihood-vs-prior argument, and why a correlated training set would
-destroy the localisation claim.
+### 3.2 Damage and nuisance semantics
 
-**4.9 Hyperparameter optimisation.** Optuna multivariate **TPE** (handles the conditional
-block search space), 25% random start-up, **100 trials**/study (⚠ single-scour study used more),
-successive-halving pruning, objective = best validation MSE over ≤50 epochs with early stopping.
+- scour: \(k_v(d)=(1-d)k_{v0}\), target = support-stiffness loss%;
+- bearing: nominal rotational fixity, not physical damage%;
+- crack: uniform damaged-element \(EI\) loss, not Sinha/crack depth;
+- profile: fixed baseline through `s13`, then per-state FRA-4 phase distribution;
+- ballast/pad/hanging sleepers: registered linear track-layer mechanisms;
+- hanging-sleeper gap/void depth absent;
+- wheel polygonization included with probability/order/lognormal-amplitude law
+  reported exactly; flats excluded.
 
-**4.10 Robustness-based selection.** Rank by **median** error with IQR and a **collapse-rate**
-(fraction of seeds/configs whose error exceeds a physical tolerance — a model that failed to
-learn the ordering), with a **UCB** variant `MSĒ + 1.96 σ/√n`. The multi-damage grid runs
-**3 independent seeds** per config (init/HPO variance; the train/val split is fixed) and reports
-the median leaderboard; the single-scour study used 30-seed UCB. Rationale: the single luckiest
-trial over-states performance and hides fragility (e.g. a single pitch channel that collapses).
+### 3.3 Rung graph
 
----
+Show the L60 directed graph, not a single ladder:
 
-## 5. Results
+```text
+             ┌─ s11_bear ─────┐
+s0_scour ────┤                ├─ s13_bearcrack ─ s14_prof ─ s15_track ─ s16_all
+             └─ s12_crack ────┘
+```
 
-**5.1 Architecture ablation (single-scour, classification — the selection stage).**
-- PAA ≫ RAW. Among blocks, **N-HiTS is the consistent contributor**; S2V and LSTM help only
-  weak channels and hurt strong ones. Champion = **PAA + N-HiTS**. [full 3-arm/27-row table]
-- Consistency across classification (single-scour) and regression (multi-scour) is itself
-  evidence the inductive bias — not a dataset quirk — drives the win.
+Registered L60 edges are
+`s0→s11`, `s0→s12`, `s11→s13`, `s12→s13`, `s13→s14`,
+`s14→s15`, and `s15→s16`.
 
-**5.2 Sensor economy (2 ≈ 8).** Single-DOF importance, leave-one-out, best pairs, forward
-sweep. Champion pair (single-scour: RearBogie_Vert + CarBody_Pitch) ≈ full array at zero
-collapse; ~3 sensors saturate. The *which two* has a suspension-chain reading (§6).
+State explicitly that the bearing edges add bearing physics, output heads, and
+multi-task learning together. State that `s13→s14` replaces the fixed profile
+with the per-state FRA-4 distribution.
 
-**5.3 `s0_scour` — multi-pier localisation + quantification (regression).** L60 / 3-span, scour
-at piers 2 & 3. *(Superseded-dataset values:)* **champion pair RearBogie_Vert + CarBody_Pitch:
-aggregate MSE 0.757 (RMSE ~0.87 pp), per-pier 0.72 / 0.79 (balanced), localisation 0.990.**
-Best single RearBogie_Vert 0.86 → the pair is only ~12% better = near-single-sensor
-sufficiency. One pass localises AND quantifies two independent piers → no aggregate/max
-fallback needed.
+Present `s21→s22→s23` in a separate panel labelled **L99.6 blockwise
+scale/stress design**. Do not draw a causal `s0→s21` arrow.
 
-**5.4 `s11_bear` — bearing disentanglement.** Add left/right bearing seized-% heads.
-*(Superseded-dataset values:)* **champion-pair scour MSE 0.757 → 1.798** (RMSE 0.87 → 1.34 pp;
-localisation 0.988) = the measured cost of sharing the network with a second damage.
-**Bearing heads carry real skill** (pair bearing MSE 7.0; left 4.8 / right 9.2 → RMSE ~2.2 /
-3.0 seized-%, tight parity), consistent with the k_r sensitivity sweep (10–16% rel-RMS at 1e9;
-CarBody_Pitch most bearing-sensitive). **Cross-leakage:** false-scour-from-bearing **2.37 pp**,
-false-bearing-from-scour 3.43 seized-%. The auto-pair **flips** to FrontBogie_Vert +
-CarBody_Pitch — explained by bearing sensitivity (CarBody_Pitch) and entry-abutment proximity
-(FrontBogie_Vert); right-bearing is harder than left because the crop ends before the exit
-abutment (deck-continuity information only). *Architecture-consistency note:* S2V edges the
-champion on the pair (~10%) but loses 7/8 singles — reported as robustness; policy unchanged.
+### 3.4 State populations and CRN
 
-**5.5 `s12`–`s13` — does a crack fool the scour estimate?** The bridge-damage rungs: crack
-alone, then bearing + crack (the Fernandes-comparable set). Read `scour_mse` and the leakage
-columns against `s0`/`s11`. *(Awaiting the regenerated chain.)*
+Report the fixed families:
 
-**5.6 `s14_prof` — the roughness rung (the interesting one).** *(Direction from the deprecated
-L100 pilot; magnitudes pending.)* Injecting **per-passage** roughness collapsed **all six
-sprung channels** to predict-the-mean (scour MSE ≈ label variance; localisation ≈ chance)
-while **wheel (unsprung) channels retained skill** (pair scour RMSE ~11 pp, localisation
-0.744) — the clean-track ranking **inverted**. Physics: suspension filtering + car-body
-resonance mask the quasi-static scour signature under strong roughness, while the unsprung
-mass traces profile + deflection directly (§6). **Mixed-pair pilot (budget-matched):**
-**FrontBogie_Vert + Wheel1 beat Wheel1 + Wheel2 by 17% scour MSE** (105 vs 126) and +5 pp
-localisation, *despite FrontBogie_Vert alone being collapse-level* — the TSD/two-axle residual
-(profile-reference) mechanism; CarBody + Wheel1 was **worse** than wheel+wheel (the sprung
-partner must sit low in the suspension chain). **The key open question:** the pilot used a
-physically indefensible *per-passage* redraw; with the corrected *per-state* profile the
-sprung channels may well survive. `s14_prof` is the clean test, and either outcome is a
-result — collapse confirms a real deployment limit; survival shows the collapse was an artefact
-of over-randomisation and localises the blame precisely.
+- L60: 50 healthy + 50 scour-only + 50 bearing-only + 50 nuisance-only +
+  250 joint = 450;
+- L99.6: 50 + 75 + 50 + 50 + 250 = 475;
+- 50 passages/state.
 
-**5.7 `s15`–`s16` — do the rail and the train interfere?** The maintainer-facing question,
-answered separately for track-layer damage and for wheel damage so any degradation is
-attributable to one or the other.
+Explain semantic StateUIDs, latent bearing/crack designs, master joint LHS,
+collision-gated StateSeedIDs, and UID-named state/passage streams. Clarify that
+the state is the analysis/resampling cluster relative to passages, which are
+correlated repeated observations. The fixed anchors and one joint LHS realization
+are not an iid field sample.
 
-**5.8 Scale-up (`s21`–`s23`).** Does the pair still suffice with 3 piers and ~100 m? Is the
-middle pier harder? How much do the EOVs inflate per-pier MSE at scale?
+### 3.5 Data and preprocessing
 
-**5.9 Summary tables.** (i) Architecture (3-arm). (ii) Sensor economy. (iii) **The ladder
-table** — one row per rung with scour MSE, localisation, bearing MSE and leakage, so the
-marginal cost of each factor is read directly down a column. Pull exact numbers from
-`results/<stage>_summary/leaderboard_median.csv` at write-time.
+- noise-free raw MATLAB signals;
+- exact time-to-space transform in Python;
+- training-only per-channel scaling;
+- PAA window means to 512 segments;
+- persistent vs passage-level draws; production rail profiles persist per state,
+  while wheel OOR redraws by passage and `profile-passage` is only a reserved
+  dormant/deprecated namespace;
+- 50×2 speed/temperature LHS rounded to integer km/h/°C and exact five-vehicle
+  Gaussian variability laws (body mass 10% CV, primary and secondary stiffness
+  5% CV each);
+- global-DOF-keyed `all_mult` observation noise.
 
----
+Call `all_mult` a symmetric 5% relative-noise stress, not a physical
+accelerometer noise model.
 
-## 6. Discussion
+### 3.6 Architecture and response-channel design
 
-- **Why multi-rate pooling helps** — tie N-HiTS pooling to the two-timescale physics; contrast
-  a plain CNN / CWT; explain why S2V and LSTM degrade strong channels (added capacity/variance
-  with no matching structure). The paper's intellectual core.
-- **The suspension-chain reading of sensor economy** — under clean track, sprung channels win
-  (they integrate the deflection basin); under strong roughness, the same filtering that helps
-  now *removes* the quasi-static signal, and unsprung channels win. The best sensor set is
-  therefore **regime-dependent**, and a **mixed unsprung+sprung pair** is a robust hedge
-  (profile reference + inertial response). This reframes "which sensors" as a fusion question.
-- **Localise + disentangle from one pass** — operational value: a lightly instrumented
-  in-service train (2–3 sensors) resolves *which* pier and separates scour from a seized
-  bearing, with a bounded, measured false-scour leakage.
-- **Robustness vs point estimates** — the collapse-rate story; fragile single-sensor configs.
-- **Limitations** — simulation-only (no field data); 2-D vertical model (no lateral/torsion/
-  pier-tilt; SSI/soil not modelled beyond a support spring); bearing **range** covers ~0–31%
-  fixity; profile modelled as FRA-4 domain randomisation (not measured-track evolution); the
-  deck-mass/frequency sanity-check (§4.1). State each plainly.
-- **Forward link** — multi-foundation dependent scour, flood/shock evolution, and the
-  value-of-information **digital twin** (Paper 2; DT explainer in `docs/dt_torzoni_explainer.md`).
+Compare:
 
----
+- CNN + multi-rate pooling;
+- Space2Vec CNN + multi-rate pooling;
+- LSTM CNN + multi-rate pooling;
+- plain CNN + GAP.
 
-## 7. Conclusion
-Restate the six contributions with headline numbers (localisation 0.99; 2 ≈ 8; scour cost of
-bearing 0.76→1.80; leakage 2.4 pp; roughness inverts the ranking and mixed-pair fusion
-recovers 17%). One sentence on Paper 2.
+Treat the full array as a non-selectable response-budget control and candidate
+two-channel subsets as the reduced-input budget. `s0` and `s21` independently select
+their block reference architecture/pair; each anchor's 100-trial full-array
+calibration also supplies that anchor's non-selectable eight-DOF control.
+Each anchor also evaluates 8 single channels × 4 architectures × 3 seeds as a
+frozen diagnostic that cannot select the reference.
+`s16` and `s23` reopen the exact 4-architecture × 28-pair × 3-seed matrix with
+frozen singleton parameters as exploratory deployment analyses. Their
+separate winners cannot rewrite the block reference used for registered
+contrasts.
 
----
+State explicitly that the five vertical-acceleration and three pitch-angular-
+velocity channels are modeled response quantities, not eight accelerometers.
+A subset can map to one or several devices; physical device count, package,
+mount, and placement are not identified.
 
-## Figure inventory (existing → paper)
+### 3.7 HPO and execution policy
 
-| Paper fig | Source | Status |
+- two independent physical blocks: L60/s0 and L99/s21;
+- at each anchor: full eight DOFs only, 4 architectures × 3 seeds × 100 trials,
+  registered multivariate TPE and Successive-Halving pruner enabled;
+- canonical best parameters stored per architecture × seed;
+- all candidates/followers: one exact Optuna singleton trial, no pruner;
+- total 1,620–1,638 studies and 3,996–4,014 trials, with the range determined
+  by designed-pair/carried-pair deduplication at six frozen rungs;
+- zero `FAIL` tolerance and OOM fatal;
+- capacity preflight checks total VRAM minus this process's peak reserved
+  memory, not system-wide free VRAM; require an otherwise idle/exclusive GPU;
+- all seven L60 Python rungs share one exact host/GPU/runtime and all three L99
+  rungs share one exact host/GPU/runtime, which may differ from L60;
+- durable absolute execution/HPO/champion paths; the champion carries
+  `frozen_selection_sha256`, and every follower pins the exact anchor-printed
+  canonical champion-manifest hash through `TTBI_BLOCK_REFERENCE_SHA256`; no
+  cross-block copying or post-anchor substitution;
+- the legacy-named benchmark runner is now a contract-guarded genuine R11
+  runner: authenticated 475-state × 50-passage × 8-channel × 512-segment,
+  five-head workload; one 100-trial anchor HPO study; and exactly one shared
+  finalist-CV refit. Its heavy commit-A execution remains pending, with zero
+  `FAIL`, OOM, retry, or replacement allowed.
+
+The methods table must report batch size 32, maximum 50 epochs, patience 5,
+Adam, cosine scheduling (`T_max=50`, `eta_min=0`), the complete conditional
+search domains, multivariate TPE with 25 startup trials and constant-liar
+handling, and the Successive-Halving settings (`min_resource=4`,
+`reduction_factor=3`, `min_early_stopping_rate=0`). Report the exact
+determinism policy and seed registry from the authorized protocol rather than a
+generic “fixed seeds” statement.
+
+### 3.8 Split and selection firewall
+
+- deterministic semantic-UID-stable 60/20/20 split;
+- state grouped and stratified by registered family/target/level/joint strata;
+- exact same partition across rungs of one geometry;
+- training-only scaler;
+- inner validation for HPO and selection;
+- finalist 5-fold × 2-repeat grouped CV on development data only, diagnostic
+  and unable to re-rank; after deduplication its fixed set is the winner, top
+  five architecture×channel combinations from the complete inner-validation
+  factorial leaderboard, each architecture's optimum, and same-pair, designed,
+  carried-reference, and full-array controls;
+- immutable outer test opened after freeze.
+
+### 3.9 Outcomes and inference
+
+Within rungs:
+
+- scour MSE/per-pier MSE and RMSE;
+- most-damaged-pier localization as a passage-level point estimate only when
+  maximum true scour is strictly greater than 5 percentage points; no
+  registered state-level localization interval;
+- bearing MSE and leakage diagnostics;
+- finite-seed median and seed IQR;
+- 2,000-draw, seed-42 state-first uncertainty for registered MSE report
+  comparators.
+
+Across L60:
+
+- analyzer supplied with canonical external champion, HPO-manifest, execution-
+  receipt, and all seven exact rung-summary paths; embedded copies are
+  insufficient;
+- exact paired outer-test joint StateUID × seed cells;
+- mean over states within seed, median over fixed seeds;
+- right-minus-left edge effect in squared percentage points;
+- 100,000 paired state-first bootstrap replicates;
+- pointwise 95% and seven-edge Bonferroni familywise intervals;
+- exploratory bearing×crack difference-in-differences.
+
+Describe both bootstrap analyses as empirical finite-design state-resampling
+uncertainty conditional on the registered anchor/LHS design. Do not claim
+field-population or design-superpopulation coverage without LHS-aware variance
+estimation or independent replicated state designs.
+
+### 3.10 MATLAB host qualification and production parity
+
+- assign every intended MATLAB generation PC one stable, unique
+  `TTBI_QUALIFICATION_HOST_ID`;
+- freshly regenerate transient qualification scripts from clean commit A; run
+  at least `s0_scour`, `s16_all`, and `s23_all4` on every required host;
+- retain each authenticated `qualification_host_receipt.json`, whose hardware
+  diagnostics are bound to the actual MATLAB environment, qualification source,
+  and exact executed script;
+- compare corresponding stage outputs for the required host/environment pairs
+  and retain accepted `matlab-environment-qualification-receipt-v4` evidence;
+- require explicit acceptance for numerical equivalence; do not infer
+  qualification from a comparator exit log alone;
+- CPU equality is not required. Equal MATLAB-environment digests are allowed
+  only for distinct authenticated host IDs, and host identity is not part of
+  production `gen_schema` or `gen_fingerprint`;
+- report the present 35-state/105-passage `s0_scour` laptop micro (27 min 32 s)
+  only as pre-convergence, one-host integration/timing evidence. Every intended
+  host must still run all three stages from commit A, and corresponding outputs
+  from distinct authenticated host IDs require accepted v4 receipts; and
+- in production, wait specifically for a complete `0001.mat`, then run the
+  MATLAB raw-parity smoke and dependent Python checker sequentially. Do not
+  admit later output until both pass.
+
+## 4. Results — populate only after R11 completion
+
+### 4.1 Qualification and sample accounting
+
+Report:
+
+- authorized source commit and protocol hashes;
+- every per-host MATLAB qualification sidecar and accepted v4 pairwise
+  comparison receipt, plus environment/execution/capacity receipt identities;
+- exact state/passages counts and excluded passage reasons;
+- contact-closure result;
+- complete HPO terminal-state accounting;
+- no split or artifact-provenance failures.
+
+### 4.2 Anchor architecture/response-subset selection
+
+Use separate L60 and L99 tables. For each architecture/pair report the
+three-seed inner-validation median/IQR and eligibility. Keep outer-test values
+out of selection tables.
+
+### 4.3 Two-channel versus full-array performance
+
+For each registered rung, compare the frozen two-channel reference against the full
+array with paired state-level effect estimates. Avoid “2 ≈ 8” unless the
+predefined equivalence/noninferiority criterion exists; otherwise report the
+effect and interval.
+
+### 4.4 Multi-pier estimation and localization
+
+Report per-pier error and aggregate scour error with their registered
+state-resampling intervals. Report localisation separately as the registered
+passage-level point estimate; do not attach the MSE interval to it. Do not call
+the task “detection.”
+
+### 4.5 Bearing estimation and leakage
+
+Separate:
+
+- bearing-head predictive error;
+- false scour response in bearing-only states;
+- false bearing response in scour-only states;
+- the combined cost of bearing physics plus extra heads/multi-task training.
+
+### 4.6 Seven L60 edge effects
+
+Primary table:
+
+| Edge | Mechanism/task change | Estimate (right−left) | Pointwise 95% CI | Bonferroni familywise CI | Outer analysis states |
+|---|---|---:|---:|---:|---:|
+| `s0→s11` | bearing physics + heads/multi-task | pending | pending | pending | pending |
+| `s0→s12` | crack nuisance | pending | pending | pending | pending |
+| `s11→s13` | crack nuisance with bearing task | pending | pending | pending | pending |
+| `s12→s13` | bearing physics + heads/multi-task | pending | pending | pending | pending |
+| `s13→s14` | fixed profile → per-state FRA-4 | pending | pending | pending | pending |
+| `s14→s15` | track-layer mechanisms | pending | pending | pending | pending |
+| `s15→s16` | wheel polygonization | pending | pending | pending | pending |
+
+Only the Bonferroni interval supports a familywise sign statement. Report the
+exploratory difference-in-differences separately.
+
+### 4.7 L99.6 blockwise scale/stress results
+
+Report L99 independently, with its own anchor/reference/protocol identities.
+Do not interpret `s0→s21` as an L60-to-L99 treatment effect and do not insert
+L99 rows into the seven-edge family.
+
+### 4.8 Diagnostic repeated CV
+
+Report split-stability ranks/intervals separately and state that CV did not
+re-rank the canonical selection or replace the outer-test estimate.
+
+## 5. Discussion
+
+Discuss only mechanisms supported by paired estimates and their intervals.
+Potential topics:
+
+- whether multi-rate pooling adds value beyond the plain CNN/GAP control;
+- whether selected response-channel subsets change between geometry/EOV deployment
+  regimes;
+- whether the full array materially improves over the selected two-channel budget;
+- which registered nuisance additions dominate error;
+- whether bearing leakage is operationally important; and
+- how the L99.6 block differs without converting the comparison into a causal
+  scale effect.
+
+### Required limitations
+
+- simulation-only, no field validation;
+- 2-D vertical model; no lateral/torsional/pier-tilt response;
+- support spring is not full soil–structure interaction or hydraulic scour;
+- label is stiffness loss, not depth;
+- bearing fixity is a design variable;
+- crack is uniform damaged-element \(EI\) loss, not crack depth/Sinha;
+- hanging sleepers lack gap/contact/void-depth nonlinearity;
+- flats excluded and wheel–rail contact is bilateral;
+- `all_mult` is not a datasheet-based sensor model;
+- candidate space, physical sensor mapping, and finite full-array-calibrated
+  HPO searches bound all optimality claims;
+- finite-design bootstrap intervals are not field-population coverage
+  intervals;
+- rung-specific retraining is not zero-shot OOD evaluation;
+- no detection/POD/sensitivity/minimum-severity claim without a locked binary
+  threshold;
+- L99.6 is blockwise, not confirmatory one-factor inference.
+
+## 6. Conclusion
+
+Summarize only authenticated R11 outcomes. Keep the final sentence at the level
+of modeled support-stiffness-loss estimation under the registered simulation
+and state the field-validation requirement.
+
+## Figure plan
+
+| Figure | Content | Source/status |
 |---|---|---|
-| Concept: TTBI + scour + bearing | scour.png, TTBI_Cantero.png (+ new bearing schematic) | keep/extend |
-| Example signals (sprung vs unsprung) | signals.png, pitch_signals.png | keep |
-| Architecture schematic (modular blocks) | CNN.png | keep |
-| F1 Architecture ablation (3-arm) | `results/Stage0/.../stage0_multiscour_summary/` + single-scour figs | regenerate |
-| F2 Sensor economy (single→LOO→pair→sweep) | single-scour `ablation_analysis/figures/` | keep (font later) |
-| F3 Stage-0 parity + per-pier / localisation | `stage0_multiscour_summary/parity_best.png` | keep |
-| F4 Stage-1 parity (4 heads) + leakage | `stage1_bearing_summary/parity_best.png`, `disentanglement.csv` | keep |
-| F5 Bearing k_r sensitivity sweep | `results/bearing_sensitivity/` | keep (methods fig) |
-| F6 Roughness collapse + mixed-pair bar | Stage-2 pilot `stage2_4span_L100pilot_summary/` | REDO after regen |
-| (opt) Champion confusion / ordinal error | `plotting/confusion.py` | generate if wanted |
+| 1 | TTBI model, bridge geometries, eight response DOFs | redraw from authorized model |
+| 2 | L60 directed edge graph + separate L99 block | create from registered protocol |
+| 3 | fixed state families, latent design and named CRN streams | create |
+| 4 | PAA + four architecture arms, including plain CNN/GAP control | redraw |
+| 5 | split/HPO/test firewall and two independent execution blocks | create |
+| 6 | L60 anchor architecture/response-subset results | regenerate |
+| 7 | selected two-channel vs full-array paired effects | regenerate |
+| 8 | seven-edge estimates with pointwise and Bonferroni intervals | regenerate |
+| 9 | per-pier parity/localization and bearing leakage | regenerate |
+| 10 | L99 blockwise results | regenerate |
 
----
+## Table plan
 
-## Open items before submission (verify list)
+1. Literature delta table, verified against primary sources.
+2. Authorized TTBI and damage/EOV parameter table.
+3. State families, counts, persistence, and inferential roles.
+4. Architecture/HPO/search-budget specification.
+5. L60 and L99 anchor selection tables.
+6. Per-rung outer-test performance and analysis-state counts.
+7. Seven L60 paired edge effects.
+8. L99 blockwise stress results.
+9. Limitations-to-claim mapping.
 
-- **⚠ Deck mass / fundamental frequency** (§4.1) — confirm the as-built fundamental is physical;
-  report it + effective spans (L40→19.8/20.1; L60→20.1/19.8/20.1; L99.6→4×24.9).
-- **⚠ k_v0** healthy support stiffness value + units; the scour k_v(d) law location in code.
-- **⚠ EOV ranges** — noise model (now load-time; state the domain caveat), temperature law,
-  vehicle-property count, speed range — against the FINAL regenerated datasets.
-- **⚠ Optuna** — trials/epochs/pruner for each study; CWT scale count; PAA n_segments = 512.
-- Verify each Fernandes Table-1 cell (classes, sensor sets) against `papers/`.
-- Re-pull every §5 number from the `*_summary/` CSVs at write-time; mark pilot numbers as pilot.
-- Confirm the "O'Brien-calibrated" vehicle and Zhai track citations.
-- Decide venue → port to the journal LaTeX template; redraw figures to publication fonts.
+## Final manuscript audit
 
-## Reference shortlist
-Cantero (2022, VEqMon2D; 2-D TTBI); Kamariotis et al. (2024); Fernandes et al. (2024, 2025,
-2026a, 2026b); Khan et al. (2022, continuous bearing k_r); Zhai et al. (track); Prendergast &
-Gavin (scour–frequency); Locke et al. (2020, fixed profile); Sarwar & Cantero / NuBe-DBBM;
-Corbally & Malekjafarian; OBrien/Keenahan (two-axle/TSD residual); axle-box-acceleration
-strand; EN 13848-2 (track geometry repeatability); FRA track classes; HEC-18; Lamb et al.
-(2019). Full PDFs / the roughness deep-research report in `papers/`.
+- Every result path resolves to the authorized source/protocol/execution/HPO
+  lineage.
+- No historical figure or result number remains.
+- “State” and “passage” counts are never conflated.
+- Selection, diagnostic CV, outer-test reporting, seven-edge inference,
+  exploratory deployment selection, and L99 blockwise analysis are visibly
+  separated.
+- All multiplicity claims use the registered seven-edge family.
+- All physical labels and model limitations use the terminology above.
+- No statement elevates the symmetric relative-noise arm to a hardware sensor
+  comparison.
+- No text calls one-host micro evidence a completed cross-host qualification or
+  treats CPU equality as a scientific requirement.
+- The reported full-array benchmark comes from the reviewed genuine R11
+  eight-channel runner, never from the legacy two-channel fixture.

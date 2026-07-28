@@ -1,256 +1,387 @@
-# Multi-damage campaign — the 10-rung ladder (2026-07-15)
+# R11 multi-damage campaign
 
-Everything is **regenerated from scratch**: new ladder, raw/Option-B data format,
-anchored EOVs, noise-free generation. The earlier Stage-0/1 datasets and the L100
-Stage-2 pilot are **superseded** (kept only as a historical record under `results/`).
+> **Pre-authorization snapshot (2026-07-27): DISPATCH BLOCKED.**
+>
+> This status records the source-convergence state before clean commit A. It is
+> intentionally not rewritten by report-only commit B. The sole current
+> dispatch authority—both before and after B—is
+> `docs/audit_r5_results.md`; an authorized report there supersedes this dated
+> snapshot.
+>
+> No existing `bundle_*.zip`, generated dataset, Optuna database, champion
+> manifest, or result table is valid input to R11. The source must first
+> converge on clean commit A, pass the full MATLAB/Python qualification and the
+> commit-bound production-code-path HPO-plus-CV benchmark, and then be
+> independently audited. The legacy-named `benchmark_r5_compute.py` is now a
+> contract-guarded genuine R11 runner. It derives and authenticates the
+> 475-state x 50-passage x 8-channel x 512-segment, five-head workload, executes
+> one 100-trial anchor HPO study through the production objective, and performs
+> exactly one shared finalist-CV refit. Optuna `FAIL`, OOM, trial retry, and
+> trial replacement are forbidden. A qualifying refit must also be a clean
+> first attempt: `attempt_count=1`, `prior_unaccepted_attempt_count=0`,
+> `timing_complete=true`, and `memory_complete=true`. At this dated snapshot,
+> the heavy run had **not** yet been executed; it must run against clean source
+> commit A and publish only non-scientific throughput evidence. Only a
+> report-only commit B may change
+> `docs/audit_r5_results.md` to the exact
+> `**Status: DISPATCH AUTHORIZED.**` verdict. While that report remains
+> blocked, `build_stage_bundles.py` must refuse publication and production
+> generation/ablation must not start.
+>
+> At this dated snapshot, MATLAB host qualification was also incomplete. One
+> real `s0_scour`
+> qualification micro on this laptop completed 35 states × 3 passages
+> (105 passages) in 27 min 32 s and validated, but no second independent host
+> has run. It also predates source convergence. This is one-host
+> integration/timing evidence only; it does not close the required multi-stage,
+> cross-host comparison gate.
 
-> ## 🔴 AUDIT R4 (2026-07-25) — audit-snapshot ZIPs are not dispatchable
->
-> The `bundle_*.zip` files present at the time of this audit predate the R4
-> methodology/provenance changes. Do not dispatch that snapshot. After
-> independent review, commit the reviewed source, then rebuild from that clean
-> commit. Dispatch only a complete ten-ZIP set listed in `bundle_sha256.txt`,
-> whose `source_commit` equals the reviewed commit and whose SHA-256 entries all
-> verify. The builder reads the explicit tracked `bundle_source_files.txt`,
-> refuses dirty runtime inputs, invalidates the old manifest before replacing
-> any ZIP, and publishes a new manifest only after the complete set is built.
->
-> R4 adds: true finalist-only 5-fold × 2-repeat **state-grouped** CV; fold-local
-> scaling; an immutable outer-test firewall; state-first cross-seed bootstrap and
-> paired contrasts; top-5 and per-architecture finalists; exact pair/seed matrix
-> guards; protocol-stamped Optuna studies and exported weights/scalers; full
-> source-file verification on cache reuse; a Python/CUDA environment lock; and a
-> MATLAB contact time-step closure harness. The complete evidence and remaining
-> gates are in `docs/audit_r4_results.md`.
->
-> R5 makes the complete training policy executable and hash-bound: objective,
-> multi-head loss, optimiser, scheduler, required trial seed and deterministic
-> runtime are consumed from `TRAIN_PROTOCOL`, rather than duplicated in prose.
-> It also consolidates generator identity at R9 and mutation-tests the R4
-> inference/provenance guards. Before rebuilding dispatch bundles, run
-> `python benchmark_r5_compute.py` from the clean reviewed commit. The benchmark
-> uses an explicitly non-scientific legacy cache only as an immutable compute
-> fixture, runs 100 useful production-path Optuna trials plus one shared
-> finalist-fold refit, and writes timing/provenance only under `.audit_tmp`.
-> Optuna trial-value logging is suppressed; restart timing is cumulative but an
-> abrupt-stop heartbeat is only a lower bound at a nominal cadence. Recovery is
-> explicit and evidence-preserving, and the completed receipt authenticates
-> every HPO/refit artifact plus an immutable logical SQLite backup. Never cite
-> its objective values or reuse its study for model selection.
-> The lightweight `python check_benchmark_contract.py` belongs to the fast
-> preflight suite on every campaign PC. In contrast,
-> `python check_r4_mutation_guards.py`,
-> `python check_training_policy_mutation_guards.py` and the real
-> `python benchmark_r5_compute.py` are audit-only gates run once against the
-> clean reviewed source commit; they are shipped solely for reproducibility.
-> Their commit-bound evidence and the dispatch verdict belong in
-> `docs/audit_r5_results.md`. While that report says `DISPATCH BLOCKED`, all
-> existing bundle ZIPs remain stale.
->
-> Two empirical gates remain before confirmatory publication claims: run the
-> 1/0.5/0.25-ms contact-closure study on the regenerated s23 state 24 and s15
-> state 244, and complete the actual campaign. The six `nuisance_only` states
-> leave only one outer-test state; that isolated false-positive probe is
-> **exploratory**, not confirmatory. The main joint-state estimation experiment
-> is unaffected by that wording constraint.
->
-> ## 🔴 AUDIT 2026-07-17 — bundles built before this date are INVALID
-> An external code audit (verified line-by-line) found seven defects; all are
-> fixed in this tree (full record: `docs/framework_rationale.md`, 2026-07-17
-> entry). Highlights: speed/temp LHS was transposed (corr −0.75, two EOV
-> quadrants never sampled — ALL rungs); track-layer damage landed entirely off
-> the deck (bridge really starts at ~123 m, not 30 m — s15/s16/s23); FRA PSD
-> corner was in rad/m on a cycles/m axis (~16× short-λ power — s14+); the
-> 0.5 mm physical profile jitter is removed; **wheel flats are disabled**
-> (bilateral solver can't represent the separation they cause; polygonization
-> stays); wheel–rail tension is now logged per passage (`contact_log`); the
-> Python split is now **grouped by damage state** (caches retag to `_gs1`);
-> Stage 0 again runs **all architectures** (the old stage-name check was wrong) and
-> the pre-mass-fix `CHAMPION_ARCH` must be re-selected from the new s0 run.
-> **Before generating anything:** rebuild bundles from this tree
-> (`python build_stage_bundles.py`), run `smoke_audit.m`, `smoke_stage3.m`,
-> `smoke_geometry.m` (MATLAB), `python check_generation_contract.py`, and
-> `python check_split_grouping.py` — all must
-> print ALL PASS. If a PC already started from a 2026-07-16 bundle, stop it and
-> discard.
->
-> ### Round-2 audit (2026-07-17) — additional rules
-> - **Extract each bundle into a FRESH folder.** A00 now writes a `gen_schema`
->   into the manifest and every `NNNN.mat` and **aborts** if you resume a folder
->   written by different code. Never extract a new bundle over an old `Results/`
->   run — move the old folder aside first.
-> - **`fixed`-profile crop fixed:** B19 no longer reverts the bridge to 39.9 m,
->   so every rung crops its true deck (s21/s22 at L99.6 now span all piers). The
->   `s13→s14` step is once again one-factor.
-> - **Run `s0_scour` FIRST.** It now selects the architecture from the new
->   leaderboard and writes `results/_champion_arch_<schema>.json`; every later
->   rung reads it and **errors if it is missing** (the old PAA_NHiTS default is
->   gone). Its Python ablation must finish before s11+ ablations start.
-> - Optuna studies carry a `SCHEMA_TAG`, so a re-run on a reused results/DB dir
->   cannot resume pre-audit studies. Contact gate (recalibrated twice; final
->   2026-07-22): TWO-TIER on both the generator and the loader — brief
->   micro-unloading is tolerated + logged (peak tension ≤ 24 kN ≈ 20% of the
->   static wheel load AND ≤ 0.2% of path samples); beyond either bound, or
->   non-finite, is FATAL (physics regression).
->
-> ### Round-3 audit (2026-07-17) — multi-PC workflow
-> - **Study/DB isolation:** every rung's Optuna DB, output and cache dir are now
->   STAGE-prefixed, so running several rungs in one workspace can't cross-
->   contaminate (previously `s11` could resume `s0`'s studies).
-> - **Champion across PCs:** after s0 finishes, copy `results/_champion_arch_
->   <schema>.json` to each s11+ PC (or point the `CHAMPION_MANIFEST` env var at
->   it). Bare architecture/pair overrides are rejected: only the complete
->   manifest proves the s0 split, budget, protocol hash, pair and `RUN_TAG`.
->   Every later rung hard-errors if that authenticated lineage is absent.
-> - **Provenance:** A00 writes a `gen_fingerprint` (Npass/seeds/severities/…) and
->   aborts resume if it differs; the Python loader requires `gen_schema` +
->   `contact_log` in every `.mat`. Caches are tagged `_gs6` (all older tags
->   orphaned; gs6 = true Keogh PAA + per-DOF-paired noise, audit r3 2026-07-22).
->   R9 deliberately orphans every earlier generator schema and carries exactly
->   one unconditional `generation_behavior_version` inside the fingerprint;
->   bump it whenever generation rules change without a knob-value change.
-> - **Profile fix (my R2 bug):** the fixed-baseline profile is now stretched
->   (not wrapped) onto the live track, so L99.6/fixed no longer has a seam that
->   caused wheel-rail contact loss. `smoke_geometry` checks contact at 70/80/90
->   km/h.
+R11 is a ten-rung, simulation-based experiment for continuous scour
+support-stiffness-loss estimation and most-damaged-pier localisation from one
+instrumented train passage. It evaluates bearing targets and randomized
+crack/profile/track/wheel nuisance mechanisms without representing every
+possible railway-bridge damage mode.
 
-**One bundle per rung.** A newly rebuilt `bundle_<stage>.zip` is self-contained —
-MATLAB generator + Python ablation, both **preset for that rung**, plus the
-preflight smokes. Extract into a fresh folder on a Lab PC and run; no editing.
-Build only from a clean, independently reviewed commit with
-`python build_stage_bundles.py`. Each bundle carries its own `README_BUNDLE.md`.
+The modeled input has **eight response channels/DOFs**: five vertical
+accelerations (car body, two bogies, two wheelsets) and three pitch angular
+velocities (car body and two bogies). R11 selects channel subsets, not physical
+transducers. A two-channel subset may map to one multi-axis IMU or to multiple
+devices; the experiment does not identify sensor count, packaging, mounting,
+or hardware placement.
 
-## The ladder
+## Registered physical design
 
-Within each declared ladder sequence, one data-generating factor is added per
-rung; attribution is conditional on the fixed ladder architecture/placement and
-the simulated design distribution. The separately labelled deployment selections
-are not causal ladder contrasts. Heads = **scour + bearing only**; crack / rail
-profile / track-layer / wheel damage are **nuisances** the network must be
-invariant to (it never estimates them).
+The L60 branch contains seven controlled edges:
 
-| Bundle | Adds | Geometry |
+`s0→s11`, `s0→s12`, `s11→s13`, `s12→s13`, `s13→s14`,
+`s14→s15`, and `s15→s16`.
+
+The L99.6 branch is a separate scale/stress block. Its results are blockwise;
+neither `s0→s21` nor the multi-mechanism L99.6 steps are one-factor causal
+contrasts.
+
+| Rung | Active change relative to its parent | Geometry |
 |---|---|---|
-| `bundle_s0_scour` | scour only — baseline + architecture selection | L60 / 3-span, piers 2,3 |
-| `bundle_s11_bear` | + bearing (head) | " |
-| `bundle_s12_crack` | + crack (nuisance, no bearing) | " |
-| `bundle_s13_bearcrack` | + bearing + crack = all **bridge** damages | " |
-| `bundle_s14_prof` | + rail profile (FRA-4, per-state) = **the roughness rung** | " |
-| `bundle_s15_track` | + track-layer damage (ballast / hanging sleepers / pads) | " |
-| `bundle_s16_all` | + wheel OOR (polygonization; flats disabled) = **all modeled EOVs**; **deployment selection** (4 archs × 28 pairs) | " |
-| `bundle_s21_scour4` | scour only | **L99.6 / 4-span**, piers 2,3,4 |
-| `bundle_s22_bearcrack4` | + bearing + crack | " |
-| `bundle_s23_all4` | all modeled EOVs; **deployment selection** (4 archs × 28 pairs) | " |
+| `s0_scour` | scour support-stiffness loss only; L60 execution/HPO/reference anchor | L60, 3 spans, piers 2 and 3 |
+| `s11_bear` | bearing fixity active and bearing heads added | L60 |
+| `s12_crack` | damaged-element crack nuisance active | L60 |
+| `s13_bearcrack` | bearing and crack active | L60 |
+| `s14_prof` | fixed baseline profile replaced by a per-state FRA-4 realization | L60 |
+| `s15_track` | ballast, hanging-sleeper and pad mechanisms active | L60 |
+| `s16_all` | wheel polygonization active; flats remain disabled; exploratory 4-architecture × 28-pair deployment reselection | L60 |
+| `s21_scour4` | scour-only L99.6 anchor; independent execution/HPO/reference block | L99.6, 4 spans, piers 2–4 |
+| `s22_bearcrack4` | bearing and crack active as one blockwise stress step | L99.6 |
+| `s23_all4` | profile, track-layer and wheel EOV block active; exploratory 4-architecture × 28-pair deployment reselection | L99.6 |
 
-**Audit r3 (2026-07-22) — applies to every bundle rebuilt after this date:**
-true Keogh PAA (window means, not linear resampling); noise realization keyed
-by global DOF (sensor-set comparisons are noise-paired); SCOUR-primary
-objective (bearing heads trained + reported, never selected on;
-range-normalized multi-task loss); 4th architecture arm `PAA_CNN` (no
-multi-rate pooling — the pooling-ablation control); the full 8-DOF array runs
-at every rung as a NON-selectable sensor-budget control; contact gate 24 kN
-two-tier; hanging↔fouling coupling corrected to the documented 3:1 odds and
-overlapping ballast patches resolved by worst-patch-governs (**s15/s16/s23
-generated before this date must be REGENERATED**; all other rungs' data
-stands); tagged re-runs get their own summary dir.
+The generator uses a fixed semantic state universe within each geometry:
 
-**Deployment selection (Feature B, 2026-07-19):** the two all-EOV rungs
-(s16_all, s23_all4) re-open the architecture question — 4 archs × 28 pairs × 3
-seeds = **336 studies each**. Their winner is EXPLORATORY: it goes to a separate
-`results/_deployment_selection_<stage>_..json` manifest (with a state-level
-bootstrap 95% CI on the outer-test MSE) and **never overwrites the s0 ladder
-champion**. The claim it supports is exactly *"best among these 4 architectures
-× 28 two-sensor pairs at this budget + geometry"* — not a sensor-count or global
-optimality claim. The full ladder requires approximately **1,344–1,359 Optuna
-studies** (134,400–135,900 useful trials), depending on whether the designed
-pair duplicates the carried pair, plus at most about **2,040 fixed-hyperparameter
-finalist-CV refits** after comparator deduplication. Benchmark wall time before
-dispatching the complete ladder.
+- L60: 50 `target_healthy` + 50 `scour_only` + 50 `bearing_only` +
+  50 `nuisance_only` + 250 `joint` = **450 states**.
+- L99.6: 50 `target_healthy` + 75 `scour_only` + 50 `bearing_only` +
+  50 `nuisance_only` + 250 `joint` = **475 states**.
+- Every state has 50 passages. Passages are correlated repeated observations;
+  the semantic state is the analysis and resampling cluster relative to those
+  passages. The fixed anchors and the 250 points from one registered joint LHS
+  realization are not an iid sample from a field population.
 
-Folder names are **short** (`<stage>_L<len>_st<N>`, e.g. `s14_prof_L60_st300`) —
-the old ~110-char names blew past Windows MAX_PATH. The full descriptor lives in
-`case_info.case_desc` / `case_info.txt`.
+Inactive rungs retain the same rows and latent draws; their physics toggles are
+zeroed rather than adding/removing states. Every state has a semantic
+`StateUID`. A collision-checked numeric `StateSeedID` and a versioned schedule
+of UID-named state/passage random substreams provide common random numbers
+(CRN) without depending on row number, `parfor` order, or which mechanisms are
+active. Within a geometry block, the complete UID inventory, latent bearing
+design, latent crack design, random-stream identities, and deterministic
+60/20/20 UID split must match exactly across rungs.
 
-State counts since **Feature A** (2026-07-19, explicit state families):
-250 joint LHS + 12 `target_healthy` + per-pier `scour_only` anchors
-(4 levels × 2 replicas) + per-abutment `bearing_only` anchors (bearing rungs)
-+ 6 `nuisance_only` (crack rungs). E.g. s0 = 278, s11 = 294, s12 = 284,
-s13–s16 = 300, s21 = 286, s22/s23 = 308. Every family is guaranteed present in
-train / inner-val / outer-test by the stratified split (`split_manifest.json`
-is written next to the data and verified on every load). Presence is not the
-same as adequate inferential sample size: `nuisance_only=6` maps to only one
-outer-test state, so its isolated false-positive result is explicitly exploratory.
-The R4 MCSE report gives the next-regeneration recommendation (design floor:
-50 total states for ten expected evaluation states at a 20% allocation).
+## What the physical labels mean
 
-## Per-bundle run order
+- **Scour** is the fractional loss \(d\) in the modeled vertical support
+  stiffness, \(k_v(d)=(1-d)k_{v0}\). Report it as **support-stiffness loss
+  (%)**, not scour-hole depth or soil-removal depth.
+- **Bearing damage** is a nominal rotational-fixity design variable used as a
+  regression target. It is not a direct field damage percentage.
+- **Crack** is a uniform damaged-element \(EI\)-reduction block. It is not the
+  tapered Sinha crack model and must not be cited as one.
+- **Hanging sleepers** use a linear support-removal approximation. The model
+  has no explicit sleeper–ballast gap/contact-closure nonlinearity or void-depth
+  response law.
+- **Wheel polygonization** is included; wheel flats are excluded because the
+  bilateral linear contact solver cannot represent the separation they caused.
 
-1. **Once per reviewed source — verify MATLAB/Python metadata encoding.** Run
-   `smoke_familytable` in MATLAB, then
-   `python check_familytable_roundtrip.py`. The normal command is fail-closed:
-   a missing genuine-MATLAB artifact is a failure, not a skipped pass.
-2. **MATLAB — generate.** Open `scour_MATLAB/A00_Run.m` and run it. `STAGE` is
-   already set and `use_signal_noise = false` (noise is a load-time model).
-   Output → `scour_MATLAB/Results/<case>/`; move it under `data/`.
-3. **Once per campaign — verify the transform.** After the FIRST R9 state of the
-   first rung exists:
-   `smoke_raw_parity('Results/<case>')` in MATLAB, then
-   `python check_raw_parity.py "scour_MATLAB/Results/<case>"`.
-   **Must exit zero and print `PARITY PASS`**
-   (max|MATLAB−Python| < 1e-12) before the long runs.
-4. **Python — ablate.** `python comprehensive_ablation_multidamage.py`
-   (STAGE + SENSOR_NOISE preset), with 100 useful Optuna trials × 3 seeds per
-   configuration. `s0` runs the four-architecture × 28-pair factorial (plus a
-   diagnostic single-DOF sweep); `s16/s23` repeat the full joint factorial for
-   exploratory deployment selection; `s21/s22` search all pairs on the carried
-   architecture; frozen rungs run the carried pair, designed `[1,3]` comparator
-   and full-array control. Selection uses inner validation only. Finalist CV uses
-   development states only. The sealed outer test is opened after both freeze.
-   Summary → `results/<stage>_summary_ph-<hash>/`.
+The modeled mechanisms are therefore scientifically useful abstractions with
+explicit semantics, not interchangeable measurements of physical damage depth.
 
-Generation and ablation run **concurrently** — with 3 PCs, generate the next rung
-while the previous one ablates.
+## Data, preprocessing, and observation model
 
-## What changed (and why)
+MATLAB saves raw, un-interpolated, noise-free time histories and the spatial
+crop metadata. Python reproduces the MATLAB space transform, applies true PAA
+window means to 512 segments, and fits the resulting per-channel scaler on
+training samples only. Persistent conditions are drawn per state; speed, temperature,
+vehicle properties, and the registered passage-level mechanisms are drawn per
+passage.
 
-- **Data format (Option B).** D01 saves the **raw, un-interpolated, noise-free
-  time-domain** signal + the space/crop parameters; Python rebuilds the space
-  window at load time (`core/dataset._raw_to_space_crop`, an exact `interp1`
-  mirror). The measurement model now lives entirely at load time and can change
-  **without regenerating**. Storage is ~neutral (`DimSpace ≈ 2.2·DimAcel`).
-- **Noise.** Generation is noise-free; the ablation injects zero-mean Gaussian
-  multiplicative noise with pointwise σ = 5% of `|signal|` on **every** channel
-  at load time (`all_mult`). Adding noise
-  before vs after the interpolation is *not* equivalent (time-domain noise becomes
-  coloured + speed-dependent: ≈0.67× variance but ≈1.46× the energy surviving PAA).
-- **EOVs are anchored** (`docs/track_eov_sampling_spec.md`): persistent conditions
-  drawn **per state** (EN 13848-2); FRA-4; crack p=0.25 **hogging-weighted 4:1**
-  (Eurocode 4); hanging groups **Poisson λ=3.0/100 m**, ballast **λ=1.2/100 m**
-  (both window-scaled); pads **p=0.02** (snapshot prevalence, not the annual rate);
-  fouling↔voiding **coupled ×3**; ballast **×3** near abutments.
-- **Provenance.** Re-ablations start **from scratch** via `RUN_TAG`; the noise mode
-  enters the study name, so a noise A/B on identical data trains separate studies
-  instead of silently resuming. Protocol descriptors, dataset/source hashes,
-  study records, weights, scalers, environment lock and bundle source commit are
-  cross-checked before reuse or publication.
+The main `all_mult` arm adds pointwise zero-mean Gaussian multiplicative noise
+with \(\sigma=0.05|x|\) to every selected channel at load time, with the draw
+keyed by global DOF so channel subsets remain noise-paired. Injection occurs
+after the raw-to-space transform and before PAA/scaling. This is a
+**symmetric relative-noise stress test**. It does not represent a particular
+accelerometer datasheet, mounting class, additive noise floor, dynamic range,
+or sensor hardware technology. Consequently, the defensible conclusion is
+limited to modeled response-channel/DOF ranking under this registered
+stress.
+
+## Split, selection, and test firewall
+
+The 60/20/20 train/inner-validation/outer-test split is deterministic,
+state-grouped, semantic-UID stable, and stratified by family/target/anchor
+level; the joint family also uses its registered latent/severity strata. A
+state's passages never cross partitions. The same exact UID partition is
+required at every rung of a geometry block.
+
+Hyperparameter and candidate selection use only the development data. The
+outer test remains sealed until the inner-validation winner and all registered
+comparators are frozen. Finalist-only 5-fold × 2-repeat state-grouped CV uses
+development states, fold-local scaling, frozen hyperparameters, and fixed
+checkpoint-epoch rules at `s0`, `s16`, `s21`, and `s23` only. Its registered
+set is the inner-validation winner, the top five architecture×channel
+combinations from the complete inner-validation factorial leaderboard, each
+architecture's own optimum, and same-channel-pair/designed/carried/full-array
+controls after deduplication. It is a split-stability diagnostic and cannot
+re-rank the winner; the immutable outer test is the report set.
+
+Registered within-rung finalist MSE intervals and paired MSE contrasts use
+2,000 state-first bootstrap replicates with seed 42. Most-damaged-pier
+localisation is a passage-level point estimate restricted to passages whose
+maximum true scour target is strictly greater than 5 percentage points; no
+state-level localisation interval is registered.
+
+On bearing rungs, training uses the registered range-normalized multi-head
+loss, while model selection uses scour-head MSE. Bearing error and
+scour↔bearing leakage are secondary reported outcomes, not part of the primary
+selection objective.
+
+## Two independent execution and HPO blocks
+
+R11 has two independent physical execution blocks:
+
+- **L60**, anchored at `s0_scour`.
+- **L99**, anchored at `s21_scour4`.
+
+Each block has its own authenticated execution receipt, full-array
+hyperparameter manifest, and reference champion. The published champion
+manifest carries the canonical `frozen_selection_sha256`. Never copy the L60
+champion or execution receipt into the L99 block. Cross-block comparisons are
+descriptive only.
+
+All seven L60 Python ablations must run on one exact physical host, GPU, and
+registered runtime; all three L99 ablations must likewise run on one exact
+host/GPU/runtime, which may differ from L60. MATLAB generation may be
+distributed separately, but a Python execution block must not be divided
+across machines.
+
+Before running a block anchor, set all three coordination paths to durable,
+absolute paths outside disposable bundle workspaces:
+
+```powershell
+$env:TTBI_EXECUTION_RECEIPT_DIR = 'D:\ttbi-control\l60\receipts'
+$env:TTBI_HYPERPARAMETER_MANIFEST = 'D:\ttbi-control\l60\hyperparameters.json'
+$env:CHAMPION_MANIFEST = 'D:\ttbi-control\l60\champion.json'
+```
+
+The anchor prints the canonical SHA-256 of the published
+`CHAMPION_MANIFEST`. Before any follower starts, copy that exact value into:
+
+```powershell
+$env:TTBI_BLOCK_REFERENCE_SHA256 = '<exact SHA-256 printed by the anchor>'
+```
+
+Followers fail closed if the variable is missing or differs from the canonical
+hash of the regular manifest file. This operator-supplied pin prevents an
+otherwise valid-looking champion file from being silently substituted between
+anchor and follower runs.
+
+Use a different L99 directory/files when starting `s21_scour4`. Relative,
+missing, symlinked, malformed, cross-block, cross-runtime, or hash-inconsistent
+coordination artifacts are rejected.
+
+At the beginning of each block, the executing GPU is qualified against the
+largest registered structural point of all four architectures using an
+8-channel × 512 input, five output heads, forward pass, registered loss,
+backward pass, and Adam update. Its **model-envelope headroom**, calculated as
+total device memory minus this process's peak reserved memory, must be at least
+the larger of 20% of total VRAM and 1 GiB. This is not an observation of
+system-wide free VRAM and does not detect competing processes, so the GPU must
+be operationally idle/exclusive during qualification and execution. The
+durable capacity receipt is bound to the execution runtime, source root,
+policy, and measured envelope. OOM and all Optuna `FAIL` states are fatal.
+
+## Compute-feasible hyperparameter policy
+
+Hyperparameters are calibrated **only** on the full eight-DOF input at each
+block anchor:
+
+- 4 architectures × 3 registered seeds × 100 Optuna trials at `s0_scour`;
+- the same 4 × 3 × 100 design independently at `s21_scour4`;
+- the registered pruner is enabled only for those 24 anchor studies.
+
+The canonical manifest stores the exact best parameter map separately for each
+architecture and seed. At each anchor, the same 100-trial full-array
+calibration phase is also the non-selectable eight-DOF control; it is not
+duplicated as a singleton. Every two-channel candidate, non-anchor full-array
+control, and downstream-rung configuration runs one real Optuna trial over
+singleton distributions copied from its block's authenticated manifest, with
+no pruner. Thus the normal study/artifact path is exercised while
+candidate-specific and rung-specific HPO lotteries are removed. Architecture
+comparisons remain conditional on their separate, equal-budget finite
+100-trial anchor studies and registered seed set; finite-search optimization
+error is not eliminated.
+
+Each anchor also runs a diagnostic 8 single-channel × 4-architecture × 3-seed
+matrix using frozen singleton parameters. This diagnostic does not select the
+block reference, which is chosen from the complete 4-architecture ×
+28-two-channel matrix.
+
+At `s16_all` and `s23_all4`, an exploratory deployment analysis reopens the
+complete 4-architecture × 28 two-channel subset matrix × 3 seeds. Those are
+still frozen singleton trials calibrated at the corresponding block anchor.
+The exploratory winner is written separately, never replaces the L60/L99
+reference, and never enters the seven-edge L60 primary analysis.
+
+The complete campaign contains **1,620–1,638 Optuna studies** depending on
+whether the designed comparator duplicates the carried pair at the six frozen
+rungs, but only **3,996–4,014 actual Optuna
+trials**: 2,400 anchor-search trials plus one trial in every other study. These
+counts supersede the historical ~1,350-study × 100-trial projection.
+
+Channel-subset/architecture winners support only conditional statements:
+“best among the registered architectures and two-channel subsets under the
+registered full-array-calibrated policy, realized finite anchor searches,
+split, seed set, and simulated distribution.” They do not establish a global
+optimum or the superiority of a sensor hardware technology.
+
+## Registered L60 cross-rung inference
+
+After all seven L60 summaries are complete, run
+`analyze_cross_rung_contrasts.py` with the exact summary directory for every
+L60 rung and explicit, canonical external paths to the L60 champion manifest,
+L60 hyperparameter manifest, and L60 execution receipt. The analyzer
+recomputes all hashes and refuses embedded or copied metadata as a substitute
+for those regular files.
+
+The primary population is only the exact paired outer-test subset of the
+250-state `joint` master population. For each registered edge, the statistic is
+the change in state-level scour MSE after taking the mean over paired outer
+states within each training seed and the median over the finite registered seed
+set. Models are trained independently at every rung using paired seeds; only
+the hyperparameters, architecture, and response-channel pair are frozen.
+Therefore the
+effect is a change in **achievable rung-specific performance under retraining**,
+not zero-shot out-of-distribution robustness.
+
+Uncertainty uses 100,000 paired state-first bootstrap replicates. The report
+contains pointwise 95% intervals and Bonferroni familywise intervals over
+exactly the seven registered edges; only the familywise interval may support an
+across-ladder sign claim. The bearing-by-crack difference-in-differences is
+secondary/exploratory. These percentile intervals quantify empirical
+state-resampling uncertainty conditional on the exact registered finite
+anchor/LHS design. They are not field-population or design-superpopulation
+coverage intervals; that stronger interpretation would require an LHS-aware
+variance method or independent replicated state designs.
+
+Interpret the first mechanisms precisely:
+
+- `s0→s11` and `s12→s13` add bearing physics **and** bearing heads/multi-task
+  learning, so neither contrast isolates physics alone.
+- `s13→s14` changes the shared fixed baseline profile to a per-state FRA-4
+  phase distribution.
+- L99.6 results remain blockwise and are excluded from the seven-edge
+  confirmatory L60 family.
 
 ## Claim boundary
 
-The implemented confirmatory task is **continuous scour support-stiffness-loss
-estimation and most-damaged-pier localisation** under the simulated design
-distribution. Do not claim a binary detector, sensitivity/specificity, calibrated
-probability of damage or minimum detectable severity: no development-locked
-detection threshold has been implemented. The 5% localisation threshold is a
-metric eligibility rule, not a binary alarm threshold.
+The implemented task supports continuous modeled support-stiffness-loss
+estimation, most-damaged-pier localisation, bearing estimation/leakage
+diagnostics, and registered robustness contrasts under the simulated design
+distribution. It does **not** yet support sensitivity, specificity, POD,
+calibrated damage probability, or minimum detectable severity: there is no
+development-locked binary decision threshold. It also does not establish
+field validity, causal effects outside the registered L60 edges, unmodeled
+damage coverage, physical sensor count/placement, or hardware-specific sensor
+performance.
 
-## Requirements
+No R11 result exists until the complete regenerated campaign passes its
+provenance checks. Historical values under `results/` must not be quoted as R11
+evidence.
 
-Use **Python 3.13.3** with the direct-dependency versions in
-`requirements-campaign-py313-cu128.txt`; the driver verifies
-`environment/campaign-py313-cu128.json`, CUDA/cuDNN and deterministic cuBLAS
-configuration before creating a study. Use **MATLAB R2025b** (hard-gated in
-`A00_Run.m`) with the Statistics and Machine Learning Toolbox (`poissrnd`,
-`wblrnd`, `lhsdesign`). The lock is an exact direct-dependency/runtime lock, not
-a fully hashed transitive package archive. Valid studies resume only until the
-exact pre-registered useful-trial budget is met; manually extended studies are
-rejected.
+## Pre-dispatch MATLAB host qualification
+
+Every PC intended to generate MATLAB campaign data must be qualified against
+clean commit A before dispatch authorization:
+
+1. Assign the PC a stable, unique label through
+   `TTBI_QUALIFICATION_HOST_ID`. Do not reuse one label for different PCs.
+2. Freshly regenerate the transient qualification script from the converged
+   source with `python make_micro_smoke.py --qualification --stage <stage>`.
+   Qualify at least `s0_scour`, `s16_all`, and `s23_all4` on every required
+   MATLAB environment/host. Execute the exact source-bound script bytes on each
+   intended host, never copy or forge a host receipt, and do not treat the
+   generated script as durable source.
+3. Retain each run's authenticated `qualification_host_receipt.json` (schema
+   `ttbi-matlab-qualification-host-v1`). It records the declared host ID,
+   hostname, CPU identifier, logical-processor count, MATLAB thread diagnostic,
+   and computer architecture, and binds those diagnostics to the actual
+   MATLAB-environment digest, canonical qualification-source digest, and exact
+   executed qualification-script digest.
+4. Compare corresponding stage directories for the required host/environment
+   pairs with `compare_generation_releases.py` and retain an accepted
+   `matlab-environment-qualification-receipt-v4` receipt. A numerically
+   equivalent verdict is pending until it is explicitly reviewed and accepted
+   with a new receipt.
+
+CPU equality is not a qualification condition. Two runs with the same MATLAB
+environment digest may be compared only when their authenticated receipts
+declare distinct host IDs. Host identity is deliberately absent from production
+`gen_schema` and `gen_fingerprint`: it authenticates independent qualification
+execution without changing the scientific dataset identity.
+
+At the dated pre-authorization snapshot above, qualification was **PENDING**:
+only the pre-convergence
+35-state/105-passage `s0_scour` micro on this laptop has completed
+(27 min 32 s). Every intended generation host must still run all three required
+stages from commit A, and corresponding stage outputs from authenticated,
+distinct host IDs must receive accepted v4 comparison receipts. No second host
+has produced matching evidence, so cross-host qualification is not complete
+and the dated snapshot's dispatch gate was blocked.
+
+## Dispatch sequence after authorization
+
+The following production steps occur only after the qualification above and
+the genuine R11 eight-channel benchmark gate have been completed against
+commit A, independently audited, and recorded by report-only commit B. The
+benchmark gate requires zero Optuna `FAIL`/OOM and no Optuna-trial
+retry/replacement, plus one clean finalist refit with `attempt_count=1`,
+`prior_unaccepted_attempt_count=0`, `timing_complete=true`, and
+`memory_complete=true`.
+
+1. Build one complete ten-ZIP set from authorized commit B with
+   `python build_stage_bundles.py`; verify `bundle_sha256.txt`.
+2. Extract every bundle into a fresh workspace. Do not resume or overlay any
+   pre-R11 folder.
+3. Run the bundle's MATLAB and Python fast preflights. All must pass under the
+   exact locked MATLAB/Python/CUDA environment.
+4. Generate raw data with MATLAB R2025b Update 5. `A00_Run.m` does not pause,
+   and `parfor` may complete states out of order. As soon as the complete
+   `0001.mat` appears, run the MATLAB raw-parity smoke; after it writes
+   `matlab_ref_parity.mat`, run the dependent Python checker. These two checks
+   run sequentially while A00 continues. Stop A00 immediately if either fails,
+   and do not admit or use later output until parity passes.
+5. Establish the durable L60 coordination paths; complete `s0_scour` before
+   its L60 followers. Establish an independent set and complete `s21_scour4`
+   before its L99 followers.
+6. Run `python comprehensive_ablation_multidamage.py` in each preset bundle.
+7. After all L60 rungs finish, run the registered cross-rung analyzer.
+
+The exact preflight list and stage-specific instructions are written into each
+future `README_BUNDLE.md`. Historical design decisions and audit chronology are
+preserved in `docs/framework_rationale.md`; the current dispatch verdict is
+only `docs/audit_r5_results.md`.
