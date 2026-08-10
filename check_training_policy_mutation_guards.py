@@ -14,9 +14,9 @@ repository so live provenance follows the production path.  This is an
 integrity mutation test, not an operating-system security sandbox: registered
 checkers are synchronous and must not leave adversarial descendants running
 after their subprocess exits.  No campaign data, results, or stage bundles are
-copied into or left in that isolated source tree.  The audit-only bundle
-builder is authenticated and copied separately because it is deliberately not
-part of dispatched bundle payloads.
+copied into or left in that isolated source tree.  The bundle builder is an
+audit/publication executable rather than a target-host runtime command, but it
+is deliberately shipped and authenticated through the reviewed manifest.
 
 Run serially:
 
@@ -64,7 +64,7 @@ MUTATIONS = (
     Mutation(
         name="objective_value is hardwired to aggregate MSE",
         target="core/task.py",
-        checker="check_campaign_controls.py",
+        checker="check_weighted_head_mse.py",
         original='    metric = policy[branch]',
         mutant='    metric = "mse"  # MUTANT: ignore objective policy',
         evidence="[FAIL] objective is SCOUR-primary when bearing heads exist",
@@ -108,7 +108,7 @@ MUTATIONS = (
     Mutation(
         name="missing trial seed silently defaults to 42",
         target="training/trainer.py",
-        checker="check_campaign_controls.py",
+        checker="check_weighted_head_mse.py",
         original=(
             "    if key not in config:\n"
             "        raise KeyError(\n"
@@ -216,7 +216,7 @@ MUTATIONS = (
     Mutation(
         name="trainer objective call bypasses TRAIN_PROTOCOL objective policy",
         target="training/trainer.py",
-        checker="check_campaign_controls.py",
+        checker="check_weighted_head_mse.py",
         original='            TRAIN_PROTOCOL["objective"],',
         mutant=(
             '            {"regression_with_bearing_heads": "mse", '
@@ -238,23 +238,7 @@ MUTATIONS = (
             "  # MUTANT: omit TRAIN_PROTOCOL determinism"
         ),
         evidence=(
-            "[FAIL] all production seeding calls consume TRAIN_PROTOCOL "
-            "determinism policy"
-        ),
-    ),
-    Mutation(
-        name="campaign driver seeding omits determinism policy",
-        target="comprehensive_ablation_multidamage.py",
-        checker="check_campaign_controls.py",
-        original=(
-            '    set_global_seed(SEEDS[0], TRAIN_PROTOCOL["determinism"])'
-        ),
-        mutant=(
-            "    set_global_seed(SEEDS[0])"
-            "  # MUTANT: omit TRAIN_PROTOCOL determinism"
-        ),
-        evidence=(
-            "[FAIL] all production seeding calls consume TRAIN_PROTOCOL "
+            "[FAIL] production pipeline seeding consumes TRAIN_PROTOCOL "
             "determinism policy"
         ),
     ),
@@ -274,7 +258,7 @@ MUTATIONS = (
             '            "campaign run plan lacks its exact run_tag"\n'
             "        )"
         ),
-        evidence="mutation survived: campaign run-plan loses run_tag",
+        evidence="[FAIL] campaign run plan without exact run tag",
     ),
     Mutation(
         name="run plan accepts an invalid execution receipt digest",
@@ -294,7 +278,7 @@ MUTATIONS = (
             'SHA-256"\n'
             "        )"
         ),
-        evidence="mutation survived: campaign run-plan carries invalid receipt",
+        evidence="[FAIL] campaign run plan with invalid execution receipt",
     ),
     Mutation(
         name="follower run plan accepts a missing block-reference digest",
@@ -314,7 +298,7 @@ MUTATIONS = (
             'manifest SHA-256"\n'
             "        )"
         ),
-        evidence="mutation survived: follower run-plan loses reference",
+        evidence="[FAIL] follower run plan without block-reference digest",
     ),
 )
 
@@ -323,8 +307,7 @@ BASELINE_EVIDENCE = {
     "check_campaign_controls.py": "CAMPAIGN CONTROLS: ALL PASS",
     "check_weighted_head_mse.py": "WEIGHTED HEAD MSE: ALL PASS",
     "check_environment_lock.py": "ENVIRONMENT LOCK: ALL PASS",
-    "check_hyperparameter_policy.py":
-        "PASS: hyperparameter policy derivation/authentication/mutations",
+    "check_hyperparameter_policy.py": "HYPERPARAMETER POLICY: ALL PASS",
 }
 
 ROOT_INPUTS = (
@@ -333,8 +316,8 @@ ROOT_INPUTS = (
     "check_environment_lock.py",
     "check_hyperparameter_policy.py",
     "comprehensive_ablation_multidamage.py",
+    "build_stage_bundles.py",
 )
-AUDIT_ONLY_INPUTS = ("build_stage_bundles.py",)
 
 
 def _git_environment(*, isolated_config: bool) -> dict[str, str]:
@@ -618,15 +601,8 @@ def _capture_real_boundary() -> tuple[str, tuple[BoundaryFile, ...]]:
             "mutation-harness roots are outside the reviewed source boundary: "
             f"{absent_roots}"
         )
-    audit_overlap = sorted(set(AUDIT_ONLY_INPUTS) & set(manifest_names))
-    if audit_overlap:
-        raise RuntimeError(
-            "audit-only mutation inputs unexpectedly entered bundle payload: "
-            f"{audit_overlap}"
-        )
-
     captured: list[BoundaryFile] = []
-    for relative in (*manifest_names, *AUDIT_ONLY_INPUTS):
+    for relative in manifest_names:
         entry = tree.get(relative)
         if entry is None:
             raise RuntimeError(
@@ -868,7 +844,8 @@ def _run_checker(
     env = _git_environment(isolated_config=True)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-    env["PYTHONPATH"] = ""
+    for variable in ("PYTHONPATH", "PYTHONHOME"):
+        env.pop(variable, None)
     completed = subprocess.run(
         [sys.executable, checker],
         cwd=isolated,

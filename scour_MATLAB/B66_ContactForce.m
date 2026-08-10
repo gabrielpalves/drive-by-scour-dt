@@ -43,8 +43,21 @@ if Calc.Options.VBI == 1
     % Force on Beam (Contact Force)
     for veh_num = 1:Train.Veh(1).Tnum
 
-        ind = (Calc.Veh(veh_num).x_path>=0);
-        
+        % AUDIT 2026-08-09: `ind` is now the SOLVER'S active-element mask
+        % (elexj > 0), not `x_path >= 0`. The old mask kept profile terms alive
+        % post-exit, where B65 had already dropped them. Shared with D01 via
+        % ttbi.wheel_contact_kinematics so the saved wheelset channel and this
+        % reconstruction cannot drift apart.
+        [wheelset_acc, ind] = ttbi.wheel_contact_kinematics( ...
+            Sol.Veh(veh_num), Calc.Veh(veh_num), Train.vel);
+
+        % wheelset_acc is the TOTAL acceleration following the moving contact
+        % coordinate, z_w,tt = u_tt + 2*v*u_xt + v^2*u_xx + h_tt, computed once
+        % by ttbi.wheel_contact_kinematics above.
+        % AUDIT 2026-08-06: the profile-inertia term hdd_path was MISSING here
+        % while B65_DynamicCalcCoupledFaster.m:210 includes -m*hdd_path in the
+        % solved force vector, so the reported contact force disagreed with the
+        % force the solver actually applied.
         Sol.Veh(veh_num).F_onBeam = ...
             ((Train.Veh(veh_num).Wheels.N2w * Sol.Veh(veh_num).U) ...
                 - Sol.Veh(veh_num).def_under - Calc.Veh(veh_num).h_path.*ind) ...
@@ -53,9 +66,7 @@ if Calc.Options.VBI == 1
                 - Sol.Veh(veh_num).vel_under - Sol.Veh(veh_num).def_under_p*Train.vel...
                 - Calc.Veh(veh_num).hd_path.*ind) ...
                 .* (Train.Veh(veh_num).Susp.Prim.c' * ones_1_x_num_t) ... 
-            - (Sol.Veh(veh_num).acc_under + Sol.Veh(veh_num).def_under_pp*Train.vel^2 ...
-                + 2*Sol.Veh(veh_num).vel_under_p*Train.vel) ...
-                .* (Train.Veh(veh_num).Wheels.m' * ones_1_x_num_t) ...
+            - wheelset_acc .* (Train.Veh(veh_num).Wheels.m' * ones_1_x_num_t) ...
             + (Train.Veh(veh_num).Wheels.m' * ones_1_x_num_t) .* Calc.Cte.grav;
 
         Sol.Veh(veh_num).F_onBeam_max = max(Sol.Veh(veh_num).F_onBeam(:));
@@ -75,8 +86,9 @@ if Calc.Options.VBI == 1
 
         % Checking contact over the WHOLE on-track path (audit 2026-07-17).
         % Sign convention: grav = -9.81 so compression is NEGATIVE and
-        % F_onBeam > 0 is TENSION - a separation the bilateral solver cannot
-        % represent. The old bridge-only window missed approach/exit uplift
+        % F_onBeam > 0 is TENSION - an out-of-domain tensile demand in this
+        % bilateral solver, not a simulated separation event. The old
+        % bridge-only window missed approach/exit positive reactions
         % (flat and void impacts mostly occur over plain track). These fields
         % are persisted per passage by A00 (data2save.contact_log) and
         % asserted on by the smoke tests.
@@ -85,7 +97,7 @@ if Calc.Options.VBI == 1
         % the old lower-bound-only mask (x_path >= 0) counted post-exit
         % samples (F identically 0 there) in the DENOMINATOR, diluting
         % tension_frac and making the sustained-tension gate read laxer
-        % than pre-registered. Applies forward; saved contact_logs keep
+        % than prospectively source-locked. Applies forward; saved contact_logs keep
         % their generation-time values (all passed with >3x margin).
         ind0 = (Calc.Veh(veh_num).x_path >= 0) & ...
                (Calc.Veh(veh_num).x_path <= Calc.Profile.L);
@@ -147,7 +159,7 @@ elseif Calc.Options.VBI == 0
         % the old lower-bound-only mask (x_path >= 0) counted post-exit
         % samples (F identically 0 there) in the DENOMINATOR, diluting
         % tension_frac and making the sustained-tension gate read laxer
-        % than pre-registered. Applies forward; saved contact_logs keep
+        % than prospectively source-locked. Applies forward; saved contact_logs keep
         % their generation-time values (all passed with >3x margin).
         ind0 = (Calc.Veh(veh_num).x_path >= 0) & ...
                (Calc.Veh(veh_num).x_path <= Calc.Profile.L);
@@ -163,19 +175,22 @@ end % if Calc.Options.VBI == 1
 % ---- Checking contact ----
 % Aggregates (audit 2026-07-17): bridge-window flag kept for backward
 % compatibility; the *_track fields cover the whole on-track path. A00
-% persists all of them per passage (data2save.contact_log) so invalid
-% passages can be filtered at load time and the smoke tests can assert.
+% persists all of them per passage (data2save.contact_log); A00 and the
+% Python loader both fail closed beyond the registered envelope, while the
+% retained positive-reaction incidence remains auditable.
 Sol.contactLost_track = double(max([Sol.Veh(:).contactLost_track]) > 0);
 Sol.F_tension_max     = max([Sol.Veh(:).F_onTrack_max]);   % >0 = worst tension [N]
 Sol.tension_frac_max  = max([Sol.Veh(:).tension_frac]);    % worst per-vehicle fraction
 if max([Sol.Veh(:).contactLost]) > 0
     Sol.contactLost = 1;
-    disp('There is no permanent contact between wheels and rail');
+    disp(['Bilateral-contact diagnostic: positive tensile reaction over ' ...
+        'the bridge window (not a simulated separation event)']);
 else
     Sol.contactLost = 0;
 end % if max([Sol.Veh(:).contactLost]) > 0
 if Sol.contactLost_track > 0 && ~Sol.contactLost
-    disp('Contact lost over the approach/exit track (outside the bridge window)');
+    disp(['Bilateral-contact diagnostic: positive tensile reaction over ' ...
+        'approach/exit (not a simulated separation event)']);
 end
 
 % % -- Graphical check of components --

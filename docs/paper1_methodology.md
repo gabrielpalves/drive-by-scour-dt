@@ -1,13 +1,22 @@
-# Paper 1 — R11 methodology draft
+# Historical Paper 1 methodology draft — retired campaign design
 
-> **Pre-results, implementation-bound draft (2026-07-27).**
+> **ARCHIVAL DOCUMENT — NOT AN OPERATIONAL OR PUBLICATION-SOURCE CONTRACT.**
 >
-> This document describes the registered R11 experiment. Dispatch remains
-> blocked and no R11 data or ablation result exists. Numerical findings from
-> pre-R11 datasets are invalid for this study and must not be imported into the
-> manuscript. At submission time, every protocol value must be pulled from the
-> authorized commit, its `protocol_descriptor.json` files, authenticated
-> manifests, and final result tables.
+> The body below preserves the superseded multi-rung methodology draft and its
+> terminology for audit history. Its stages, state counts, HPO policy, channel
+> interpretation, execution blocks, qualification instructions, and statistical
+> plan must not be used to launch or describe the current Paper 1 campaign.
+>
+> The controlling current specification is
+> [`docs/paper1_campaign_plan.md`](paper1_campaign_plan.md), with the concise
+> operator guide in [`README_CAMPAIGN.md`](../README_CAMPAIGN.md) and the sole
+> dispatch verdict in [`docs/audit_r5_results.md`](audit_r5_results.md).
+> Current manuscript claims must be taken from the authenticated campaign
+> manifests, protocol descriptors, final result artifacts, and `paper1/sections/`,
+> not from this historical body.
+>
+> Historical uses of "registered" mean prospectively specified in versioned,
+> hash-identified repository source; they do not claim external preregistration.
 
 ## 1. Study question and estimands
 
@@ -32,10 +41,13 @@ The study has three distinct estimand classes:
    (`s11`–`s15` and `s22`) carry their block reference rather than selecting a
    new winner. The immutable outer test estimates eligible frozen
    winner/comparator performance under that rung's simulated distribution.
-2. **L60 paired mechanism contrasts.** Seven registered edges estimate the
-   change in achievable scour-estimation error after adding a mechanism, with
+2. **L60 paired simulator-intervention contrasts.** Seven registered edges
+   estimate the change in achievable scour-estimation error after adding a
+   simulator intervention — a mechanism block together with, where
+   applicable, its associated output heads and training task — with
    architecture, response-channel pair, hyperparameters, semantic state population,
-   split, and training seeds paired as specified below.
+   split, and training seeds paired as specified below. An edge is an
+   intervention/task contrast, not an isolated single-mechanism effect.
 3. **L99.6 scale/stress results.** These form a separate physical execution
    block and are interpreted blockwise. They are not one-factor causal
    contrasts with L60.
@@ -47,13 +59,27 @@ zero-shot out-of-distribution tests.
 ## 2. Train–track–bridge interaction model
 
 Vehicle responses are generated with the repository's two-dimensional,
-vertically coupled train–track–bridge interaction (TTBI) model, derived from
-the Cantero TTB-2D/VEqMon2D framework [cite the exact release/publication]. The
-model couples:
+vertically coupled train–track–bridge interaction (TTBI) model, a modified
+derivative of Cantero's TTB-2D tool — D. Cantero, *TTB-2D: Train–Track–Bridge
+interaction simulation tool for Matlab*, SoftwareX 20 (2022) 101253,
+doi:10.1016/j.softx.2022.101253 — whose vehicle equations of motion are
+generated with VEqMon2D — D. Cantero, SoftwareX 19 (2022) 101103,
+doi:10.1016/j.softx.2022.101103. The exact upstream base is the publication's
+v1 code line at commit `28d35528ac6624200a881bcd6130382b81579a01`
+(archived repository `ElsevierSoftwareX/SOFTX-D-22-00221`, GPL-3.0); the
+repository-local damage mechanisms, campaign sampling rules, serialization,
+and qualification gates are **not** part of that upstream release. See
+`THIRD_PARTY_NOTICES.md`. The model couples:
 
 - an Euler–Bernoulli multi-span bridge on vertical support springs;
 - a layered ballasted track with rail, pads, sleepers, and ballast elements
-  [cite the exact Zhai/TTBI source];
+  whose scalar nominal property values are those of
+  `scour_MATLAB/TrackProp_Zhai_et_al_WithBallastOnBridge.m`, taken from
+  W. M. Zhai, K. Y. Wang & J. H. Lin, *Modelling and experiment of railway
+  ballast vibrations*, Journal of Sound and Vibration 270(4–5) (2004)
+  673–683, doi:10.1016/S0022-460X(03)00186-X; the inherited topology omits
+  Zhai's adjacent-ballast \(K_w,C_w\) shear branch and condenses on-bridge
+  ballast mass onto deck DOFs, so it is not the complete Zhai model;
 - a five-vehicle planar train with primary and secondary suspensions; and
 - bilateral linear wheel–rail contact solved by direct time integration.
 
@@ -62,27 +88,77 @@ Two geometries are used:
 - **L60:** three spans, with scour targets at supports 2 and 3;
 - **L99.6:** four spans, with targets at supports 2, 3, and 4.
 
-The leading vehicle supplies eight candidate response DOFs:
+The adopted deck \(E,I,\rho A\), and 3% damping values originate from the
+Fernandes two-by-20 m example. Their reuse for L60 and especially four-by-24.9
+m L99.6 is an explicit idealized geometry/scale stress transfer, not a claim
+that either longer bridge configuration has been calibrated to a field asset.
 
-| Index | Response DOF | Suspension level |
+The leading vehicle supplies eight candidate response channels. The vehicle
+itself is TTB-2D's six-DOF formulation (vertical displacement and pitch of
+the car body and of each bogie). Two additional saved rows are not vehicle
+responses: `Sol.Veh.acc_under = N(x_w)^T A_rail` samples the Eulerian
+(partial-time) rail FE vertical-acceleration field at the instantaneous wheel
+coordinates. They are neither wheelset/axle-box acceleration nor total
+acceleration following the moving contact point. In `B66_ContactForce`, the
+convective terms (v^2u_{,xx}+2v\dot{u}_{,x}) remain separate.
+
+| Index | Response channel | Physical status |
 |---:|---|---|
 | 0 | car-body vertical acceleration | secondary-suspended |
 | 1 | front-bogie vertical acceleration | primary-suspended |
 | 2 | rear-bogie vertical acceleration | primary-suspended |
-| 3 | wheelset 1 vertical acceleration | unsprung |
-| 4 | wheelset 2 vertical acceleration | unsprung |
+| 3 | Eulerian rail vertical acceleration at moving wheel-1 coordinate | virtual rail-field sample; legacy key `Wheel1_Vert` / `AcelRodaPrimVag[0]` |
+| 4 | Eulerian rail vertical acceleration at moving wheel-2 coordinate | virtual rail-field sample; legacy key `Wheel2_Vert` / `AcelRodaPrimVag[1]` |
 | 5 | car-body pitch angular velocity | secondary-suspended |
 | 6 | front-bogie pitch angular velocity | primary-suspended |
 | 7 | rear-bogie pitch angular velocity | primary-suspended |
 
-Thus the candidate set is five vertical-acceleration channels plus three
-pitch-angular-velocity channels. It is not eight accelerometers.
+Thus the candidate set is three vehicle vertical accelerations, two virtual
+moving-coordinate rail-acceleration samples, and three vehicle pitch angular
+velocities. It is not eight accelerometers, and channels 3/4 do not correspond
+to deployable axle-box sensors without changing the observation model.
+
+Implementation-naming note: the campaign code and loader index these eight
+channels as "DOF" 0–7 (e.g., the observation-noise RNG is keyed by "global
+DOF"). Wherever this document says "channel/DOF" it refers to that
+implementation channel index, not to a modeled vehicle degree of freedom —
+per the paragraph above, only six of the eight channels correspond to
+modeled DOFs.
 
 The manuscript must reproduce the exact implemented bridge, vehicle, track,
 damping, mesh, time-step, crop, and solver parameters from the authorized
-generation contract. In particular, the corrected deck mass per unit length
-and resulting healthy modal frequencies must be reported; pre-fix datasets
-with the 1,000× deck-mass error are inadmissible.
+generation contract. Zhai et al. (2004) state the nominal track quantities
+per rail seat and use 0.545 m rail-support spacing. The inherited planar
+property file doubles rail inertia/mass and the half-sleeper mass, but retains
+the tabulated pad, ballast, and sub-ballast terms at the generator's 0.600 m
+spacing. In the source equations, \(M_b\), \(K_b\), and \(K_f\) depend on
+spacing; the damping values are not claimed to be spacing-derived. The intended
+one-seat/two-rail scaling and the spacing transfer are
+therefore separate model-validity questions; the manuscript must not claim
+that all per-rail values were summed or that this is a spacing-consistent Zhai
+reproduction until an upstream benchmark or prospective sensitivities resolve
+  them. Zhai supports the per-seat 531.4 kg value and an independent discrete
+  mass at each support; B54 instead condenses that retained value onto the deck
+  DOF under each on-bridge sleeper and omits the source's adjacent-mass
+  \(K_w,C_w\) shear branch. That inherited topology, and full lumps at both
+  bridge endpoints, are not source-supplied bridge rules. The separate rail
+  Rayleigh target is 0.1%; it is not reported by Zhai and is retained as an
+  inherited author-chosen modeling value. The bridge Rayleigh target remains
+  3%.
+
+The production bridge/rail meshes are geometry-specific and support-aligned:
+L60 uses 0.2/0.3 m (3/2 elements per 0.6 m sleeper bay), whereas L99.6 uses
+0.3/0.3 m (2/2 per bay). Positive-spring supports must lie on nodes to
+roundoff tolerance. A universal 0.3 m deck/rail statement is therefore wrong:
+on L60 it realizes the internal supports at 20.1 and 39.9 m. In particular,
+the corrected deck mass per unit length and resulting healthy modal
+frequencies must be reported;
+pre-fix datasets with the 1,000× deck-mass error are inadmissible. The
+modal gate is two-level: on first passage, every generated state must fall
+inside the 0.2–15 Hz admissibility band, and `target_healthy` states must
+additionally reproduce the nominal healthy first bending frequency within
+the registered acceptance band (L60: ≈4.18 Hz, accepted 3–6 Hz; L99.6:
+≈2.75 Hz, accepted 2–4 Hz).
 
 ### 2.1 Contact-model scope
 
@@ -102,23 +178,34 @@ qualification, not a substitute for a nonlinear contact model.
 
 Scour is represented as loss of the target support's vertical stiffness,
 
-\[
+$
 k_v(d)=(1-d)k_{v0},\qquad 0\le d\le0.60,
-\]
+$
 
-with the implemented healthy value \(k_{v0}=3.44\times10^8\ \mathrm{N/m}\).
+with the implemented healthy value $(k_{v0}=3.44\times10^8\ \mathrm{N/m})$.
 The label \(100d\) is therefore **modeled support-stiffness loss (%)**. It is
 not scour-hole depth, embedment loss, eroded soil volume, or a universal
 mapping from hydraulic scour to stiffness. The idealization follows the
-support-stiffness-loss convention used in relevant drive-by scour studies
-[cite Fernandes and the foundation-frequency literature], subject to this
-semantic boundary.
+support-stiffness-loss convention used in relevant drive-by scour studies —
+Fernandes, Lopez, Ribeiro & Fadel Miguel (2024, *Struct. Health Monit.*
+drive-by autoencoder) and (2025, *Int. J. Struct. Stab. Dyn.* art. 2650316),
+with the foundation-frequency sensitivity underlying it from Prendergast,
+Hester, Gavin & O'Sullivan (2013, *J. Sound Vib.* 332(25):6685–6702) — subject
+to this semantic boundary. These are the same three keys the manuscript cites
+at `paper1/sections/numerical_simulation.tex` (`fernandes2024driveby`,
+`fernandes2025early`, `prendergast2013investigation`).
 
 ### 3.2 Bearing mechanism
 
-Bearing degradation is represented by a rotational spring at each abutment.
-The sampled variable is an analytic nominal fixity ratio, mapped to rotational
-stiffness using the implemented geometry-dependent transformation. It is a
+The bearing mechanism is a nominal abutment rotational-fixity intervention:
+a rotational spring at each abutment whose free-rotation baseline (k_r = 0)
+is the reference configuration.
+The sampled variable is an analytic nominal fixity ratio φ, mapped **once**
+to rotational stiffness through the implemented geometry-dependent
+transformation k_r = φ/(1−φ)·4E₁₅I/L_end, evaluated with the fixed 15 °C
+reference modulus E₁₅; k_r then remains constant while the deck modulus
+varies with temperature between passages. The label is a nominal
+free-rotation-to-near-fixed coordinate. It is a
 bounded design coordinate for the simulation and regression head, not a direct
 percentage of physical bearing material damage or condition rating. Bearing
 heads are trained and reported, but model selection on bearing rungs remains
@@ -136,11 +223,15 @@ must not call it “Sinha damage.”
 
 ### 3.4 Rail profile
 
-Rungs `s0`–`s13` share a fixed baseline longitudinal profile. At
-`s13→s14`, that fixed baseline is replaced by a per-state realization from the
-implemented FRA class-4 power spectral density, with the corrected
-cycles-per-metre corner frequency. The profile is held across the passages of
-one state. FRA class 4 is a registered benchmark distribution; the paper must
+Every rail profile in the campaign is generated from the same implemented FRA
+class-4 power spectral density (corrected cycles-per-metre corner frequency);
+no measured profile is used, and only the phase rule changes along the rung
+graph. Rungs `s0`–`s13` share one fixed generated realization (registered
+phase seed 20260728), common to every state and rung. At `s13→s14`, that
+shared realization is replaced by per-state phase realizations of the same
+spectrum. On L99.6 the shared realization remains fixed through `s22`;
+per-state realizations begin only at `s23`. The profile is held across the
+passages of one state. FRA class 4 is a registered benchmark distribution; the paper must
 not call it the universally “roughest legal” track condition without a
 route/speed-specific regulatory argument. The former per-passage 0.5-mm white
 physical jitter is absent because EN 13848-2 measurement repeatability does not
@@ -150,17 +241,37 @@ represent physical rail-profile evolution.
 
 The track nuisance block includes:
 
-- ballast stiffness/damping patches, with the governing overlapping patch
-  selected by the largest absolute log-stiffness multiplier;
-- hanging-sleeper groups; and
-- rail-pad variability/failure.
+- ballast stiffness/damping patches: Poisson counts (rate 1.2/100 m,
+  window-scaled), lengths U(5, 20) m, each patch **independently** wet or dry
+  with probability 0.5 each
+  (dry: stiffness ×[1.2, 2.0], damping ×[0.4, 0.8]; wet: stiffness
+  ×[0.7, 0.9], damping ×[1.5, 4.0]); patch centers placed with an
+  author-chosen 3× density
+  within 20 m of the abutments; where patches overlap, the patch with the
+  largest absolute log-stiffness multiplier governs and carries its
+  (η_k, η_c) multipliers **jointly**;
+- hanging-sleeper groups: Poisson counts (rate 3.0/100 m, window-scaled),
+  author-chosen group size discrete U{1,…,5} consecutive sleepers; 60% of groups directed
+  to transition zones (±15 m of the abutments), then fouled-patch placement
+  with 3:1 odds; a start proposal is accepted only when the complete sampled
+  group fits inside the modeled sleeper window, so the stored count is never
+  truncated; and
+- rail-pad variability/failure: **one** state-global service-condition stiffness
+  scalar (Weibull, scale λ=1.8, shape k=2.2, clipped to [1.0, 3.5]) and
+  **one** state-global damping
+  scalar in [0.8, 1.2], plus independent per-position Bernoulli(0.02)
+  failures on the 0.6 m sleeper lattice. Failed-pad descriptors must match that
+  lattice exactly and cannot be silently snapped. The global scalars have no
+  time axis and are not a progressive aging law.
 
 Track descriptors are sampled in a bridge-local approach–deck–exit frame and
 mapped by the model to the actual global sleeper coordinates, so the sampled
-transition/deck mechanisms act on the intended locations. Hanging sleepers are
-implemented as a **linear support-removal approximation**. There is no explicit
-void depth, sleeper–ballast gap, closure, impact, or settlement-profile
-nonlinearity. Claims must be limited accordingly.
+transition/deck mechanisms act on the intended locations. Hanging sleepers
+and failed pads are implemented as a **linear support-removal
+approximation**: the affected element's stiffness **and** damping are both
+multiplied by 1e-6. There is no explicit void depth, sleeper–ballast gap,
+closure, impact, or settlement-profile nonlinearity, no ARIMA spatial aging
+field, and no consecutive-failure cap. Claims must be limited accordingly.
 
 ### 3.6 Wheel out-of-roundness
 
@@ -173,23 +284,48 @@ vehicle damage mode.
 ### 3.7 Registered generative priors
 
 The values below are the implemented design distribution, not estimates of a
-universal infrastructure population. Where the repository derived a prior from
-several imperfect field sources, the manuscript must call it a **modeling
-prior** and cite the derivation in `docs/track_eov_sampling_spec.md`.
+universal infrastructure population. **None was fitted to data**: no estimator,
+fitting sample, or goodness-of-fit assessment exists for any of them. Following
+the 2026-08-01 semantic-closure pass they fall into exactly three classes —
+values chosen with reference to a primary measurement used as an engineering
+proxy across a stated scope boundary; one value **contradicted by the nearest
+available measurement and deliberately retained** (the dry-fouling stiffness
+band [1.2, 2.0], against Esmaeili's measured mild softening); and
+author-chosen design values. The
+earlier "derived/inferred" class is **retracted**: the direct-PDF audit found
+that the exact distributions and odds previously described that way were not
+derived from any source (see `docs/track_eov_sampling_spec.md` and
+`paper1/MISSING_PRIMARY_SOURCES.md`). In particular, the 0.5 wet-patch
+probability, dry-stiffness band,
+pad Weibull/multiplier law, 0.6 transition selection, 3:1 local coupling odds,
+and the wheel-OOR occurrence/order/amplitude triplet are not measured
+population distributions. The 0.02 pad-failure probability is also wholly
+author-chosen: the direct-PDF audit found no primary support for the previously
+claimed 0.5% annual-incidence anchor. The manuscript
+must preserve those distinctions and cite only what each primary actually
+supports; `docs/track_eov_sampling_spec.md` records the evidence boundary.
 
 | Variable | Registered design |
 |---|---|
 | scour support-stiffness loss | joint LHS on [0, 0.60] per target; five controlled nonzero anchor levels |
 | latent bearing fixity | joint LHS on [0, 0.95] per abutment; five controlled nonzero anchor levels |
-| crack activation | Bernoulli 0.25 in `joint`; forced on in `nuisance_only`; dormant where crack physics is inactive |
-| crack severity/location | \(EI\) loss U(0.05, 0.30); 4:1 hogging:sagging design odds; ±0.175 span support zone with global 0.10–0.90 bridge-length clamp |
-| rail profile | fixed baseline through `s13`; per-state FRA class-4 phase realization at `s14+`; zero physical passage jitter |
-| hanging sleepers | Poisson rate 3.0 groups/100 m, group size discrete U{1,…,5}, registered transition/fouling placement weights |
-| ballast patches | Poisson rate 1.2 patches/100 m, length U(5, 20) m, registered wet/dry stiffness/damping multipliers and transition weight |
-| rail pads | per-position snapshot-failure modeling prior 0.02 plus registered stiffness/damping multipliers |
-| wheel polygonization | per-wheel probability 0.30; order discrete U{1,…,5}; \(\ln(A[\mathrm{m}])\sim N(-10,0.5^2)\), clipped to 10–120 µm |
-| speed and temperature | correctly oriented 50×2 LHS mapped to [70, 90] km/h and [3, 33] °C, then rounded to the nearest integer km/h and °C |
-| vehicle variability | for each passage and each of five vehicles, independent standard-normal multipliers give Gaussian body-mass CV 10%, primary-suspension-stiffness CV 5%, and secondary-suspension-stiffness CV 5%; the other registered vehicle properties remain fixed |
+| crack activation | author-chosen UID-keyed Bernoulli 0.25 in `joint`; forced on in `nuisance_only`; off in the controlled healthy/scour/bearing families; dormant where crack physics is inactive; not a fitted population prevalence |
+| crack severity/location | author-chosen throughout: author-chosen \(EI\)-loss severity band U(0.05, 0.30); author-chosen 4:1 hogging:sagging design odds; author-chosen ±0.175-span support-zone window; author-chosen global 0.10–0.90 bridge-length clamp — none fitted to data |
+| rail profile | one generated FRA class-4 realization (phase seed 20260728) shared through `s13` on L60 and through `s22` on L99.6; per-state FRA class-4 phase realization at `s14+` (L60) and only at `s23` (L99.6); zero physical passage jitter |
+| descriptor sampling window | author-chosen convention: 30 m of approach + the deck + 30 m of exit ⇒ 120 m (L60) and 159.6 m (L99.6); scales both Poisson means, so it carries the same evidentiary status as the rates it multiplies; distinct from the physical approach/exit track lengths |
+| hanging sleepers | Poisson rate 3.0 groups/100 m, author-chosen group size discrete U{1,…,5} consecutive; author-chosen 60% transition-zone selection (±15 m of abutments) then author-chosen 3:1 fouled-patch odds; support stiffness and damping ×1e-6 |
+| ballast patches | author-chosen Poisson rate 1.2 patches/100 m, author-chosen length U(5, 20) m (the FRA extent context is open-ended reporting among class-5-limit-crossing sites, not a fitted bound), independently wet/dry with author-chosen p=0.5. Dry: k ×[1.2,2.0] **author-chosen and sign-contradicted** by Esmaeili (measured mild softening), c ×[0.4,0.8] **direction/magnitude taken from Esmaeili** (up to −67%) but deliberately milder and not estimated from it. Wet: k ×[0.7,0.9], c ×[1.5,4.0] **flooded-clean-ballast proxy** (measured 0.67 sits below the band; condensed dashpot rises ×2.8 not ×4.0, and its rise is gradual with no stated threshold — ≈unchanged at 5–10 cm, +28% at 15 cm, ×2.8 only at full 35 cm submergence, Table 4.17). Author-chosen 3× center density within its author-chosen 20 m abutment window; max-\|log η_k\| overlap winner carries (η_k, η_c) jointly |
+| rail pads | one state-global author-chosen service-condition scalar Weibull(λ=1.8, k=2.2) clipped to [1.0,3.5] + one state-global damping scalar [0.8,1.2]; independent per-position Bernoulli(0.02) failures (author-chosen snapshot stress prior) on the 0.6 m lattice, stiffness and damping ×1e-6 |
+| wheel polygonization | per-wheel probability 0.30; order discrete U{1,…,5}; \(\ln(A[\mathrm{m}])\sim N(-10,0.5^2)\), clipped to 10–120 µm — an author-chosen design prior: the cited literature supports the polygonization physics, not these exact occurrence/severity numbers |
+| speed and temperature | author-chosen envelopes: correctly oriented 50×2 LHS mapped to [70, 90] km/h and [3, 33] °C, then rounded to the nearest integer km/h and °C; temperature acts on the deck modulus through the author-chosen registered linear law E(T)=E15·[1−0.003(T−15)] (T in °C, −0.3%/°C, ≈9% modulus change across the 30 °C span) |
+| vehicle variability | author-chosen: for each passage and each of five vehicles, independent standard-normal multipliers give Gaussian body-mass CV 10%, primary-suspension-stiffness CV 5%, and secondary-suspension-stiffness CV 5%; the other registered vehicle properties remain fixed |
+
+Because the retained dry-ballast stiffness direction is contradicted by the
+nearest audited experiment, definitive interpretation requires the opt-in,
+CRN-paired retained-stiffening versus reciprocal-softening analysis specified
+in [`dry_ballast_stiffness_sign_sensitivity.md`](dry_ballast_stiffness_sign_sensitivity.md).
+The reciprocal arm is a matched-log-magnitude sensitivity, not a replacement
+field prior.
 
 The 4:1 crack-location odds are a design prior. Eurocode cracked-region
 guidance can motivate the support-region window but does not, by itself,
@@ -230,7 +366,8 @@ not an eighth primary edge.
 anchor. `s22_bearcrack4` jointly activates bearing and crack, and `s23_all4`
 jointly adds the profile/track/wheel EOV block. These are scale/stress
 comparisons, not a seven-edge one-factor family. The L60 champion, HPO
-manifest, or physical execution receipt is never copied into this block.
+manifest, or source/runtime-bound execution receipt is never copied into this
+block.
 
 ## 5. Fixed semantic state design and common random numbers
 
@@ -247,7 +384,11 @@ rows:
 | `joint` | 250 | 250 | primary multivariate population |
 | **Total** | **450** | **475** | |
 
-Every state has 50 passages. The `joint` population is generated once per
+Every state has 50 passages. The 50-passage count is a prospectively fixed,
+balanced, compute-feasible operational integration budget — every state
+contributes the same passage count under the campaign's compute envelope —
+not a power calculation and not a claim of 50 independent samples (see
+below). The `joint` population is generated once per
 geometry from a master LHS containing all scour coordinates and two latent
 bearing coordinates, irrespective of rung activation. Latent crack status is
 also defined independently of the rung toggle. The active physics variables
@@ -267,8 +408,12 @@ of UID-named random substreams allocate:
 No scientific random draw is keyed to mutable row number or parallel
 scheduling. Within a geometry, the complete UID inventory, latent design,
 random-stream identities, and split assignment must match exactly across
-rungs. These common random numbers reduce edge variance and make exact paired
-inference possible; they do not make the 50 passages independent experimental
+rungs. These common random numbers are intended to reduce edge variance and
+support the registered paired resampling analyses; whether variance is
+actually reduced depends on the covariance the shared draws induce, and no
+variance-reduction diagnostic is registered. The paired analyses are
+fixed-design sensitivity summaries, not inferential guarantees, and the
+shared draws do not make the 50 passages independent experimental
 units. The semantic state is therefore the analysis and resampling cluster
 relative to passages. It must not itself be described as an iid field sample:
 the controlled anchors are fixed and the joint states are the points of one
@@ -279,6 +424,9 @@ registered LHS realization.
 For each passage, the generator samples the registered speed range
 [70, 90] km/h, temperature range [3, 33] °C, and vehicle-property variability;
 speed and temperature are rounded to integer km/h and °C before simulation.
+Temperature acts on the deck modulus through the registered linear law
+E(T)=E15·[1−0.003(T−15)] with T in °C (−0.3%/°C; ≈9% modulus change across
+the registered 30 °C span).
 The speed–temperature design uses a correctly oriented
 `Npass × number-of-variables` Latin hypercube. Persistent state conditions do
 not change between passages.
@@ -298,8 +446,17 @@ true Piecewise Aggregate Approximation: the spatial sequence is partitioned
 into equal windows and each window is replaced by its mean, giving 512
 segments. A separate affine scaler is fitted to the resulting representation
 for each selected channel using training samples only, then applied to all
-partitions. This PAA front end follows the low-pass/compression precedent in
-drive-by monitoring [cite the exact Fernandes paper].
+partitions. This PAA front end follows the compression precedent set in
+drive-by monitoring by Fernandes, Lopez, Ribeiro & Fadel Miguel, *Early
+Multi-damage Classification in Railway Bridges Using Drive-by Numerical
+Measurements with Piecewise Aggregate Approximation and Convolutional Neural
+Networks*, Int. J. Struct. Stab. Dyn., art. 2650316,
+doi:10.1142/S0219455426503165 — the only paper in that line that applies PAA
+(583 segments over 5,830-sample, 1 kHz vertical-acceleration records).
+**Boundary:** that study motivates PAA by dimensionality reduction and
+training cost (527 → 121 min), not by an explicit low-pass or denoising
+argument; the low-pass reading is ours. It also min–max scales to [0, 1]
+where we standardize.
 
 The main observation arm, `all_mult`, adds pointwise zero-mean Gaussian
 multiplicative noise with standard deviation \(0.05|x|\) to every selected
@@ -322,27 +479,45 @@ observation model is a separate future robustness arm.
 
 The network performs continuous multi-output regression. Output order is the
 target-pier scour heads followed, where active, by left/right bearing heads.
-Training uses the registered range-normalized multi-head MSE so the larger
-bearing range cannot dominate gradient scale. Model selection on bearing rungs
-uses scour-head MSE; bearing MSE and scour↔bearing leakage remain secondary
-reported metrics.
+On bearing-active rungs, training uses the registered range-normalized
+multi-head MSE (per-head weights ∝ 1/range², normalized to mean one; head
+ranges 60 for scour, 95 for bearing) so the larger bearing range cannot
+dominate gradient scale; scour-only rungs use the plain MSE. Model selection
+on bearing rungs uses scour-head MSE; bearing MSE and scour↔bearing leakage
+remain secondary reported metrics.
 
 Four architecture arms share the same PAA and convolutional search space:
 
 1. CNN with multi-rate pooling;
-2. CNN + Space2Vec with multi-rate pooling;
+2. CNN + Time2Vec-style spatial encoding with multi-rate pooling (internal
+   key `PAA_S2V_NHiTS`);
 3. CNN + LSTM with multi-rate pooling;
 4. CNN with global average pooling and no multi-rate module.
 
-The fourth arm is the direct pooling-ablation control. The implemented
-`MultiRatePooling1D` module is N-HiTS-inspired pooling, not the full N-HiTS
-forecasting architecture; the manuscript must use the implementation-level
-name.
+The fourth arm anchors the pooling comparison as an equal-budget control
+family, not a direct pooling ablation: the multi-rate family additionally
+searches its pooling-rate configuration (`nhits_pool_rates_key` is searched
+only when the multi-rate module is active), so the two hyperparameter search
+spaces are not identical and family differences are reported as observed
+finite-design error differences, never as isolated-module effects. The
+implemented `MultiRatePooling1D` module is N-HiTS-inspired pooling, not the
+full N-HiTS forecasting architecture; the manuscript must use the
+implementation-level name. It is a fixed-width adaptive temporal pyramid: each
+configured level denotes an output-bin count, adaptive max pooling produces
+that count for any sequence length, and the level outputs are concatenated.
+Consequently RAW and PAA use the identical pooling operation and dense-head
+width, and changing sequence length alone does not change parameter count. The
+historical configuration key `nhits_pool_rates` is retained, but its values are
+adaptive bin counts rather than stride/downsampling factors.
 
 The eight-channel input is a non-selectable response-budget control. Candidate
-selection is restricted to registered two-channel/DOF subsets. The physics-motivated
-front-bogie/wheel comparator is retained but cannot replace the selected
-winner unless it wins under the registered selection rule.
+selection is restricted to registered two-channel/DOF subsets. The
+registered comparator — front-bogie vertical acceleration plus the Eulerian
+rail acceleration sampled at the moving wheel-1 coordinate, channel indices
+`[1, 3]` — is retained under its legacy identifiers. Its former
+"sprung+unsprung sensor fusion" rationale is withdrawn; axle-box literature
+does not validate this implemented virtual rail-field pairing. The comparator
+cannot replace the selected winner unless it wins under the registered rule.
 
 `s16_all` and `s23_all4` additionally reopen the complete
 4-architecture × 28-pair × 3-seed matrix as an **exploratory deployment
@@ -358,7 +533,7 @@ There are two independent calibration blocks:
 - L60, anchored at `s0_scour`;
 - L99, anchored at `s21_scour4`.
 
-At each anchor, only the **full eight-DOF input** receives free HPO:
+At each anchor, only the **full eight-channel input** receives free HPO:
 4 architectures × 3 registered training/HPO seeds × 100 Optuna trials. The
 anchor studies use the registered multivariate TPE sampler (25 startup trials
 at a 100-trial budget, with constant-liar handling) and a
@@ -448,6 +623,7 @@ PyTorch deterministic algorithms hard-fail rather than warn, and cuBLAS uses
 | Operation | Seed/policy |
 |---|---|
 | MATLAB master damage-state design and UID-derived streams | `damage_seed = 1` |
+| fixed shared rail-profile realization (phase), rungs `s0`–`s13` (L99.6: through `s22`) | 20260728 |
 | canonical 60/20/20 semantic-state split | 42; after UID sorting and the seed-derived within-stratum permutation, the repeating assignment pattern is train/test/validation/train/train |
 | Optuna sampler and model training arms | {42, 1337, 2026} |
 | load-time relative-noise draws | 42, keyed additionally by global DOF |
@@ -488,8 +664,8 @@ re-rank the canonical winner. The immutable outer test is the report set.
 
 ## 11. Within-rung reporting
 
-For registered MSE uncertainty and paired contrasts, aggregate passage errors
-within state before resampling. Report:
+For registered MSE finite-design resampling sensitivity and paired
+contrasts, aggregate passage errors within state before resampling. Report:
 
 - scour MSE in squared percentage points, per-pier MSE, and RMSE where useful;
 - most-damaged-pier localisation accuracy as a passage-level point estimate,
@@ -498,8 +674,8 @@ within state before resampling. Report:
 - bearing MSE on bearing rungs;
 - false-scour-from-bearing and false-bearing-from-scour diagnostics;
 - median performance over the finite three-seed set and seed IQR;
-- state-first uncertainty intervals for registered finalists' scour MSE and
-  all-head MSE;
+- state-first finite-design resampling sensitivity intervals for registered
+  finalists' scour MSE and all-head MSE;
 - complete architecture/channel-subset/seed eligibility and provenance.
 
 Within-rung finalist MSE intervals and paired MSE contrasts use 2,000
@@ -511,7 +687,13 @@ exactly 50 passages, its point estimate is state-balanced, but no state-level
 localisation interval is registered. Do not attach the MSE bootstrap interval
 to localisation.
 
-## 12. Registered L60 cross-rung inference
+## 12. Registered L60 cross-rung paired sensitivity analysis
+
+(The implementing modules are `core/cross_rung_inference.py` and
+`check_cross_rung_inference.py`; those file names are historical and live in
+the hash-locked runtime root, so they are not renamed. "Inference" in the
+file names must not be read as statistical inference — the registered
+procedure is descriptive, per the non-claims below.)
 
 The primary cross-rung analysis uses only the immutable outer-test subset of
 the exact common 250-state `joint` master population. Controlled anchors remain
@@ -528,21 +710,26 @@ diagnostics. The analysis requires:
 Within a training seed, state-level scour MSE is averaged over the paired outer
 states. The registered statistic is the median of those means over the finite
 seed set. An edge effect is the right-rung statistic minus the left-rung
-statistic, so positive values denote higher error after adding the mechanism.
+statistic, so positive values denote higher error after the registered
+intervention (the added mechanism block plus, where applicable, its heads
+and training task).
 
-Uncertainty is computed with 100,000 state-first paired bootstrap replicates.
-States are resampled first with the same indices at both edge endpoints; seeds
-remain paired and are not resampled. Each edge receives a pointwise 95%
-percentile interval and a Bonferroni familywise interval controlling the family
-of exactly seven primary L60 edges. Only the Bonferroni interval may support a
-claim about an effect's sign across the ladder. The bootstrap fraction above or
-below zero is descriptive, not a p-value or posterior probability.
+Resampling sensitivity is computed with 100,000 state-first paired bootstrap
+replicates. States are resampled first with the same indices at both edge
+endpoints; seeds remain paired and are not resampled. Each edge receives a
+pointwise central-95% finite-design resampling sensitivity interval and a
+wider seven-edge tail-adjusted sensitivity envelope (tail mass α/7, a
+Bonferroni-style width rule). Both are descriptive sensitivity summaries of
+the fixed finite design: neither is a confidence interval, a
+familywise-error-controlled hypothesis test, a significance/superiority
+decision, or a joint-sign guarantee. The bootstrap fraction above or below
+zero is descriptive, not a p-value or posterior probability.
 
-These percentile intervals quantify empirical state-resampling uncertainty
+These sensitivity summaries quantify empirical state-resampling variability
 conditional on the exact registered finite anchor/LHS design. Because the
 anchors are fixed and the joint population is one LHS realization rather than an
-iid field sample, the intervals must not be presented as field-population or
-design-superpopulation coverage intervals. That interpretation would require
+iid field sample, they must not be presented as field-population or
+design-superpopulation coverage statements. That interpretation would require
 an LHS-aware variance estimator or independently replicated state designs.
 
 ## 13. Reproducibility and execution blocks
@@ -571,17 +758,32 @@ regenerated for the qualification round from the converged commit, and is never
 treated as durable source. The exact source-bound bytes are executed on each
 intended host; host receipts are never copied or forged between PCs.
 
-Every qualification run emits an authenticated
-`qualification_host_receipt.json` under schema
+Every qualification run emits a `qualification_host_receipt.json` under schema
 `ttbi-matlab-qualification-host-v1`, containing the declared host ID, hostname,
 CPU identifier, logical-processor count, MATLAB thread diagnostic, and computer
 architecture. The sidecar is bound to the actual MATLAB-environment digest,
 canonical qualification-source digest, and exact executed-script digest.
 Corresponding stage directories for the required host/environment pairs are
 then compared with `compare_generation_releases.py`. Accepted comparison
-evidence uses schema `matlab-environment-qualification-receipt-v4` and
-authenticates both host sidecars. A numerically equivalent verdict is not
-accepted implicitly; it requires explicit review and a new acceptance receipt.
+evidence uses schema `matlab-environment-qualification-receipt-v4` and requires
+both host sidecars to be internally consistent and stable across stages. A
+numerically equivalent verdict is not accepted implicitly; it requires explicit
+review and a new acceptance receipt.
+
+These host fields are *self-attested diagnostics*, bound by a SHA-256 over their
+own canonical descriptor. No pre-registered signing key, hardware attestation,
+or independent witness is involved. The reproducibility claim this supports is
+ therefore **retained-artifact integrity and internal consistency under a
+ trusted-operator threat model**: the retained datasets are complete, mutually
+ consistent, unmodified since qualification, carry the reviewed source identity
+ and contract, and each mandatory stage carries one stable set of host
+ diagnostics. It is explicitly *not* a claim that the reviewed source is proven
+ to have executed, or that the computation ran on
+independent physical machines — a coherently fabricated receipt graph would
+satisfy these checks. The mechanism guards against accidental drift, stale or
+partial runs, copied receipts and silent substitution, which are the realistic
+failure modes of a multi-PC academic campaign; it is not an anti-fraud
+mechanism, and no result in this paper depends on it being one.
 
 CPU equality is not required. Two runs with an identical MATLAB-environment
 digest are eligible only when their authenticated receipts declare distinct
@@ -649,7 +851,8 @@ The implemented experiment can support claims about:
 - conditional architecture/two-channel response-subset ranking under the registered
   full-array-calibrated policy;
 - paired changes in achievable L60 performance across the seven registered
-  mechanism edges; and
+  simulator-intervention edges (each edge changes a mechanism block and,
+  where applicable, heads, loss/task, and retraining jointly); and
 - blockwise behavior on the L99.6 scale/stress design.
 
 It cannot, without additional experiments, support claims about:
@@ -669,8 +872,16 @@ data only and then frozen before the outer test. R11 has no such threshold.
 
 ## 15. Before-submission checklist
 
-- Replace all citation placeholders with primary sources and verify the exact
-  version of the Cantero/TTBI and Fernandes implementations used.
+- ~~Replace all citation placeholders with primary sources and verify the exact
+  version of the Cantero/TTBI and Fernandes implementations used.~~ **DONE
+  2026-08-01**: TTB-2D = SoftwareX 20:101253 at upstream base commit
+  `28d35528…`; VEqMon2D = SoftwareX 19:101103; track properties = Zhai, Wang &
+  Lin, JSV 270(4–5):673–683; PAA precedent = Fernandes et al., IJSSD art.
+  2650316. Remaining: Garg & Dukkipati (1984) was **dropped** as a citation
+  because no local copy exists to verify the FRA class-4 constants against;
+  the manuscript now attributes those constants to the TTB-2D generator
+  source, which is locally verifiable. Re-add the textbook citation only if a
+  copy is obtained.
 - Report the complete authorized physical parameter table, effective span
   lengths, sample interval, spatial crop, and healthy modal-frequency checks.
 - State the FRA frequency units and profile persistence without converting
@@ -681,8 +892,8 @@ data only and then frozen before the outer test. R11 has no such threshold.
 - Pull every sample count, protocol hash, candidate count, timing, and result
   from authenticated R11 artifacts; do not copy historical tables.
 - Distinguish inner-validation selection, diagnostic repeated CV, immutable
-  outer-test performance, seven-edge confirmatory inference, exploratory
-  deployment reselection, and L99 blockwise stress results.
+  outer-test performance, the seven-edge finite-design sensitivity analysis,
+  exploratory deployment reselection, and L99 blockwise stress results.
 - Report exact analysis-state counts alongside passage counts and do not use
   passages as the inferential sample size or describe the registered LHS states
   as an iid field sample.

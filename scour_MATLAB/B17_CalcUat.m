@@ -1,7 +1,9 @@
-function [Sol] = B17_CalcUat(Sol,Track,Calc,Veh,Damage)
+function [Sol] = B17_CalcUat(Sol,Track,Calc,Veh,~)
 
-% Function to calculate the vertical displacement of the model under the
-%   wheels of each vehicle in the Train.
+% Interpolate rail FE fields at each instantaneous wheel coordinate.
+% acc_under is the Eulerian partial-time field N(x_w)'*A_rail. It is not
+% wheelset acceleration and not total acceleration along the moving point;
+% B66 combines it with the separately returned spatial/convective terms.
 
 % *************************************************************************
 % *** Script part of TTB-2D tool for Matlab environment.                ***
@@ -24,6 +26,7 @@ function [Sol] = B17_CalcUat(Sol,Track,Calc,Veh,Damage)
 % Sol = Addition of fields to structure Sol:
 %   .def_under = Beam deformation under the vehicle
 %   .vel_under = Beam 1st derivative (in time) of deformation under the vehicle
+%   .acc_under = Eulerian rail FE vertical acceleration at the wheel coordinate
 %   .def_under_p = Beam deformation under the vehicle, with the first derivative (in space) of the shape function
 %   .def_under_pp = Beam deformation under the vehicle, with the second derivative (in space) of the shape function
 %   .vel_under_p = Beam 1st derivative of deformation under the vehicle, with the first derivative (in space) of the shape function
@@ -68,11 +71,8 @@ for veh_num = 1:Veh(1).Tnum
                 Sol.Veh(veh_num).def_under(wheel,t) = shape_fun_at_x_t*U;
                 Sol.Veh(veh_num).vel_under(wheel,t) = shape_fun_at_x_t*V;
                 
-                % Aceleração da roda:
+                % Eulerian rail acceleration at the moving wheel coordinate:
                 Sol.Veh(veh_num).acc_under(wheel,t) = shape_fun_at_x_t*Sol.Model.Nodal.A(aux1,t);
-                % Ruído na aceleração da roda:
-%                 Sol.Veh(veh_num).acc_under(wheel,t) = Sol.Veh(veh_num).acc_under(wheel,t) + ...
-%                     Damage.desvio*Sol.Veh(veh_num).acc_under(wheel,t).*randn(size(Sol.Veh(veh_num).acc_under(wheel,t)));
                 
                 Sol.Veh(veh_num).def_under_p(wheel,t) = shape_fun_at_x_p_t*U;
                 Sol.Veh(veh_num).def_under_pp(wheel,t) = shape_fun_at_x_pp(t,:)*U;
@@ -99,7 +99,7 @@ end % for veh_num = 1:Veh(1).Tnum
 % subplot(3,1,3);
 %     plot(Calc.Solver.t,Sol.Veh(veh_num).acc_under'); axis tight;
 %     xlabel('Solver time (s)'); ylabel('Acceleration (m/s^2)');
-%     title(['Acceleration under wheels of vehicle ',num2str(veh_num)]);
+%     title(['Eulerian rail acceleration at wheel coordinates, vehicle ',num2str(veh_num)]);
 % 
 % figure; subplot(3,1,1);
 %     plot(Calc.Solver.t,Sol.Veh(veh_num).def_under_p'); axis tight;

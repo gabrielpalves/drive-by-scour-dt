@@ -35,6 +35,33 @@ function [Beam,Damage] = B02_BoundaryConditions(Beam,Damage)
 
 % Number of supports
 Beam.BC.supp_num = length(Beam.BC.loc); %Defined in B07_OptionsProcessing
+if ~isnumeric(Beam.BC.loc) || ~isreal(Beam.BC.loc) || ...
+        (~isempty(Beam.BC.loc) && ~isvector(Beam.BC.loc)) || ...
+        any(~isfinite(Beam.BC.loc(:)))
+    error('B02:InvalidSupportLocations', ...
+        'Beam.BC.loc must be a finite real numeric vector.');
+end
+if ~isnumeric(Beam.BC.vert_stiff) || ~isreal(Beam.BC.vert_stiff) || ...
+        (~isempty(Beam.BC.vert_stiff) && ~isvector(Beam.BC.vert_stiff)) || ...
+        any(~isfinite(Beam.BC.vert_stiff(:))) || ...
+        any(Beam.BC.vert_stiff(:) < 0 & Beam.BC.vert_stiff(:) ~= -1) || ...
+        numel(Beam.BC.vert_stiff) ~= Beam.BC.supp_num
+    error('B02:InvalidVerticalBC', ...
+        'Beam.BC.vert_stiff must have one real numeric entry per support.');
+end
+if ~isnumeric(Beam.BC.rot_stiff) || ~isreal(Beam.BC.rot_stiff) || ...
+        (~isempty(Beam.BC.rot_stiff) && ~isvector(Beam.BC.rot_stiff)) || ...
+        any(~isfinite(Beam.BC.rot_stiff(:))) || ...
+        any(Beam.BC.rot_stiff(:) < 0 & Beam.BC.rot_stiff(:) ~= -1) || ...
+        numel(Beam.BC.rot_stiff) ~= Beam.BC.supp_num
+    error('B02:InvalidRotationalBC', ...
+        'Beam.BC.rot_stiff must have one real numeric entry per support.');
+end
+% Downstream DOF lists are row vectors. Normalize accepted vector inputs so
+% column-shaped user data cannot trigger implicit expansion or shape drift.
+Beam.BC.loc = Beam.BC.loc(:)';
+Beam.BC.vert_stiff = Beam.BC.vert_stiff(:)';
+Beam.BC.rot_stiff = Beam.BC.rot_stiff(:)';
 
 % Supports location index
 if Beam.BC.supp_num > 0
@@ -45,6 +72,33 @@ else
     Beam.BC.loc_ind = [];
 end % if Beam.BC.supp_num > 0
 Beam.BC.loc_ind = Beam.BC.loc_ind';
+Beam.BC.loc_realized = Beam.Mesh.Nodes.acum(Beam.BC.loc_ind);
+Beam.BC.loc_offset = Beam.BC.loc_realized - Beam.BC.loc;
+alignment_scale = max([abs(Beam.Mesh.Nodes.acum(:)); ...
+    abs(Beam.BC.loc(:)); 1]);
+% B01 generates coordinates by cumulative summation.  Scale the floating-
+% point tolerance with the number of summed elements so an exactly designed
+% fine grid is not rejected solely because its endpoint accumulated roundoff.
+% Count the coordinate increments directly so this boundary-condition routine
+% also accepts its documented minimal mesh interface (Nodes.acum/Nodes.Tnum),
+% without requiring the later B03 element bookkeeping to exist already.
+% The tolerance remains orders of magnitude below any physical mesh offset.
+mesh_element_count = max(numel(Beam.Mesh.Nodes.acum) - 1, 0);
+summation_roundoff_factor = max(256, 2*mesh_element_count);
+Beam.BC.loc_tolerance = summation_roundoff_factor * eps(alignment_scale);
+% Positive vertical springs are the active campaign's bridge supports.  A
+% nearest-node shift changes span lengths and the damage location, so reject
+% it rather than silently solving a different geometry.
+misaligned_spring_supports = find(Beam.BC.vert_stiff > 0 & ...
+    abs(Beam.BC.loc_offset) > Beam.BC.loc_tolerance);
+if ~isempty(misaligned_spring_supports)
+    i = misaligned_spring_supports(1);
+    error('B02:SupportNotOnNode', ...
+        ['Positive-spring support %d at %.17g m maps to %.17g m ' ...
+         '(offset %.17g m). Choose a support-aligned bridge mesh.'], ...
+        i, Beam.BC.loc(i), Beam.BC.loc_realized(i), ...
+        Beam.BC.loc_offset(i));
+end
 
 % Fixed vertical displacement DOF
 Beam.BC.DOF_fixed = Beam.BC.loc_ind(Beam.BC.vert_stiff==-1)*2-1;
@@ -60,55 +114,80 @@ Beam.BC.DOF_fixed = sort(Beam.BC.DOF_fixed);
 % -------------------------------------------------------------------------
 % 1. Vertical Stiffness (Scour Damage)
 % -------------------------------------------------------------------------
-vert_with_values = [];
-vert_stiff_values = [];
 DOF_Original_value = 344e6;
+rigid_vertical_nodes = Beam.BC.loc_ind(Beam.BC.vert_stiff == -1);
 
 % Safely initialize Damage fields if they do not exist
 if ~isfield(Damage, 'scour_rates')
     Damage.scour_rates = zeros(1, Beam.BC.supp_num);
 end
-
-for i = 1:length(Beam.BC.vert_stiff)
-    if Beam.BC.vert_stiff(i) > 0
-        % MATLAB 1-based indexing: Vertical DOF = node * 2 - 1
-        vert_with_values(end+1) = Beam.BC.loc_ind(i) * 2 - 1;
-        
-        % Apply scour to this specific support
-        retained_stiffness = 1.0 - Damage.scour_rates(i);
-        vert_stiff_values(end+1) = retained_stiffness * DOF_Original_value;
-    end
+if ~isnumeric(Damage.scour_rates) || ~isreal(Damage.scour_rates) || ...
+        (~isempty(Damage.scour_rates) && ~isvector(Damage.scour_rates)) || ...
+        any(~isfinite(Damage.scour_rates(:))) || ...
+        any(Damage.scour_rates(:) < 0 | Damage.scour_rates(:) > 1)
+    error('B02:InvalidScourRates', ...
+        'Damage.scour_rates must be a finite real vector in [0,1].');
+end
+Damage.scour_rates = Damage.scour_rates(:)';
+% The rail model reuses this function with no positive vertical springs and
+% legitimately carries the bridge's Damage struct.  Exact support alignment
+% is therefore required precisely when scour can enter the assembled matrix.
+if any(Beam.BC.vert_stiff > 0) && ...
+        numel(Damage.scour_rates) ~= Beam.BC.supp_num
+    error('B02:ScourSupportCountMismatch', ...
+        ['Damage.scour_rates must have exactly one entry per support when ' ...
+         'positive vertical support springs are active.']);
 end
 
-% -------------------------------------------------------------------------
-% 2. Rotational Stiffness (Bearing Damage)
-% -------------------------------------------------------------------------
-rot_with_values = [];
-rot_stiff_values = [];
+positive_vertical_supports = find(Beam.BC.vert_stiff > 0);
+positive_vertical_supports = positive_vertical_supports(:)';
+% MATLAB 1-based indexing: vertical DOF = node * 2 - 1.
+vert_with_values = ...
+    Beam.BC.loc_ind(positive_vertical_supports) * 2 - 1;
+retained_stiffness = 1.0 - ...
+    Damage.scour_rates(positive_vertical_supports);
+vert_stiff_values = retained_stiffness * DOF_Original_value;
+rigid_vertical_nodes = [rigid_vertical_nodes, ...
+    Beam.BC.loc_ind(positive_vertical_supports(vert_stiff_values > 0))];
 
-% Safely initialize bearing damage fields
+% -------------------------------------------------------------------------
+% 2. Rotational Stiffness (nominal abutment rotational-fixity intervention;
+%    NOT physical bearing degradation — see paper claim boundary)
+% -------------------------------------------------------------------------
+rigid_rotation_constrained = any(Beam.BC.rot_stiff == -1);
+
+% Safely initialize abutment rotational-fixity fields (k_r = 0 is the
+% free-rotation baseline)
 if ~isfield(Damage, 'bearing_left')
     Damage.bearing_left = 0.0;
 end
 if ~isfield(Damage, 'bearing_right')
     Damage.bearing_right = 0.0;
 end
-
-for i = 1:length(Beam.BC.rot_stiff)
-    if Beam.BC.rot_stiff(i) > 0
-        % MATLAB 1-based indexing: Rotational DOF = node * 2
-        rot_with_values(end+1) = Beam.BC.loc_ind(i) * 2;
-        
-        % Inject bearing damage ONLY at the abutments
-        if i == 1
-            rot_stiff_values(end+1) = Damage.bearing_left;
-        elseif i == Beam.BC.supp_num
-            rot_stiff_values(end+1) = Damage.bearing_right;
-        else
-            rot_stiff_values(end+1) = 0.0; % Intermediate piers free rotation
-        end
-    end
+if ~isnumeric(Damage.bearing_left) || ~isreal(Damage.bearing_left) || ...
+        ~isscalar(Damage.bearing_left) || ~isfinite(Damage.bearing_left) || ...
+        Damage.bearing_left < 0
+    error('B02:InvalidBearingStiffness', ...
+        'Damage.bearing_left must be a finite nonnegative scalar [Nm/rad].');
 end
+if ~isnumeric(Damage.bearing_right) || ~isreal(Damage.bearing_right) || ...
+        ~isscalar(Damage.bearing_right) || ~isfinite(Damage.bearing_right) || ...
+        Damage.bearing_right < 0
+    error('B02:InvalidBearingStiffness', ...
+        'Damage.bearing_right must be a finite nonnegative scalar [Nm/rad].');
+end
+
+positive_rotational_supports = find(Beam.BC.rot_stiff > 0);
+positive_rotational_supports = positive_rotational_supports(:)';
+% MATLAB 1-based indexing: rotational DOF = node * 2.
+rot_with_values = Beam.BC.loc_ind(positive_rotational_supports) * 2;
+rot_stiff_values = zeros(size(positive_rotational_supports));
+rot_stiff_values(positive_rotational_supports == 1) = ...
+    Damage.bearing_left;
+rot_stiff_values(positive_rotational_supports == Beam.BC.supp_num) = ...
+    Damage.bearing_right;
+rigid_rotation_constrained = rigid_rotation_constrained || ...
+    any(rot_stiff_values > 0);
 
 % -------------------------------------------------------------------------
 % 3. Combine & Sort Arrays
@@ -123,7 +202,21 @@ Beam.BC.DOF_stiff_values = combined_stiff_values(aux2);
 % Auxiliary variables
 Beam.BC.num_DOF_fixed = length(Beam.BC.DOF_fixed);
 Beam.BC.num_DOF_with_values = length(Beam.BC.DOF_with_values);
-Beam.Modal.num_rigid_modes = max([0, 2 - Beam.BC.num_DOF_fixed]);
+% An Euler-Bernoulli beam has two rigid-body coordinates: vertical
+% translation and rigid rotation. Count their constraint RANK, not merely
+% fixed DOFs: positive elastic support springs also remove rigid modes, while
+% two rotational constraints are rank-duplicate for rigid-body motion.
+rigid_constraint_rank = 0;
+if ~isempty(rigid_vertical_nodes)
+    rigid_constraint_rank = 1;
+    if numel(unique(rigid_vertical_nodes)) >= 2
+        rigid_constraint_rank = 2;
+    end
+end
+if rigid_rotation_constrained && rigid_constraint_rank < 2
+    rigid_constraint_rank = rigid_constraint_rank + 1;
+end
+Beam.Modal.num_rigid_modes = 2 - rigid_constraint_rank;
 
 % Value to use in the diagonal element when the DOF is fixed
 Beam.BC.DOF_fixed_value = DOF_Original_value;

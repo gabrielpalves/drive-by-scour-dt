@@ -40,6 +40,78 @@ After a crashed process, recovery is explicit and non-destructive:
 
 from __future__ import annotations
 
+import os as _bootstrap_os
+import sys as _bootstrap_sys
+for _unsafe_python_path_variable in ("PYTHONPATH", "PYTHONHOME"):
+    if _unsafe_python_path_variable in _bootstrap_os.environ:
+        raise RuntimeError(
+            f"{_unsafe_python_path_variable} must be absent before benchmark "
+            "imports"
+        )
+
+_bootstrap_source_root = _bootstrap_os.path.abspath(
+    _bootstrap_os.path.dirname(__file__)
+)
+_bootstrap_first_path = _bootstrap_sys.path[0] or _bootstrap_os.getcwd()
+if (
+    _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
+        _bootstrap_first_path
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_first_path
+    ))
+    or _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_first_path
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_source_root
+    ))
+):
+    raise RuntimeError(
+        "reviewed repository root must be the canonical first import path"
+    )
+_bootstrap_guard_dir = _bootstrap_os.path.join(
+    _bootstrap_source_root, "campaign_import_guard"
+)
+_bootstrap_guard_init = _bootstrap_os.path.join(
+    _bootstrap_guard_dir, "__init__.py"
+)
+if (
+    not _bootstrap_os.path.isfile(_bootstrap_guard_init)
+    or _bootstrap_os.path.islink(_bootstrap_guard_init)
+    or _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
+        _bootstrap_guard_dir
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_guard_dir
+    ))
+    or any(
+        entry.casefold().startswith("__init__.")
+        and entry != "__init__.py"
+        for entry in _bootstrap_os.listdir(_bootstrap_guard_dir)
+    )
+):
+    raise RuntimeError(
+        "reviewed campaign import guard package is absent or ambiguous"
+    )
+_bootstrap_loaded_guard = _bootstrap_sys.modules.get("campaign_import_guard")
+if _bootstrap_loaded_guard is not None and (
+    _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        getattr(_bootstrap_loaded_guard, "__file__", "")
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_guard_init
+    ))
+    or getattr(_bootstrap_loaded_guard, "_BOUNDARY_ENFORCED", False) is not True
+):
+    raise RuntimeError(
+        "preloaded campaign import guard is not the reviewed enforced module"
+    )
+from campaign_import_guard import (  # noqa: E402
+    enforce_import_boundary as _enforce_import_boundary,
+)
+_enforce_import_boundary()
+
 import argparse
 from collections.abc import Mapping, Sequence
 import contextlib
@@ -77,6 +149,7 @@ DISCLAIMER_DETAIL = (
 BENCHMARK_SCHEMA = "ttbi-r11-compute-benchmark-v1"
 DESCRIPTOR_SCHEMA = "ttbi-r11-workload-benchmark-v1"
 DERIVATION_SCHEMA = "ttbi-r11-derived-workload-v1"
+FROZEN_R11_GEN_SCHEMA = "audit-2026-07-27-r11"
 STUDY_DATASET_NAME = "R11_NON_SCIENTIFIC_DERIVED_WORST_SIZE_WORKLOAD"
 STUDY_NAME_PREFIX = "BENCHMARK_ONLY_DO_NOT_PUBLISH__"
 
@@ -200,12 +273,15 @@ IMMUTABLE_EVIDENCE_FILES = (
 SOURCE_FILES = (
     "benchmark_r5_compute.py",
     "bundle_source_files.txt",
+    "campaign_import_guard/__init__.py",
     "check_benchmark_contract.py",
     "comprehensive_ablation_multidamage.py",
+    "core/__init__.py",
     "core/campaign_contract.py",
     "core/capacity_preflight.py",
     "core/dataset.py",
     "core/environment.py",
+    "core/environment_artifacts.py",
     "core/execution_environment.py",
     "core/hyperparameter_policy.py",
     "core/models.py",
@@ -219,6 +295,7 @@ SOURCE_FILES = (
     "plotting/confusion.py",
     "plotting/robustness_plots.py",
     "requirements-campaign-py313-cu128.txt",
+    "training/__init__.py",
     "training/pipeline.py",
     "training/robustness.py",
     "training/trainer.py",
@@ -288,6 +365,61 @@ HPO_REPORT_FIELDS = (
     "memory_complete",
 )
 
+HPO_COMPLETED_ENVELOPE_FIELDS = (
+    "schema",
+    "classification",
+    "status",
+    "descriptor_sha256",
+    "study_name",
+    "study_counts",
+    "active_wall_seconds_cumulative",
+    "checkpoint_files_removed",
+    "hpo_interruption_history",
+    "optuna_recovery_events",
+    "timing_complete",
+    "memory_complete",
+    "memory",
+    "adapter_calls",
+    "report",
+    "report_sha256",
+    "trial_compute_sha256",
+    "completed_utc",
+)
+
+BENCHMARK_SUMMARY_FIELDS = (
+    "schema",
+    "classification",
+    "classification_detail",
+    "status",
+    "descriptor_sha256",
+    "identity",
+    "command",
+    "environment",
+    "execution_attestation",
+    "capacity_preflight",
+    "hyperparameter_execution",
+    "runtime_output_directories",
+    "hashes",
+    "fixture",
+    "splits",
+    "study_compute",
+    "stale_trials_recovered_this_invocation",
+    "finalist_compute",
+    "active_compute_seconds_cumulative",
+    "cleanup",
+    "artifacts",
+)
+
+BENCHMARK_COMPLETION_STATE_FIELDS = (
+    "schema",
+    "classification",
+    "status",
+    "descriptor_sha256",
+    "completed_utc",
+    "summary",
+    "summary_sha256",
+)
+
 FINALIST_REPORT_FIELDS = (
     "schema",
     "classification",
@@ -330,6 +462,20 @@ FINALIST_REPORT_FIELDS = (
 
 class ContractError(RuntimeError):
     """A benchmark contract or immutable-input invariant was violated."""
+
+
+def _assert_legacy_r11_schema_boundary() -> None:
+    """Retire this frozen benchmark as soon as the live campaign moves on."""
+
+    from core.campaign_contract import EXPECTED_GEN_SCHEMA
+
+    if EXPECTED_GEN_SCHEMA != FROZEN_R11_GEN_SCHEMA:
+        raise ContractError(
+            "legacy R11 compute benchmark is retired: live generation schema "
+            f"is {EXPECTED_GEN_SCHEMA!r}, but this benchmark is frozen to "
+            f"{FROZEN_R11_GEN_SCHEMA!r}. Use benchmark_paper1_compute.py and "
+            "check_paper1_benchmark_contract.py for Paper-1 dispatch evidence."
+        )
 
 
 def _utc_now() -> str:
@@ -396,6 +542,9 @@ def _regular_file_snapshot(
             raise ContractError(f"{label} must not be a symbolic link: {path}")
         if not stat.S_ISREG(before.st_mode):
             raise ContractError(f"{label} is not a regular file: {path}")
+        if int(getattr(before, "st_nlink", 1)) != 1:
+            raise ContractError(
+                f"{label} must not have hard-link aliases: {path}")
         if before.st_size < 0 or before.st_size > max_bytes:
             raise ContractError(
                 f"{label} size {before.st_size} exceeds limit "
@@ -430,6 +579,7 @@ def _regular_file_snapshot(
         opened = os.fstat(descriptor)
         same_object = (
             stat.S_ISREG(opened.st_mode)
+            and int(getattr(opened, "st_nlink", 1)) == 1
             and opened.st_dev == before.st_dev
             and (
                 before.st_ino == 0
@@ -466,6 +616,7 @@ def _regular_file_snapshot(
 
     stable_metadata = (
         stat.S_ISREG(after.st_mode)
+        and int(getattr(after, "st_nlink", 1)) == 1
         and opened.st_dev == after.st_dev
         and opened.st_ino == after.st_ino
         and opened.st_size == after.st_size == byte_count
@@ -561,15 +712,10 @@ def _required_json_nonnegative_float(
     key: str,
 ) -> float:
     value = record.get(key)
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ContractError(
             f"JSON field {key!r} must be a finite non-negative number")
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ContractError(
-            f"JSON field {key!r} must be a finite non-negative number"
-        ) from exc
+    number = float(value)
     if not math.isfinite(number) or number < 0:
         raise ContractError(
             f"JSON field {key!r} must be a finite non-negative number")
@@ -856,6 +1002,72 @@ def _assert_sources_tracked_at_head(repo: Path) -> None:
         raise ContractError(
             "benchmark runtime sources must all be tracked and byte-equivalent "
             f"to HEAD after Git filters; failures: {failures}")
+
+
+def _assert_sources_match_commit(repo: Path, commit: str) -> None:
+    """Bind every live benchmark source byte to one retained Git commit."""
+
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{commit}^{{commit}}"],
+        cwd=repo,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if (
+        resolved.returncode != 0
+        or resolved.stdout.strip().lower() != commit
+    ):
+        raise ContractError(
+            f"tested benchmark source is not an exact local Git commit: {commit}")
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, "HEAD"],
+        cwd=repo,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if ancestor.returncode != 0:
+        raise ContractError(
+            "tested benchmark source commit is not an ancestor of HEAD")
+
+    failures: list[str] = []
+    for relative_text in SOURCE_FILES:
+        committed = subprocess.run(
+            ["git", "rev-parse", f"{commit}:{relative_text}"],
+            cwd=repo,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        working = subprocess.run(
+            [
+                "git", "hash-object", f"--path={relative_text}",
+                "--", relative_text,
+            ],
+            cwd=repo,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        committed_blob = committed.stdout.strip().lower()
+        working_blob = working.stdout.strip().lower()
+        if (
+            committed.returncode != 0
+            or working.returncode != 0
+            or not re.fullmatch(r"[0-9a-f]{40}", committed_blob)
+            or not re.fullmatch(r"[0-9a-f]{40}", working_blob)
+            or committed_blob != working_blob
+        ):
+            failures.append(relative_text)
+    if failures:
+        raise ContractError(
+            "benchmark runtime sources differ from the tested source commit "
+            f"after Git filters: {failures}")
 
 
 def _git_sha(repo: Path) -> str:
@@ -1593,8 +1805,18 @@ def _current_rss_bytes() -> int | None:
 
             counters = _ProcessMemoryCountersEx()
             counters.cb = ctypes.sizeof(counters)
-            process = ctypes.windll.kernel32.GetCurrentProcess()
-            ok = ctypes.windll.psapi.GetProcessMemoryInfo(
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            psapi = ctypes.WinDLL("psapi", use_last_error=True)
+            kernel32.GetCurrentProcess.argtypes = ()
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            psapi.GetProcessMemoryInfo.argtypes = (
+                wintypes.HANDLE,
+                ctypes.POINTER(_ProcessMemoryCountersEx),
+                wintypes.DWORD,
+            )
+            psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+            process = kernel32.GetCurrentProcess()
+            ok = psapi.GetProcessMemoryInfo(
                 process, ctypes.byref(counters), counters.cb
             )
             return int(counters.WorkingSetSize) if ok else None
@@ -1773,18 +1995,37 @@ class _ActiveWallHeartbeat:
             ) from self._error
 
 
-def _load_active_wall_checkpoint(
+def _validated_active_wall_checkpoint(
+    checkpoint: Mapping[str, Any],
     path: Path,
     descriptor_sha256: str,
-) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    checkpoint = _read_json_mapping(path, "active-wall heartbeat")
+) -> dict[str, Any]:
+    """Validate one already-captured active-wall checkpoint mapping."""
+
+    checkpoint = dict(checkpoint)
+    expected_fields = {
+        "schema",
+        "classification",
+        "status",
+        "descriptor_sha256",
+        "active_wall_seconds_cumulative",
+        "checkpoint_interval_seconds",
+        "pid",
+        "updated_utc",
+    }
+    if set(checkpoint) != expected_fields:
+        raise ContractError(
+            f"active-wall heartbeat fields differ: {path}")
     seconds = _required_json_nonnegative_float(
         checkpoint, "active_wall_seconds_cumulative")
     interval = _required_json_nonnegative_float(
         checkpoint, "checkpoint_interval_seconds")
     pid = _required_json_int(checkpoint, "pid", minimum=1)
+    try:
+        updated = datetime.fromisoformat(str(checkpoint.get("updated_utc")))
+    except ValueError as exc:
+        raise ContractError(
+            f"active-wall heartbeat UTC timestamp is invalid: {path}") from exc
     if (
         checkpoint.get("schema") != BENCHMARK_SCHEMA
         or checkpoint.get("classification") != DISCLAIMER
@@ -1792,7 +2033,8 @@ def _load_active_wall_checkpoint(
         or checkpoint.get("status") not in (
             "active", "completed", "interrupted")
         or interval <= 0
-        or not isinstance(checkpoint.get("updated_utc"), str)
+        or updated.tzinfo is None
+        or updated.utcoffset() != timezone.utc.utcoffset(None)
     ):
         raise ContractError(
             f"active-wall heartbeat identity/value differs: {path}")
@@ -1802,6 +2044,17 @@ def _load_active_wall_checkpoint(
         "checkpoint_interval_seconds": interval,
         "pid": pid,
     }
+
+
+def _load_active_wall_checkpoint(
+    path: Path,
+    descriptor_sha256: str,
+) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    checkpoint = _read_json_mapping(path, "active-wall heartbeat")
+    return _validated_active_wall_checkpoint(
+        checkpoint, path, descriptor_sha256)
 
 
 def _read_active_wall_checkpoint(
@@ -2416,7 +2669,7 @@ def _load_and_validate_fixture(
     )
     if not block_order_ok:
         raise ContractError(
-            "fixture is not ordered as 259 contiguous 50-passage state blocks"
+            "fixture is not ordered as 475 contiguous 50-passage state blocks"
         )
     groups = np.repeat(
         np.arange(N_STATES, dtype=np.int64),
@@ -2442,6 +2695,137 @@ def _load_and_validate_fixture(
             "full_finiteness_chunk_samples": FULL_FINITE_CHUNK_SAMPLES,
         },
     }
+
+
+def _validate_retained_benchmark_fixture(
+    np: Any,
+    fixture_snapshot: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Reopen and semantically authenticate the retained benchmark workload."""
+
+    roles = {
+        "source_features",
+        "source_labels",
+        "derived_features",
+        "derived_labels",
+        "derived_manifest",
+    }
+    if set(fixture_snapshot) != roles:
+        raise ContractError("retained benchmark fixture inventory differs")
+    paths = {
+        role: Path(str(fixture_snapshot[role]["path"])).resolve()
+        for role in roles
+    }
+    if len(set(paths.values())) != len(paths):
+        raise ContractError("retained benchmark fixture roles share a path")
+
+    source_paths = {
+        "features": paths["source_features"],
+        "labels": paths["source_labels"],
+    }
+    source_identity = _portable_file_identity({
+        "features": fixture_snapshot["source_features"],
+        "labels": fixture_snapshot["source_labels"],
+    })
+    validated_derived = _validate_derived_workload(
+        np,
+        paths["derived_manifest"].parent,
+        source_identity=source_identity,
+    )
+    expected_derived_paths = {
+        "features": paths["derived_features"],
+        "labels": paths["derived_labels"],
+        "manifest": paths["derived_manifest"],
+    }
+    if any(
+        validated_derived[key].resolve() != expected_derived_paths[key]
+        for key in expected_derived_paths
+    ):
+        raise ContractError(
+            "retained derived-workload manifest resolves to other files")
+
+    source_x = np.load(
+        source_paths["features"], mmap_mode="r", allow_pickle=False)
+    source_y = np.load(
+        source_paths["labels"], mmap_mode="r", allow_pickle=False)
+    fixture: dict[str, Any] | None = None
+    try:
+        if (
+            not isinstance(source_x, np.memmap)
+            or not isinstance(source_y, np.memmap)
+            or source_x.flags.writeable
+            or source_y.flags.writeable
+            or tuple(source_x.shape) != SOURCE_X_SHAPE
+            or tuple(source_y.shape) != SOURCE_Y_SHAPE
+            or source_x.dtype != np.dtype("float32")
+            or source_y.dtype != np.dtype("float32")
+        ):
+            raise ContractError(
+                "retained source arrays differ from the exact source contract")
+        source_labels = np.asarray(source_y).reshape(
+            SOURCE_N_STATES,
+            PASSAGES_PER_STATE,
+            SOURCE_Y_SHAPE[1],
+        )
+        if not np.array_equal(
+            source_labels,
+            np.broadcast_to(source_labels[:, :1, :], source_labels.shape),
+        ):
+            raise ContractError(
+                "retained source labels are not 50-passage state blocks")
+
+        fixture = _load_and_validate_fixture(
+            np,
+            {
+                "features": paths["derived_features"],
+                "labels": paths["derived_labels"],
+            },
+        )
+        for start in range(0, DEFAULT_X_SHAPE[0], FULL_FINITE_CHUNK_SAMPLES):
+            stop = min(
+                start + FULL_FINITE_CHUNK_SAMPLES, DEFAULT_X_SHAPE[0])
+            derived_indices = np.arange(start, stop, dtype=np.int64)
+            states = derived_indices // PASSAGES_PER_STATE
+            passages = derived_indices % PASSAGES_PER_STATE
+            source_indices = (
+                (states % SOURCE_N_STATES) * PASSAGES_PER_STATE + passages
+            )
+            source_features = np.asarray(source_x[source_indices])
+            source_targets = np.asarray(source_y[source_indices])
+            for channel, rule in enumerate(
+                    DERIVATION_RECIPE["feature_channels"]):
+                expected = (
+                    source_features[:, rule["source_channel"], :]
+                    * np.float32(rule["scale"])
+                )
+                if not np.array_equal(
+                    np.asarray(fixture["X"][start:stop, channel, :]),
+                    expected,
+                ):
+                    raise ContractError(
+                        "retained derived features differ from their recipe")
+            expected_targets = (
+                source_targets[:, 0],
+                source_targets[:, 1],
+                (source_targets[:, 0] + source_targets[:, 1])
+                * np.float32(0.5),
+                source_targets[:, 0],
+                source_targets[:, 1],
+            )
+            for head, expected in enumerate(expected_targets):
+                if not np.array_equal(
+                    np.asarray(fixture["y"][start:stop, head]), expected
+                ):
+                    raise ContractError(
+                        "retained derived labels differ from their recipe")
+        splits = _make_workload_splits(np, fixture["groups"])
+        return fixture, splits
+    except Exception:
+        _close_fixture(fixture)
+        raise
+    finally:
+        source_x._mmap.close()
+        source_y._mmap.close()
 
 
 def _close_fixture(fixture: Mapping[str, Any] | None) -> None:
@@ -4298,6 +4682,8 @@ def _completed_summary_if_valid(
     fixture_snapshot: Mapping[str, Mapping[str, Any]],
     source_hashes: Mapping[str, str],
     recover_torn_state: bool,
+    expected_summary_sha256: str | None = None,
+    expected_state_sha256: str | None = None,
 ) -> tuple[dict[str, Any] | None, bool]:
     """Authenticate an immutable receipt and, explicitly, repair its pointer.
 
@@ -4319,6 +4705,8 @@ def _completed_summary_if_valid(
         allow_missing=True,
     )
     if summary_snapshot is None:
+        if expected_summary_sha256 is not None:
+            raise ContractError("expected benchmark summary disappeared")
         state_snapshot = _regular_file_snapshot(
             state_path,
             "incomplete benchmark run state",
@@ -4336,6 +4724,12 @@ def _completed_summary_if_valid(
                 raise ContractError(
                     "run_state says completed but summary.json is missing")
         return None, False
+    if (
+        expected_summary_sha256 is not None
+        and summary_snapshot["sha256"] != expected_summary_sha256
+    ):
+        raise ContractError(
+            "benchmark summary differs from the caller's authenticated view")
     summary = _json_mapping_from_snapshot(
         summary_snapshot,
         summary_path,
@@ -4406,6 +4800,16 @@ def _completed_summary_if_valid(
         capture_bytes=True,
         allow_missing=True,
     )
+    if (
+        expected_state_sha256 is not None
+        and (
+            state_snapshot is None
+            or state_snapshot["sha256"] != expected_state_sha256
+        )
+    ):
+        raise ContractError(
+            "benchmark completion pointer differs from the caller's "
+            "authenticated view")
     state_read_error: Exception | None = None
     if state_snapshot is not None:
         try:
@@ -4491,6 +4895,1100 @@ def _completed_summary_if_valid(
     }
     _atomic_json(state_path, repaired_state)
     return summary, True
+
+
+def _bound_evidence_snapshot(
+    run_dir: Path,
+    summary: Mapping[str, Any],
+    name: str,
+    label: str,
+    *,
+    max_bytes: int,
+    capture_bytes: bool = False,
+) -> dict[str, Any]:
+    """Capture one artifact and bind that exact view to the summary root."""
+
+    hashes = summary.get("hashes")
+    immutable = (
+        hashes.get("immutable_evidence")
+        if isinstance(hashes, Mapping)
+        else None
+    )
+    expected = immutable.get(name) if isinstance(immutable, Mapping) else None
+    if (
+        not isinstance(expected, Mapping)
+        or set(expected) != {"size_bytes", "sha256"}
+    ):
+        raise ContractError(
+            f"benchmark summary lacks exact immutable evidence for {name}")
+    snapshot = _regular_file_snapshot(
+        run_dir / name,
+        label,
+        max_bytes=max_bytes,
+        capture_bytes=capture_bytes,
+    )
+    assert snapshot is not None
+    if _public_file_snapshot(snapshot) != dict(expected):
+        raise ContractError(
+            f"{label} differs from the authenticated summary evidence")
+    return snapshot
+
+
+def _bound_coordination_json(
+    run_dir: Path,
+    summary: Mapping[str, Any],
+    role: str,
+    directory_name: str,
+) -> tuple[Path, dict[str, Any], bytes]:
+    """Read one exact canonical coordination receipt from its summary record."""
+
+    hashes = summary.get("hashes")
+    coordination = (
+        hashes.get("coordination_receipts")
+        if isinstance(hashes, Mapping)
+        else None
+    )
+    record = coordination.get(role) if isinstance(coordination, Mapping) else None
+    if (
+        not isinstance(record, Mapping)
+        or set(record) != {"relative_path", "size_bytes", "sha256"}
+        or not isinstance(record.get("relative_path"), str)
+    ):
+        raise ContractError(
+            f"benchmark summary lacks exact {role} coordination evidence")
+    relative = Path(record["relative_path"])
+    path = (run_dir / relative).resolve()
+    expected_parent = (run_dir / directory_name).resolve()
+    if (
+        relative.is_absolute()
+        or path.parent != expected_parent
+        or not _is_within(path, run_dir)
+    ):
+        raise ContractError(f"{role} coordination receipt path escapes contract")
+    snapshot = _regular_file_snapshot(
+        path,
+        f"{role} coordination receipt",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+    )
+    assert snapshot is not None
+    if {
+        "relative_path": relative.as_posix(),
+        **_public_file_snapshot(snapshot),
+    } != dict(record):
+        raise ContractError(
+            f"{role} coordination receipt differs from summary evidence")
+    value = _json_mapping_from_snapshot(
+        snapshot, path, f"{role} coordination receipt")
+    return path, value, snapshot["bytes"]
+
+
+def _validate_benchmark_coordination_receipts(
+    run_dir: Path,
+    summary: Mapping[str, Any],
+    descriptor: Mapping[str, Any],
+    descriptor_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate execution/capacity receipts semantically, not only by hash."""
+
+    execution_environment = importlib.import_module(
+        "core.execution_environment")
+    capacity_preflight = importlib.import_module("core.capacity_preflight")
+    execution_path, execution, execution_bytes = _bound_coordination_json(
+        run_dir, summary, "execution_block", "execution_receipts")
+    expected_execution = {
+        "schema": execution_environment._RECEIPT_SCHEMA,
+        "execution_block": EXECUTION_BLOCK,
+        "anchor_stage": ANCHOR_STAGE,
+        "protocol_core_hash": _canonical_sha256(descriptor["core"]),
+        "run_tag": f"benchmark-{descriptor_sha256}",
+        "execution_runtime": execution.get("execution_runtime"),
+    }
+    if (
+        execution != expected_execution
+        or execution_bytes
+        != execution_environment._canonical_json_bytes(execution) + b"\n"
+    ):
+        raise ContractError("benchmark execution receipt differs from contract")
+    execution_runtime = execution_environment.validate_execution_runtime(
+        execution["execution_runtime"])
+    execution_sha256 = hashlib.sha256(execution_bytes).hexdigest()
+    execution_attestation = summary.get("execution_attestation")
+    if (
+        not isinstance(execution_attestation, Mapping)
+        or set(execution_attestation)
+        != {"runtime", "receipt_path", "receipt_sha256"}
+        or execution_attestation.get("runtime") != execution_runtime
+        or execution_attestation.get("receipt_path") != str(execution_path)
+        or execution_attestation.get("receipt_sha256") != execution_sha256
+    ):
+        raise ContractError(
+            "benchmark execution attestation differs from its receipt")
+
+    _capacity_path, capacity_raw, capacity_bytes = _bound_coordination_json(
+        run_dir, summary, "cuda_capacity", "capacity_receipts")
+    if capacity_bytes != capacity_preflight.canonical_json_bytes(capacity_raw):
+        raise ContractError("benchmark capacity receipt is not canonical JSON")
+    try:
+        capacity = capacity_preflight.validate_capacity_receipt(
+            capacity_raw,
+            expected_runtime=execution_runtime,
+        )
+    except Exception as exc:
+        raise ContractError(
+            "benchmark capacity receipt fails live validation") from exc
+    capacity_summary = summary.get("capacity_preflight")
+    if (
+        not isinstance(capacity_summary, Mapping)
+        or set(capacity_summary) != {
+            "receipt_sha256",
+            "envelope_file_sha256",
+            "policy_sha256",
+            "passed",
+        }
+        or capacity_summary.get("receipt_sha256")
+        != capacity["receipt_sha256"]
+        or capacity_summary.get("envelope_file_sha256")
+        != hashlib.sha256(capacity_bytes).hexdigest()
+        or capacity_summary.get("policy_sha256")
+        != capacity["receipt"]["policy_sha256"]
+        or capacity_summary.get("passed") is not True
+        or capacity["receipt"].get("passed") is not True
+    ):
+        raise ContractError(
+            "benchmark capacity summary differs from its validated receipt")
+    return execution_runtime, capacity
+
+
+def _validate_qualifying_completed_evidence(
+    run_dir: Path,
+    summary: Mapping[str, Any],
+    descriptor: Mapping[str, Any],
+    descriptor_sha256: str,
+    fixture: Mapping[str, Any],
+    splits: Mapping[str, Any],
+) -> None:
+    """Reopen every durable receipt and enforce production-shaped evidence."""
+
+    np = importlib.import_module("numpy")
+    optuna = importlib.import_module("optuna")
+    pipeline = importlib.import_module("training.pipeline")
+    inference = importlib.import_module("core.statistical_inference")
+    hyperparameter_policy = importlib.import_module(
+        "core.hyperparameter_policy")
+    execution_runtime, capacity_receipt = (
+        _validate_benchmark_coordination_receipts(
+            run_dir, summary, descriptor, descriptor_sha256)
+    )
+    if (
+        summary.get("fixture") != fixture.get("report")
+        or summary.get("splits") != splits.get("report")
+    ):
+        raise ContractError(
+            "benchmark summary fixture/split report is not reproducible")
+
+    hpo_path = run_dir / "hpo_compute.json"
+    hpo_snapshot = _bound_evidence_snapshot(
+        run_dir,
+        summary,
+        hpo_path.name,
+        "completed HPO compute receipt",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+    )
+    hpo_envelope = _json_mapping_from_snapshot(
+        hpo_snapshot, hpo_path, "completed HPO compute receipt")
+    if set(hpo_envelope) != set(HPO_COMPLETED_ENVELOPE_FIELDS):
+        raise ContractError("completed HPO envelope fields differ")
+    raw_hpo = hpo_envelope.get("report")
+    if not isinstance(raw_hpo, Mapping):
+        raise ContractError("completed HPO envelope report is not an object")
+    hpo = dict(raw_hpo)
+    if set(hpo) != set(HPO_REPORT_FIELDS):
+        raise ContractError("completed HPO report fields differ")
+    _assert_no_scientific_report_fields(hpo)
+    report_sha256 = str(hpo_envelope.get("report_sha256", "")).lower()
+    try:
+        parsed_completed = datetime.fromisoformat(
+            str(hpo_envelope.get("completed_utc")))
+    except ValueError as exc:
+        raise ContractError(
+            "completed HPO envelope completed_utc is invalid") from exc
+    if (
+        parsed_completed.tzinfo is None
+        or parsed_completed.utcoffset()
+        != timezone.utc.utcoffset(None)
+        or hpo_envelope.get("schema") != BENCHMARK_SCHEMA
+        or hpo_envelope.get("classification") != DISCLAIMER
+        or hpo_envelope.get("status") != "completed"
+        or hpo_envelope.get("descriptor_sha256") != descriptor_sha256
+        or hpo_envelope.get("study_name") != hpo.get("study_name")
+        or hpo_envelope.get("study_counts") != hpo.get("counts_after")
+        or hpo_envelope.get("active_wall_seconds_cumulative")
+        != hpo.get("hpo_active_wall_seconds_cumulative")
+        or hpo_envelope.get("checkpoint_files_removed")
+        != hpo.get("checkpoint_files_removed_during_hpo")
+        or hpo_envelope.get("hpo_interruption_history")
+        != hpo.get("hpo_interruption_history")
+        or hpo_envelope.get("optuna_recovery_events")
+        != hpo.get("optuna_recovery_events")
+        or hpo_envelope.get("timing_complete") != hpo.get("timing_complete")
+        or hpo_envelope.get("memory_complete") != hpo.get("memory_complete")
+        or hpo_envelope.get("memory") != hpo.get("memory")
+        or hpo_envelope.get("adapter_calls") != hpo.get("adapter_calls")
+        or hpo_envelope.get("trial_compute_sha256")
+        != hpo.get("trial_compute_sha256")
+        or not re.fullmatch(r"[0-9a-f]{64}", report_sha256)
+        or report_sha256 != _canonical_sha256(hpo)
+        or summary.get("study_compute") != hpo
+    ):
+        raise ContractError(
+            "completed HPO envelope/report/summary identity differs")
+
+    count_fields = {
+        "total", "useful", "complete", "pruned",
+        "failed", "running", "waiting",
+    }
+
+    def strict_counts(value: Any, label: str) -> dict[str, int]:
+        if not isinstance(value, Mapping) or set(value) != count_fields:
+            raise ContractError(f"{label} fields differ")
+        return {
+            key: _required_json_int(value, key)
+            for key in sorted(count_fields)
+        }
+
+    counts_before = strict_counts(hpo.get("counts_before"), "HPO counts_before")
+    counts_after = strict_counts(hpo.get("counts_after"), "HPO counts_after")
+    memory = _validated_memory_receipt(
+        hpo.get("memory"), "completed HPO receipt")
+    adapter_calls = _validated_adapter_calls(
+        hpo.get("adapter_calls"), "completed HPO receipt")
+    useful_duration_sum = _required_json_nonnegative_float(
+        hpo, "useful_trial_duration_seconds_sum")
+    hpo_wall = _required_json_nonnegative_float(
+        hpo, "hpo_wall_seconds_this_invocation")
+    active_wall = _required_json_nonnegative_float(
+        hpo, "hpo_active_wall_seconds_cumulative")
+    if (
+        any(counts_before[key] != 0 for key in count_fields)
+        or counts_after["total"] != USEFUL_TRIALS
+        or counts_after["useful"] != USEFUL_TRIALS
+        or counts_after["complete"] < 1
+        or counts_after["complete"] + counts_after["pruned"] != USEFUL_TRIALS
+        or any(
+            counts_after[key] != 0
+            for key in ("failed", "running", "waiting")
+        )
+        or _required_json_int(hpo, "useful_budget", minimum=1)
+        != USEFUL_TRIALS
+        or _required_json_int(hpo, "epoch_cap_per_trial", minimum=1) != EPOCHS
+        or hpo.get("resumed_with_existing_trials") is not False
+        or hpo.get("timing_complete") is not True
+        or hpo.get("memory_complete") is not True
+        or hpo.get("hpo_interruption_history") != []
+        or hpo.get("optuna_recovery_events") != []
+        or hpo.get(
+            "stale_inflight_trial_numbers_recovered_this_invocation") != []
+        or hpo.get("all_stale_trial_numbers_recovered") != []
+        or hpo.get("adapter_calls_scope") != "this invocation"
+        or adapter_calls != {
+            "get_cache": USEFUL_TRIALS,
+            "canonical_split": USEFUL_TRIALS,
+        }
+        or memory is None
+        or any(
+            not isinstance(value, int) or value <= 0
+            for value in memory.values()
+        )
+        or useful_duration_sum <= 0
+        or hpo_wall <= 0
+        or active_wall <= 0
+        or active_wall + 1e-9 < hpo_wall
+        or _required_json_nonnegative_float(
+            hpo, "active_wall_checkpoint_interval_seconds")
+        != ACTIVE_WALL_HEARTBEAT_SECONDS
+        or _required_json_nonnegative_float(
+            hpo, "nominal_unrecorded_tail_seconds_per_abrupt_stop")
+        != ACTIVE_WALL_HEARTBEAT_SECONDS
+        or _required_json_int(
+            hpo, "checkpoint_files_removed_during_hpo") < 0
+    ):
+        raise ContractError(
+            "completed HPO receipt is not one clean 100-trial first attempt")
+
+    hpo_heartbeat_path = run_dir / "active_wall_heartbeat.json"
+    hpo_heartbeat_snapshot = _bound_evidence_snapshot(
+        run_dir,
+        summary,
+        hpo_heartbeat_path.name,
+        "completed HPO active-wall heartbeat",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+    )
+    hpo_heartbeat = _validated_active_wall_checkpoint(
+        _json_mapping_from_snapshot(
+            hpo_heartbeat_snapshot,
+            hpo_heartbeat_path,
+            "completed HPO active-wall heartbeat",
+        ),
+        hpo_heartbeat_path,
+        descriptor_sha256,
+    )
+    if (
+        hpo_heartbeat["status"] != "completed"
+        or hpo_heartbeat["checkpoint_interval_seconds"]
+        != ACTIVE_WALL_HEARTBEAT_SECONDS
+        or not math.isclose(
+            hpo_heartbeat["active_wall_seconds_cumulative"],
+            active_wall,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+    ):
+        raise ContractError("completed HPO heartbeat differs from its report")
+
+    trial_path = run_dir / "trial_compute.csv"
+    trial_snapshot = _bound_evidence_snapshot(
+        run_dir,
+        summary,
+        trial_path.name,
+        "completed HPO trial receipt",
+        max_bytes=REPORT_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+    )
+    if hpo.get("trial_compute_sha256") != trial_snapshot["sha256"]:
+        raise ContractError("HPO receipt does not bind the trial CSV bytes")
+
+    sqlite_path = run_dir / "study_receipt.sqlite3"
+    sqlite_before = _bound_evidence_snapshot(
+        run_dir,
+        summary,
+        sqlite_path.name,
+        "immutable completed Optuna receipt",
+        max_bytes=SQLITE_SNAPSHOT_MAX_BYTES,
+    )
+    sqlite_uri = f"{sqlite_path.resolve().as_uri()}?mode=ro&immutable=1"
+    expected_tables = {
+        "alembic_version",
+        "studies",
+        "study_directions",
+        "study_system_attributes",
+        "study_user_attributes",
+        "trial_heartbeats",
+        "trial_intermediate_values",
+        "trial_params",
+        "trial_system_attributes",
+        "trial_user_attributes",
+        "trial_values",
+        "trials",
+        "version_info",
+    }
+    try:
+        with contextlib.closing(
+            sqlite3.connect(sqlite_uri, uri=True)
+        ) as connection:
+            if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                raise ContractError("immutable Optuna receipt quick_check failed")
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise ContractError(
+                    "immutable Optuna receipt foreign keys are inconsistent")
+            tables = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            version_rows = connection.execute(
+                "SELECT version_info_id, schema_version, library_version "
+                "FROM version_info"
+            ).fetchall()
+    except sqlite3.Error as exc:
+        raise ContractError("cannot validate immutable Optuna receipt") from exc
+    if (
+        tables != expected_tables
+        or version_rows != [(1, 12, metadata.version("optuna"))]
+        or metadata.version("optuna") != "4.3.0"
+    ):
+        raise ContractError(
+            "immutable Optuna schema/version differs from pinned production")
+
+    optuna_url = (
+        "sqlite:///file:"
+        + sqlite_path.resolve().as_posix()
+        + "?mode=ro&immutable=1&uri=true"
+    )
+    storage = optuna.storages.RDBStorage(url=optuna_url)
+    try:
+        study_name = f"{STUDY_NAME_PREFIX}{descriptor_sha256[:16]}"
+        study_summaries = optuna.study.get_all_study_summaries(storage=storage)
+        if (
+            len(study_summaries) != 1
+            or study_summaries[0].study_name != study_name
+            or len(study_summaries[0].directions) != 1
+            or study_summaries[0].directions[0].name != "MINIMIZE"
+        ):
+            raise ContractError(
+                "immutable Optuna receipt does not contain one expected study")
+        study = optuna.load_study(study_name=study_name, storage=storage)
+        hyperparameter_execution = summary.get("hyperparameter_execution")
+        if not isinstance(hyperparameter_execution, Mapping):
+            raise ContractError(
+                "benchmark summary lacks hyperparameter execution record")
+        plan = hyperparameter_execution.get("validated_run_plan")
+        if not isinstance(plan, Mapping):
+            raise ContractError(
+                "benchmark summary lacks validated run plan")
+        config = _build_config(
+            descriptor,
+            descriptor_sha256,
+            execution_runtime,
+            campaign_run_tag=f"benchmark-{descriptor_sha256}",
+            execution_receipt_sha256=summary[
+                "execution_attestation"
+            ]["receipt_sha256"],
+        )
+        try:
+            stored_plan, stored_capacity = (
+                pipeline._validated_study_hyperparameter_record(study, config)
+            )
+            hyperparameter_policy.validate_terminal_study(study, dict(plan))
+        except Exception as exc:
+            raise ContractError(
+                "immutable Optuna protocol/capacity record is invalid") from exc
+        expected_contract_attr = {
+            "schema": BENCHMARK_SCHEMA,
+            "classification": DISCLAIMER,
+            "descriptor_sha256": descriptor_sha256,
+            "reporting": (
+                "compute/provenance fields only; scientific values are not "
+                "exported"
+            ),
+        }
+        protocol_record = study.user_attrs.get("ttbi_protocol_record")
+        if (
+            set(study.user_attrs) != {
+                "ttbi_protocol_record",
+                "ttbi_capacity_preflight_receipt",
+                "r11_compute_contract",
+            }
+            or study.user_attrs.get("r11_compute_contract")
+            != expected_contract_attr
+            or not isinstance(protocol_record, Mapping)
+            or protocol_record.get("dataset") != STUDY_DATASET_NAME
+            or protocol_record.get("epochs") != EPOCHS
+            or protocol_record.get("sampler_seed") != SEED
+            or protocol_record.get("n_trials") != USEFUL_TRIALS
+            or protocol_record.get("use_pruner") is not USE_PRUNER
+            or stored_plan != dict(plan)
+            or stored_capacity != capacity_receipt
+        ):
+            raise ContractError(
+                "immutable Optuna study attributes differ from production")
+
+        trials = sorted(study.trials, key=lambda item: item.number)
+        if (
+            [trial.number for trial in trials] != list(range(USEFUL_TRIALS))
+            or _study_counts(optuna, study) != counts_after
+        ):
+            raise ContractError(
+                "immutable Optuna trial identities/counts differ")
+        terminal_states = {
+            optuna.trial.TrialState.COMPLETE,
+            optuna.trial.TrialState.PRUNED,
+        }
+        for trial in trials:
+            steps = sorted(int(step) for step in trial.intermediate_values)
+            if (
+                trial.state not in terminal_states
+                or trial.duration is None
+                or not math.isfinite(trial.duration.total_seconds())
+                or trial.duration.total_seconds() <= 0
+                or trial.datetime_start is None
+                or trial.datetime_complete is None
+                or not trial.params
+                or not steps
+                or steps[0] < 0
+                or steps[-1] >= EPOCHS
+                or any(
+                    not math.isfinite(float(value))
+                    for value in trial.intermediate_values.values()
+                )
+                or trial.value is None
+                or not math.isfinite(float(trial.value))
+            ):
+                raise ContractError(
+                    f"Optuna trial {trial.number} lacks production evidence")
+
+        expected_rows = _trial_compute_rows(study, descriptor_sha256)
+        if (
+            _csv_rows_sha256(expected_rows, TRIAL_CSV_FIELDS)
+            != trial_snapshot["sha256"]
+        ):
+            raise ContractError(
+                "trial CSV is not the exact projection of the Optuna study")
+        useful_durations = [
+            float(row["duration_seconds"]) for row in expected_rows
+        ]
+        useful_epochs = [
+            int(row["epochs_reported"]) for row in expected_rows
+        ]
+        if (
+            not math.isclose(
+                sum(useful_durations),
+                useful_duration_sum,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            or hpo.get("useful_trial_duration_seconds_quantiles")
+            != _quantile_summary(np, useful_durations)
+            or _required_json_int(
+                hpo, "useful_epochs_reported_sum", minimum=1)
+            != sum(useful_epochs)
+            or hpo.get("useful_epochs_reported_quantiles")
+            != _quantile_summary(np, useful_epochs)
+        ):
+            raise ContractError(
+                "HPO timing/epoch summaries are not reproducible from study")
+
+        runtime = {"optuna": optuna, "inference": inference}
+        selected, refit_epochs, selected_parameter_sha256 = (
+            _select_complete_trial(runtime, study)
+        )
+        finalist_path = run_dir / "finalist_compute.json"
+        finalist_snapshot = _bound_evidence_snapshot(
+            run_dir,
+            summary,
+            finalist_path.name,
+            "completed finalist receipt",
+            max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+            capture_bytes=True,
+        )
+        finalist = _json_mapping_from_snapshot(
+            finalist_snapshot, finalist_path, "completed finalist receipt")
+        finalist_identity = {
+            "schema": BENCHMARK_SCHEMA,
+            "classification": DISCLAIMER,
+            "descriptor_sha256": descriptor_sha256,
+            "selected_trial_number": int(selected.number),
+            "selected_parameter_sha256": selected_parameter_sha256,
+            "frozen_checkpoint_epoch_count": int(refit_epochs),
+            "helper": "training.trainer.fit_predict_finalist_fold",
+        }
+        finalist = _validated_finalist_marker(finalist, finalist_identity)
+        folds = inference.repeated_stratified_group_folds(
+            fixture["groups"],
+            splits["development_idx"],
+            ["workload"] * N_STATES,
+            n_splits=FINALIST_N_SPLITS,
+            n_repeats=FINALIST_N_REPEATS,
+            seed=FINALIST_SPLIT_SEED,
+        )
+        matching = [
+            fold for fold in folds
+            if fold.repeat == FINALIST_REPEAT and fold.fold == FINALIST_FOLD
+        ]
+        if len(matching) != 1:
+            raise ContractError("cannot reproduce the registered finalist fold")
+        fold = matching[0]
+        expected_fold = {
+            "train_state_count": int(len(fold.train_states)),
+            "validation_state_count": int(len(fold.val_states)),
+            "train_sample_count": int(len(fold.train_idx)),
+            "validation_sample_count": int(len(fold.val_idx)),
+            "train_states_sha256": _index_sha256(np, fold.train_states),
+            "validation_states_sha256": _index_sha256(np, fold.val_states),
+        }
+        finalist_elapsed = _required_json_nonnegative_float(
+            finalist, "scale_train_infer_seconds")
+        finalist_active = _required_json_nonnegative_float(
+            finalist, "active_wall_seconds_cumulative")
+        finalist_memory = _validated_memory_receipt(
+            finalist.get("memory"), "completed finalist receipt")
+        if (
+            summary.get("finalist_compute") != finalist
+            or any(
+                finalist.get(key) != value
+                for key, value in expected_fold.items()
+            )
+            or _required_json_int(
+                finalist, "selected_trial_number") != int(selected.number)
+            or _required_json_int(
+                finalist, "frozen_checkpoint_epoch_count", minimum=1)
+            != int(refit_epochs)
+            or finalist["attempt_count"] != 1
+            or finalist["prior_unaccepted_attempt_count"] != 0
+            or finalist["timing_complete"] is not True
+            or finalist["memory_complete"] is not True
+            or finalist["durably_accepted_refits"] != 1
+            or finalist_elapsed <= 0
+            or finalist_active + 1e-9 < finalist_elapsed
+            or finalist_memory is None
+            or any(
+                not isinstance(value, int) or value <= 0
+                for value in finalist_memory.values()
+            )
+        ):
+            raise ContractError(
+                "finalist receipt is not the clean deterministic first refit")
+
+        attempt_path = run_dir / "finalist_attempt_state.json"
+        attempt_snapshot = _bound_evidence_snapshot(
+            run_dir,
+            summary,
+            attempt_path.name,
+            "completed finalist attempt state",
+            max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+            capture_bytes=True,
+        )
+        attempt = _json_mapping_from_snapshot(
+            attempt_snapshot,
+            attempt_path,
+            "completed finalist attempt state",
+        )
+        expected_attempt_fields = {
+            *finalist_identity,
+            "status",
+            "attempt_count",
+            "prior_unaccepted_attempt_count",
+            "active_wall_seconds_cumulative",
+            "completion_marker",
+            "completed_utc",
+        }
+        attempt_active = _required_json_nonnegative_float(
+            attempt, "active_wall_seconds_cumulative")
+        if (
+            set(attempt) != expected_attempt_fields
+            or any(
+                attempt.get(key) != value
+                for key, value in finalist_identity.items()
+            )
+            or attempt.get("status") != "completed"
+            or _required_json_int(attempt, "attempt_count", minimum=1) != 1
+            or _required_json_int(
+                attempt, "prior_unaccepted_attempt_count") != 0
+            or attempt.get("completion_marker") != finalist_path.name
+            or attempt.get("completed_utc") != finalist["completed_utc"]
+            or not math.isclose(
+                attempt_active,
+                finalist_active,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+        ):
+            raise ContractError(
+                "finalist attempt state differs from its receipt")
+
+        finalist_heartbeat_path = (
+            run_dir / "finalist_active_wall_heartbeat.json")
+        finalist_heartbeat_snapshot = _bound_evidence_snapshot(
+            run_dir,
+            summary,
+            finalist_heartbeat_path.name,
+            "completed finalist active-wall heartbeat",
+            max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+            capture_bytes=True,
+        )
+        finalist_heartbeat = _validated_active_wall_checkpoint(
+            _json_mapping_from_snapshot(
+                finalist_heartbeat_snapshot,
+                finalist_heartbeat_path,
+                "completed finalist active-wall heartbeat",
+            ),
+            finalist_heartbeat_path,
+            descriptor_sha256,
+        )
+        if (
+            finalist_heartbeat["status"] != "completed"
+            or finalist_heartbeat["checkpoint_interval_seconds"]
+            != ACTIVE_WALL_HEARTBEAT_SECONDS
+            or not math.isclose(
+                finalist_heartbeat["active_wall_seconds_cumulative"],
+                finalist_active,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+        ):
+            raise ContractError(
+                "finalist heartbeat differs from its receipt")
+    finally:
+        storage.remove_session()
+        storage.engine.dispose()
+
+    sqlite_after = _bound_evidence_snapshot(
+        run_dir,
+        summary,
+        sqlite_path.name,
+        "immutable completed Optuna receipt after semantic validation",
+        max_bytes=SQLITE_SNAPSHOT_MAX_BYTES,
+    )
+    if sqlite_before != sqlite_after:
+        raise ContractError("immutable Optuna receipt changed during validation")
+    active_compute = _required_json_nonnegative_float(
+        summary, "active_compute_seconds_cumulative")
+    if not math.isclose(
+        active_compute,
+        active_wall + finalist_active,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        raise ContractError(
+            "benchmark active-compute total differs from HPO plus finalist")
+
+
+def verify_completed_receipt(
+    run_dir: str | os.PathLike[str],
+    tested_source_commit: str,
+    *,
+    repo: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Independently revalidate one retained qualifying benchmark receipt."""
+
+    if not re.fullmatch(r"[0-9a-f]{40}", tested_source_commit):
+        raise ContractError("tested benchmark source must be 40 lowercase hex")
+    module_root = Path(__file__).resolve().parent
+    root = (
+        Path(repo).resolve()
+        if repo is not None
+        else module_root
+    )
+    if root != module_root:
+        raise ContractError(
+            "benchmark verifier repo must be the checkout that loaded this "
+            "verifier module")
+    _assert_sources_match_commit(root, tested_source_commit)
+    path = Path(run_dir)
+    if not path.is_absolute():
+        raise ContractError("benchmark evidence directory must be absolute")
+    path = path.resolve()
+    try:
+        directory_stat = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ContractError(
+            f"cannot inspect benchmark evidence directory: {path}") from exc
+    if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(
+            directory_stat.st_mode):
+        raise ContractError(
+            f"benchmark evidence directory is not a real directory: {path}")
+
+    descriptor_path = path / "descriptor.json"
+    descriptor_snapshot = _regular_file_snapshot(
+        descriptor_path,
+        "benchmark descriptor receipt",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+    )
+    assert descriptor_snapshot is not None
+    descriptor_payload = _json_mapping_from_snapshot(
+        descriptor_snapshot, descriptor_path, "benchmark descriptor receipt")
+    if set(descriptor_payload) != {
+        "schema", "classification", "descriptor_sha256", "descriptor"
+    }:
+        raise ContractError("benchmark descriptor receipt fields differ")
+    descriptor = descriptor_payload.get("descriptor")
+    if not isinstance(descriptor, Mapping):
+        raise ContractError("benchmark descriptor payload is not an object")
+    descriptor_sha256 = _canonical_sha256(descriptor)
+    source_hashes = _source_hashes(root)
+    if (
+        descriptor_payload["schema"] != BENCHMARK_SCHEMA
+        or descriptor_payload["classification"] != DISCLAIMER
+        or descriptor_payload["descriptor_sha256"] != descriptor_sha256
+        or descriptor.get("git_sha") != tested_source_commit
+        or descriptor.get("source_sha256") != source_hashes
+        or not isinstance(descriptor.get("core"), Mapping)
+        or descriptor["core"].get("source_sha256") != source_hashes
+    ):
+        raise ContractError(
+            "benchmark descriptor is not bound to tested source/runtime bytes")
+
+    summary_path = path / "summary.json"
+    summary_snapshot = _regular_file_snapshot(
+        summary_path,
+        "benchmark summary",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+    )
+    assert summary_snapshot is not None
+    summary = _json_mapping_from_snapshot(
+        summary_snapshot, summary_path, "benchmark summary")
+    state_path = path / "run_state.json"
+    state_snapshot = _regular_file_snapshot(
+        state_path,
+        "benchmark completion state",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+        capture_bytes=True,
+    )
+    assert state_snapshot is not None
+    state = _json_mapping_from_snapshot(
+        state_snapshot, state_path, "benchmark completion state")
+    identity = summary.get("identity")
+    hashes = summary.get("hashes")
+    command = summary.get("command")
+    if (
+        set(summary) != set(BENCHMARK_SUMMARY_FIELDS)
+        or set(state) != set(BENCHMARK_COMPLETION_STATE_FIELDS)
+        or not isinstance(identity, Mapping)
+        or set(identity) != {
+            "git_sha",
+            "git_tracked_dirty_at_start",
+            "hostname",
+            "run_id",
+            "run_directory",
+        }
+        or not isinstance(hashes, Mapping)
+        or set(hashes) != {
+            "descriptor_sha256",
+            "source_before",
+            "source_after",
+            "fixture_before",
+            "fixture_after",
+            "study_storage",
+            "coordination_receipts",
+            "immutable_evidence",
+        }
+        or not isinstance(command, Mapping)
+        or set(command) != {
+            "argv",
+            "rendered",
+            "cwd",
+            "this_invocation_started_utc",
+            "this_invocation_measurement_completed_utc",
+            "wall_seconds_before_summary_publication",
+            "wall_clock_semantics",
+        }
+    ):
+        raise ContractError("benchmark summary lacks identity/hash mappings")
+    expected_run_id = (
+        f"{tested_source_commit}-{identity.get('hostname')}-r11c-"
+        f"{descriptor_sha256[:12]}"
+    )
+    expected_artifacts = {
+        "descriptor": "descriptor.json",
+        "study": "study.sqlite3",
+        "immutable_study_receipt": "study_receipt.sqlite3",
+        "trial_compute": "trial_compute.csv",
+        "hpo_compute": "hpo_compute.json",
+        "active_wall_heartbeat": "active_wall_heartbeat.json",
+        "finalist_compute": "finalist_compute.json",
+        "finalist_attempt_state": "finalist_attempt_state.json",
+        "finalist_active_wall_heartbeat":
+            "finalist_active_wall_heartbeat.json",
+        "summary": "summary.json",
+    }
+    try:
+        started_utc = datetime.fromisoformat(
+            str(command.get("this_invocation_started_utc")))
+        completed_utc = datetime.fromisoformat(
+            str(command.get("this_invocation_measurement_completed_utc")))
+    except ValueError as exc:
+        raise ContractError(
+            "benchmark summary command timestamps are invalid") from exc
+    command_wall = _required_json_nonnegative_float(
+        command, "wall_seconds_before_summary_publication")
+    if (
+        summary.get("schema") != BENCHMARK_SCHEMA
+        or summary.get("classification") != DISCLAIMER
+        or summary.get("classification_detail") != DISCLAIMER_DETAIL
+        or summary.get("status") != "completed"
+        or summary.get("descriptor_sha256") != descriptor_sha256
+        or hashes.get("descriptor_sha256") != descriptor_sha256
+        or identity.get("git_sha") != tested_source_commit
+        or identity.get("run_directory") != str(path)
+        or identity.get("git_tracked_dirty_at_start") is not False
+        or not isinstance(identity.get("hostname"), str)
+        or not identity["hostname"]
+        or not re.fullmatch(r"[a-z0-9._-]{1,48}", identity["hostname"])
+        or identity.get("run_id") != expected_run_id
+        or path.name != expected_run_id
+        or summary.get("stale_trials_recovered_this_invocation") != []
+        or summary.get("artifacts") != expected_artifacts
+        or state.get("schema") != BENCHMARK_SCHEMA
+        or state.get("classification") != DISCLAIMER
+        or state.get("status") != "completed"
+        or state.get("descriptor_sha256") != descriptor_sha256
+        or state.get("summary") != summary_path.name
+        or state.get("summary_sha256") != summary_snapshot["sha256"]
+        or state.get("completed_utc")
+        != command.get(
+            "this_invocation_measurement_completed_utc")
+        or started_utc.tzinfo is None
+        or completed_utc.tzinfo is None
+        or started_utc.utcoffset() != timezone.utc.utcoffset(None)
+        or completed_utc.utcoffset() != timezone.utc.utcoffset(None)
+        or completed_utc <= started_utc
+        or command_wall <= 0
+    ):
+        raise ContractError("benchmark summary tested-source identity differs")
+    fixture_record = hashes.get("fixture_before")
+    if (
+        not isinstance(fixture_record, Mapping)
+        or set(fixture_record) != {
+            "source_features",
+            "source_labels",
+            "derived_features",
+            "derived_labels",
+            "derived_manifest",
+        }
+    ):
+        raise ContractError("benchmark fixture receipt inventory differs")
+    actual_fixture: dict[str, dict[str, Any]] = {}
+    for role, record in fixture_record.items():
+        if (
+            not isinstance(record, Mapping)
+            or set(record) != {"path", "size_bytes", "mtime_ns", "sha256"}
+            or not isinstance(record.get("path"), str)
+            or isinstance(record.get("mtime_ns"), bool)
+            or not isinstance(record.get("mtime_ns"), int)
+            or record["mtime_ns"] < 0
+        ):
+            raise ContractError(f"benchmark fixture {role} record differs")
+        fixture_path = Path(record["path"])
+        if not fixture_path.is_absolute():
+            raise ContractError(f"benchmark fixture {role} path is relative")
+        captured = _regular_file_snapshot(
+            fixture_path,
+            f"benchmark fixture {role}",
+            max_bytes=SQLITE_SNAPSHOT_MAX_BYTES,
+        )
+        assert captured is not None
+        actual_fixture[role] = {
+            "path": str(fixture_path.resolve()),
+            "size_bytes": int(captured["size_bytes"]),
+            "mtime_ns": int(record.get("mtime_ns", -1)),
+            "sha256": str(captured["sha256"]),
+        }
+    expected_descriptor = _descriptor(
+        git_sha=tested_source_commit,
+        fixture_before=actual_fixture,
+        source_hashes=source_hashes,
+    )
+    if dict(descriptor) != expected_descriptor:
+        raise ContractError(
+            "benchmark descriptor is not the exact registered workload")
+    immutable = hashes.get("immutable_evidence")
+    if (
+        not isinstance(immutable, Mapping)
+        or set(immutable) != set(IMMUTABLE_EVIDENCE_FILES)
+        or immutable.get(descriptor_path.name)
+        != _public_file_snapshot(descriptor_snapshot)
+    ):
+        raise ContractError(
+            "benchmark descriptor differs from immutable summary evidence")
+
+    np = importlib.import_module("numpy")
+    fixture, splits = _validate_retained_benchmark_fixture(
+        np, actual_fixture)
+    try:
+        validated, repaired = _completed_summary_if_valid(
+            path,
+            hyperparameter_policy=importlib.import_module(
+                "core.hyperparameter_policy"),
+            descriptor_sha256=descriptor_sha256,
+            protocol_core_sha256=_canonical_sha256(descriptor["core"]),
+            git_sha=tested_source_commit,
+            run_id=str(identity["run_id"]),
+            fixture_snapshot=actual_fixture,
+            source_hashes=source_hashes,
+            recover_torn_state=False,
+            expected_summary_sha256=str(summary_snapshot["sha256"]),
+            expected_state_sha256=str(state_snapshot["sha256"]),
+        )
+        if (
+            validated is None
+            or repaired
+            or validated != summary
+        ):
+            raise ContractError("benchmark receipt is not durably completed")
+        _validate_qualifying_completed_evidence(
+            path,
+            validated,
+            descriptor,
+            descriptor_sha256,
+            fixture,
+            splits,
+        )
+        active_compute = _required_json_nonnegative_float(
+            validated, "active_compute_seconds_cumulative")
+        if active_compute <= 0 or active_compute > command_wall + 1e-9:
+            raise ContractError(
+                "benchmark active-compute time is inconsistent with total "
+                "invocation wall time")
+    finally:
+        _close_fixture(fixture)
+
+    final_summary_snapshot = _regular_file_snapshot(
+        summary_path,
+        "benchmark summary after semantic validation",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+    )
+    final_state_snapshot = _regular_file_snapshot(
+        state_path,
+        "benchmark completion state after semantic validation",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+    )
+    final_descriptor_snapshot = _regular_file_snapshot(
+        descriptor_path,
+        "benchmark descriptor after semantic validation",
+        max_bytes=JSON_SNAPSHOT_MAX_BYTES,
+    )
+    assert final_summary_snapshot is not None
+    assert final_state_snapshot is not None
+    assert final_descriptor_snapshot is not None
+    if (
+        _public_file_snapshot(final_summary_snapshot)
+        != _public_file_snapshot(summary_snapshot)
+        or _public_file_snapshot(final_state_snapshot)
+        != _public_file_snapshot(state_snapshot)
+        or _public_file_snapshot(final_descriptor_snapshot)
+        != _public_file_snapshot(descriptor_snapshot)
+    ):
+        raise ContractError(
+            "benchmark descriptor/summary/state changed during validation")
+    fixture_paths = {
+        role: Path(record["path"])
+        for role, record in actual_fixture.items()
+    }
+    final_fixture_snapshot: dict[str, dict[str, Any]] = {}
+    for role, fixture_path in fixture_paths.items():
+        captured = _regular_file_snapshot(
+            fixture_path,
+            f"benchmark fixture {role} after semantic validation",
+            max_bytes=SQLITE_SNAPSHOT_MAX_BYTES,
+        )
+        assert captured is not None
+        final_fixture_snapshot[role] = {
+            "path": str(fixture_path.resolve()),
+            "size_bytes": int(captured["size_bytes"]),
+            "mtime_ns": int(actual_fixture[role]["mtime_ns"]),
+            "sha256": str(captured["sha256"]),
+        }
+    if not _snapshot_equal(
+        actual_fixture, final_fixture_snapshot
+    ):
+        raise ContractError("benchmark fixture changed during validation")
+    if _source_hashes(root) != source_hashes:
+        raise ContractError(
+            "benchmark runtime source bytes changed during validation")
+    _assert_sources_match_commit(root, tested_source_commit)
+
+    evidence_root_sha256 = _canonical_sha256({
+        "source": validated["hashes"]["source_before"],
+        "fixture": validated["hashes"]["fixture_before"],
+        "study_storage": validated["hashes"]["study_storage"],
+        "coordination_receipts":
+            validated["hashes"]["coordination_receipts"],
+        "immutable_evidence":
+            validated["hashes"]["immutable_evidence"],
+    })
+    return {
+        "schema": "ttbi-r11-benchmark-authorization-evidence-v1",
+        "status": "PASS",
+        "tested_source_commit": tested_source_commit,
+        "descriptor_sha256": descriptor_sha256,
+        "evidence_root_sha256": evidence_root_sha256,
+        "summary_sha256": str(summary_snapshot["sha256"]),
+        "run_state_sha256": str(state_snapshot["sha256"]),
+        "run_directory": str(path),
+    }
 
 
 def _descriptor(
@@ -4700,6 +6198,7 @@ def _print_banner() -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _assert_legacy_r11_schema_boundary()
     args = _parser().parse_args(argv)
     _print_banner()
     started_utc = _utc_now()

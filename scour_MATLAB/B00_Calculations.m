@@ -69,7 +69,7 @@ Track.Rail.Modal.w = [zeros(Track.Rail.Modal.num_rigid_modes,1),Beam.Modal.w(1:2
 
 % ---- Complete Model ----
 % System matrices (Damage carries the per-passage TRACK-LAYER descriptors —
-% Damage.track: ballast patches / hanging sleepers / pad aging+failures)
+% Damage.track: ballast patches / hanging sleepers / pad condition+failures)
 disp('Building model system matrices ...')
 [Model] = B54_ModelMatrices(Beam,Track,Calc,Damage);
 % Model boundary conditions

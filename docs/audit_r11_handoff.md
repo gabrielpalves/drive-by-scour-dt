@@ -1,159 +1,285 @@
-# R11 audit handoff
+# R11 scientific-audit handoff — 2026-08-01
 
-**Status: DISPATCH BLOCKED (2026-07-27).**
+> **STATUS: NOT READY — DO NOT CREATE COMMIT A.**
+>
+> No unresolved P0 was found in the current technical implementation. The
+> working tree nevertheless has open P1 scientific-claim, semantic-source,
+> immutable-registration, and tracked-snapshot blockers. The green checks below
+> establish convergence of this working tree only; they are not evidence bound
+> to a clean commit and do not authorize generation or dispatch.
 
-This is a reviewer handoff, not an authorization record. No scientific R11
-generation, ablation, qualifying commit-A benchmark, or bundle dispatch has
-started. A historical non-scientific timing benchmark at commit `a0793a1`
-remains useful only as workload evidence; it cannot qualify the converged R11
-source. The authoritative authorization file remains the legacy-named
-`docs/audit_r5_results.md`.
+## 1. Audited snapshot
 
-## Frozen scientific contract
+- Current HEAD: `865728f801c83a642b06a223f2a22b33f2b429b7`.
+- `git status --short --untracked-files=all`: 334 entries (73 modified and 261
+  untracked) before this handoff/review update.
+- Required bundle plus manuscript-source union: 443 files. Of these, 182 are
+  regular tracked blobs in HEAD and 261 are absent from HEAD.
+- `git ls-files paper1` returns no files; all 14 paper-source files are
+  currently untracked.
+- The Codex review did not edit any `.tex` file.
 
-- Ten rungs in two independent physical blocks: L60 (`s0` anchor, 450 states)
-  and L99.6 (`s21` anchor, 475 states), with 50 passages per semantic state.
-- Fixed family inventories, semantic `StateUID`, collision-gated SHA-derived
-  `StateSeedID`, UID-named random streams, common random numbers, and one exact
-  state-grouped 60/20/20 split within each geometry.
-- Free HPO only on the full eight-DOF anchor controls:
-  4 architectures × 3 seeds × 100 trials independently at `s0` and `s21`.
-  Every response-subset or non-anchor-search candidate and every follower uses
-  one authenticated singleton trial; `FAIL` and OOM are fatal and no
-  Optuna-trial retry/replacement is allowed.
-- Each rung is retrained. The primary paired inference is the exact seven-edge
-  L60 joint-family analysis with 100,000 state-first bootstrap replicates and
-  Bonferroni familywise intervals. L99.6 is blockwise; `s0` to `s21` is
-  descriptive only.
-- The full-array benchmark runner is implemented and contract-guarded despite
-  its legacy filename, `benchmark_r5_compute.py`. Its authenticated workload is
-  475 states × 50 passages × 8 channels × 512 segments with five heads, one
-  100-trial anchor HPO study, and exactly one shared finalist-CV refit. The
-  heavy execution remains pending and must be bound to clean commit A. A
-  qualifying run requires zero Optuna `FAIL`/OOM and no Optuna-trial retry or
-  replacement. Its accepted shared refit must be a clean first attempt:
-  `attempt_count=1`, `prior_unaccepted_attempt_count=0`,
-  `timing_complete=true`, and `memory_complete=true`. A refit recovered through
-  `--recover-stale` is preserved as interrupted evidence but is nonqualifying
-  for authorization and timing.
+The current authenticated-source snapshot, reasserted after capture, is:
 
-## Implemented deltas
+- reviewed manifest: 429 entries;
+- generator root: 297 files,
+  `c34ba6d6ab166b79b2b9e6e6e45fd5ef29d952f5aa43b2a755ba8e2dd9820b3f`;
+- Python-runtime root: 124 files,
+  `a5d3815db9fdc85dc8ca77626938de07ebcb2a6d362d1f7b79ebb0b625a2c35c`.
 
-- Exact MATLAB R2025b Update 5 numerical-stack and source-byte firewall;
-  fail-closed working-directory, resume, qualification, and loader boundaries.
-- Durable source/runtime/policy-bound execution and CUDA-capacity receipts,
-  block-local HPO manifests and champions, strict terminal-state accounting,
-  and fatal OOM/`FAIL`.
-- The champion manifest carries `frozen_selection_sha256`; the anchor prints
-  its canonical SHA-256, and every follower must pin that exact value through
-  `TTBI_BLOCK_REFERENCE_SHA256`. The behavioral gate accepts the exact pin and
-  rejects a different registered architecture, another valid pair, a rehashed
-  foreign capacity receipt, and extra manifest fields.
-- The cross-rung analyzer independently requires that external block-reference
-  trust root. Every study and downstream artifact carries the exact
-  `campaign_run_tag`, `execution_receipt_sha256`, and
-  `block_reference_manifest_sha256` lineage (explicit null only where the
-  anchor contract requires it). Champion, frozen-selection, deployment,
-  finalist-CV, and protocol evidence is published create-once or through the
-  one registered monotonic null-to-digest transition.
-- Full semantic family-table serialization and independent MATLAB-to-Python
-  round-trip verification.
-- State-grouped selection/test firewall, frozen finalist CV, artifact and cache
-  provenance, weighted five-head loss, and registered cross-rung analyzer.
-- Genuine R11 benchmark derivation/stamping and lightweight contract guards.
-- Stale root bundle ZIPs are staged for deletion and recoverably quarantined
-  under `stale_pre_r11_bundles/`. No replacement bundle has been built.
-  Local untracked raw/cache content under `results/Stage1/` and
-  `results/Stage2/` is ignored and does not enter delta A; the few historical
-  files already tracked there remain unchanged.
+These hashes identify the present dirty working tree. They are not a substitute
+for a clean commit identifier.
 
-## Pre-commit evidence already obtained
+## 2. Technical P1 closures independently accepted
 
-These are working-tree convergence checks. They must not be represented as
-commit-A evidence if source changes invalidate them.
+### 2.1 Endpoint bytes, identity, and publication
 
-- MATLAB `smoke_stage3`: **PASS**, 421 s.
-- MATLAB `smoke_geometry`: **PASS**, 1393.1 s.
-- MATLAB/Python raw parity: **PASS**, reported discrepancy `1.437e-13`.
-- Generation contract mutation suite: **PASS**, all 107 injected mutations
-  rejected, including a same-value literal substitution and assignment- or
-  definition-based runtime rebinds of the canonical protocol schema tag.
-- Adversarial release/host comparison suite: **PASS**, 111 checks in 488.125 s.
-- MATLAB: `smoke_audit`, `smoke_contact_closure`,
-  `smoke_b54_overlap_parity`, `smoke_crn_state_design`,
-  `smoke_r11_provenance_serialization`, and `smoke_familytable`: **PASS**.
-- Python family-table round trip: **PASS**, 12/12.
-- Python HPO, capacity, execution-blocking, source,
-  environment-lock, loader, artifact, cache, protocol-hash, split-grouping,
-  PAA, sensor-noise pairing, weighted-head loss, statistical-inference, and
-  cross-rung-inference checks: **PASS**.
-- Current focused counts: execution blocking **65/65**, cross-rung inference
-  **54/54**, and benchmark contract **33/33**.
-- Campaign-control functional subchecks: **PASS**. The campaign-control checker
-  as a whole is **not PASS pre-commit**: its separate “regular tracked Git blob”
-  assertion remains intentionally red until the new R11 sources become blobs
-  in commit A.
-- R4 mutation guards: **PASS**, 23/23 mutations rejected across artifact,
-  statistical, and environment groups, with isolated-tree byte restoration and
-  every real-tree mutation target byte-unchanged.
-- Training-policy mutation guards now register 17 mutations. Their final
-  commit-bound rerun is deliberately pending until commit A, because one
-  baseline is the tracked-blob campaign gate.
-- Benchmark contract checker and Python compilation checks: **PASS**.
+The release comparator now binds parsing to the authenticated member bytes and
+reasserts every endpoint digest and the content root before returning a verdict.
+The mutation probes pin the intended guard diagnostics rather than merely
+requiring some later defence-in-depth check to fail.
 
-The earlier 35-state × 3-passage `s0_scour` laptop micro (27 min 32 s)
-predates source convergence and covers one host and one stage. It is useful
-integration/timing evidence only and is not a final qualification run.
+Publication/resume paths reassert source and destination identities around
+material mutations, reject stale credentials and unexpected inventory, and use
+exclusive publication. Aggregate qualification reruns every retained pair
+comparison; dispatch has permanent behavioural mutations for edge
+revalidation. The former P2-a and P2-b findings are therefore closed.
 
-## Remaining dispatch blockers, in order
+### 2.2 MATLAB execution closure and OneDrive/NTFS identity
 
-1. Finish the integrated source review and quiescent-tree regression, then
-   create clean source commit A. Against A, rerun the full mutation harnesses
-   and every source-sensitive/commit-bound preflight required by the
-   authorization record, including the tracked-blob campaign gate.
-2. Run the genuine R11 heavy benchmark on A: exactly 100 registered anchor
-   trials, exactly one durably accepted shared CV refit, zero `FAIL`, zero OOM,
-   and zero Optuna-trial retry/replacement. The refit must be a clean first
-   attempt with `attempt_count=1`, `prior_unaccepted_attempt_count=0`,
-   `timing_complete=true`, and `memory_complete=true`; a recovered interrupted
-   refit cannot authorize dispatch or supply qualifying timing. Record timing
-   and provenance, never objective or prediction values.
-3. On every intended MATLAB generation host, derive and execute fresh from A
-   the three segregated qualification micros for `s0_scour`, `s16_all`, and
-   `s23_all4`. Use stable distinct `TTBI_QUALIFICATION_HOST_ID` values and
-   retain every authenticated host receipt. This is qualification, not
-   scientific campaign generation.
-4. Compare corresponding stage outputs across the required independent hosts
-   and explicitly accept each required
-   `matlab-environment-qualification-receipt-v4`; comparator success alone is
-   insufficient.
-5. Give commit A, benchmark evidence, host receipts, comparison receipts, and
-   this handoff to Claude for an independent audit.
-6. If and only if every gate passes, make report-only commit B by changing only
-   `docs/audit_r5_results.md` relative to A.
-7. Build and hash one fresh ten-bundle set from B. Do not reuse or overlay any
-   pre-R11 bundle or result directory.
+Static and explicitly reviewed dynamic MATLAB dependencies are included in the
+execution closure. Worker processes attest the source they actually execute;
+shadowing, missing modules, unexpected modules, aliases, and links fail closed.
 
-## Claim and manuscript boundaries
+On this OneDrive tree, Java NIO returns a null `basic:fileKey`. The new Windows
+fallback invokes the absolute System32 `fsutil.exe` via `ProcessBuilder` (no
+shell), applies a 10 s timeout, accepts exactly one non-sentinel 128-bit file
+identifier, and binds it to a volume identity observed before and after. The
+generator and contact implementations are separated into small named helpers.
+Direct checks agreed on ordinary-file identity and reported a hard-link count
+of one. The final generation-worker smoke exercised and rejected the hard-link,
+shadow, stale-credential, resume, and publication probes.
 
-- Scour is modeled vertical support-stiffness loss, not scour-hole depth.
-  Bearing fixity is a nominal design variable. Crack is uniform
-  damaged-element `EI` loss, not Sinha. Hanging sleepers are a linear
-  support-removal approximation. Wheel flats are excluded.
-- `all_mult` is a symmetric multiplicative response-noise stress, not a
-  datasheet sensor model. The study ranks modeled response channels/DOFs, not
-  physical sensor count, mount, package, technology, or globally optimal
-  placement.
-- The registered output supports continuous estimation and conditional
-  most-damaged-pier localisation. It does not support detection, POD,
-  sensitivity/specificity, calibrated damage probability, or minimum
-  detectable severity without a development-locked binary threshold.
-- Rung-specific retraining estimates achievable rung-specific performance; it
-  is not zero-shot transfer or out-of-distribution robustness.
-- Bootstrap intervals are finite-design state-resampling uncertainty
-  conditional on the fixed anchor/LHS design, not field-population coverage.
-- The paper remains blocked until every citation placeholder is replaced by a
-  verified primary source, the exact Cantero/TTBI and Fernandes implementation
-  versions are identified, and the physical-parameter and terminology tables
-  are reconciled with those sources. These are manuscript blockers even after
-  software dispatch authorization.
+### 2.3 Host-claim boundary
+
+The documentation and code headers now limit host evidence to self-attested
+diagnostics plus retained-artifact integrity under a trusted-operator model.
+They no longer claim that coherent fabrication by an operator is impossible.
+This is the defensible boundary for the present academic campaign.
+
+### 2.4 Readability and modularity at P1
+
+`A00_Run.m` is now a 328-line orchestration script with no local functions.
+The `+ttbi` package contains 98 `.m` files; each has one function and a purpose
+header. The contact implementation contains 112 `contact_*.m` files with the
+same one-function/purpose-header property. The Python contact checker is a
+296-line entry module with one top-level function and imports domain-specific
+modules.
+
+The historical 35-state × 3-passage refactor oracle compared 3,444 leaves,
+9,130,944 numeric values (9,124,430 signal values), with only the expected
+source-root field differing. That is appropriate evidence for the two roots it
+compared. The final current-tree generation-worker smoke supplies additional
+current-root execution evidence; neither test validates the scientific priors.
+
+The verifier split correctly authenticates and reasserts the complete verifier
+module root rather than only its entry file. Missing-module, shadow, inventory,
+and live-drift mutations pass fail-closed checks.
+
+### 2.5 Handoff
+
+The former handoff was stale and is replaced by this document. This closes the
+technical handoff P1, but not the scientific and release blockers below.
+
+## 3. P1 blockers before commit A
+
+### P1-S1 — Exact simulator laws exceed their source support
+
+The manuscript still presents exact laws collectively as modelling priors
+assembled from field evidence, although the evidence supports only mechanism
+plausibility or contextual bounds. The manuscript must classify each of the
+following individually as an author-chosen stress-test prior or engineering
+proxy, not as an empirically fitted population law:
+
+- ballast occurrence `1.2/100 m`, extent `U(5,20) m`, wet/dry probability 0.5,
+  the exact dry/wet ranges, and the threefold wet-density multiplier;
+- hanging-sleeper occurrence `3/100 m`, `DU{1,...,5}`, 60% single-sided and the
+  3:1 side ratio;
+- pad Weibull shape/scale `(1.8, 2.2)`, damping multiplier `[0.8,1.2]`, and
+  prevalence `p=0.02`;
+- crack Bernoulli activation `p=0.25`;
+- the exact OOR triplet and any other exact distribution without an identified
+  fitting dataset.
+
+“Pad aging” is not supported because the model has no age or time axis; this is
+service-condition variability. Patch extent may be contextualized by surveys
+but the exact `U(5,20)` law was not fitted to them. The present campaign is not
+an immutable “released campaign specification” until the deposit exists.
+
+Direct source inspection found:
+
+- Williams et al. (2014) is a lateral-load/insulator investigation and does not
+  support a 0.5% annual pad-failure incidence;
+- Lundqvist and Dahlberg examine a single 1 mm gap and report large adjacent
+  force/displacement effects, not a universal count distribution;
+- the RAILCON paper does not fit `DU{1,...,5}` or establish five universal
+  critical sleepers;
+- Shi et al. sweep 0, 1, 3, and 5 unsupported sleepers; three is often the worst
+  case, and five is not a universal critical limit.
+
+### P1-S2 — Statistical “conservative” language is unproved
+
+The seven-edge tail-adjusted result is a wider descriptive sensitivity envelope.
+It is not a confidence interval, a familywise-error-controlled procedure, or a
+formally conservative inferential guarantee. Remaining generic “conservative”
+claims in the introduction, data-processing, results, conclusion, and
+limitations must be narrowed accordingly.
+
+### P1-S3 — Semantic citation/source graph is open
+
+The syntactic BibTeX graph is closed: 61 used keys, 61 unique definitions, no
+missing keys, unused entries, or duplicates. It is not semantically closed.
+
+Essential local sources not yet connected to the corresponding manuscript
+claims include Esmaeili (2017), Wangtawesap (2023), Kitahara (2024),
+Lazarevic/RAILCON (2016), Siahkouhi (2025), Oregui (2016), Sainz-Aja (2020),
+and Woo and Park (2017). FRA ORD-22/01, FRA RR22-32, RIVAS (2013), and Shi
+(2024) are additionally required wherever their associated claims are retained.
+
+Conversely, the cited keys `garg1984dynamics`, `sadeghi2018gpr`,
+`selig1994track`, `chrismer2018fouling`, `husoy2024defects`, and
+`musgrave2024ballast` lack an identifiable local source artifact. Exact-source
+placeholders remain for the Cantero/Zhai implementation provenance and the
+Fernandes PAA method; the Zhai BibTeX note still says `VERIFY`. TTB-2D
+provenance exists in repository notices but is not propagated to the manuscript.
+
+### P1-S4 — No immutable protocol registration
+
+There is no real, dated OSF/Zenodo protocol locator. Methodology files being
+source-locked inside a mutable working tree and a promised future data DOI are
+not protocol registration. Finalize the protocol only after the text and source
+graph converge, deposit it immutably, insert the real locator/date, and re-audit
+that exact pre-commit tree.
+
+### P1-R1 — Required files are not a clean tracked snapshot
+
+Commit A cannot be created from the present 73-modified/261-untracked tree.
+All 443 required bundle and manuscript files must be regular tracked blobs, and
+the clean-tree/commit-bound gates must be rerun after the scientific corrections
+and immutable locator are present.
+
+## 4. Downstream qualification blocker (after A, not a pre-A excuse)
+
+The frozen lock requires MATLAB `25.2.0.3177638` (R2025b Update 5). The installed
+R2025b is `25.2.0.3312555` (Update 6, 2026-06-30). Do not retarget the lock to
+make this host pass. On the final tree, `smoke_contact_closure` traversed the
+closure and stopped at the intended exact-stack gate:
+
+`Closure qualification requires the exact locked MATLAB R2025b Update 5 numerical stack.`
+
+This mismatch does not prevent finishing the pre-A manuscript and snapshot
+work. It does prevent this host from supplying the exact post-A MATLAB
+qualification receipt.
+
+The following also remain downstream of a clean commit A:
+
+- a fresh, genuine 100-trial benchmark started from zero;
+- real complete-graph host/endpoint qualification receipts and retained pair
+  comparisons;
+- contact closure over the authorized real datasets;
+- final dispatch authorization and the scientific campaign itself.
+
+Synthetic/micro gates prove enforcement logic, not completion of these real
+campaign steps.
+
+## 5. Final current-tree evidence
+
+The following source-sensitive tests were rerun on the converged tree and count
+only when they ran without overlap from another live-source mutation harness:
+
+| Check | Result |
+|---|---|
+| `smoke_generation_worker` | PASS, 1,092.3 s; real one-state/one-passage ProcessPool execution, 8,806 integration steps, worker attestation, resume and adversarial boundary probes |
+| `check_generation_release_comparison.py` | PASS, 1,824.073 s, 158 explicit PASS cases |
+| `check_qualification_receipt_inventory.py` | PASS, 1,184.822 s, 75 explicit PASS cases; H=2 complete graph with 3 retained pair receipts |
+| `check_dispatch_authorization.py` | PASS, 4.780 s, 63 PASS and one symlink-privilege N/A |
+| `check_artifact_provenance.py` | PASS, 59.230 s, 52 PASS |
+| `check_contact_closure_gate.py` | PASS, 273.5 s; complete 327-case synthetic gate |
+| `check_generation_refactor_equivalence.py` | PASS, 41.7 s |
+| `check_source_provenance.py` | PASS, 145.623 s |
+| `check_import_path_guard.py` | PASS, 3.846 s |
+| `check_environment_lock.py` | PASS, 234.862 s; validates the lock policy, not that Update 6 equals Update 5 |
+| `check_loader_provenance.py` | PASS, 189.3 s |
+| `check_protocol_hash.py` | PASS, 229.9 s |
+| `check_generation_contract.py` | PASS, 175 generation plus 13 damage mutations |
+| `check_profile_pad_contract.py` | PASS, 21 mutations |
+
+PAA, sensor-noise, split-grouping, statistical-inference, track-prior, weighted
+head-MSE, benchmark-contract, cache-provenance, capacity, cross-rung,
+execution-blocking, family-table, and hyperparameter checks also passed during
+this convergence. Python compilation passed for all 122 manifested `.py` files,
+and `git diff --check` passed apart from line-ending warnings.
+
+Expected non-green states remain:
+
+- `check_campaign_controls.py`: every check passes except the required regular
+  tracked-blob gate (443 required, 182 tracked, 261 missing);
+- `check_training_policy_mutation_guards.py`: correctly rejects the dirty,
+  non-commit-bound tree;
+- `check_raw_parity.py`: N/A until real data and MATLAB output exist.
+
+The full R4 29/29 mutation suite passed before the final diagnostic/doc-only
+patches, but was not rerun afterward. It must be rerun from clean commit A.
+
+### Execution rule for mutation harnesses
+
+Several checkers deliberately mutate live source and restore it. Run those
+harnesses one at a time with a quiescent tree. During this audit, parallel
+execution caused one checker to observe another checker's intended temporary
+mutation and fail closed. Such overlapped results were discarded and rerun
+serially. Heavy read-only suites may run in parallel only when no live-source
+mutation harness is active.
+
+## 6. P2 readability queue
+
+The principal modularity objection is no longer P1. Literal one-function-per-
+file cleanup remains for production files with local helpers:
+
+- `save_progress.m` (7 functions);
+- `B54_ModelMatrices.m` (4);
+- `B65_DynamicCalcCoupledFaster.m`, `B65_DynamicCalcCoupled.m`,
+  `A04_Options.m`, `B19_GenerateProfile.m`, `B00_Calculations.m`, and
+  `B09_BeamFrq.m` (2 each).
+
+Several smokes also contain local helpers. Larger single-purpose functions such
+as `campaign_setup.m` should be split only where responsibilities are genuinely
+independent. Preserve simple call sites, one clear purpose per file, and comments
+that explain scientific decisions rather than restating syntax. Any additional
+source refactor should happen before commit A, followed by the same equivalence
+and source-sensitive checks.
+
+## 7. Required sequence
+
+Before A:
+
+1. Correct the `.tex` claim boundaries and statistical wording.
+2. Close the semantic source graph and remove all source placeholders.
+3. Finalize and immutably deposit the protocol; insert its real locator/date.
+4. Re-audit the exact text, citations, source inventory, and protocol hash.
+5. Make all 443 required files regular tracked blobs and obtain a clean tree.
+
+Commit A:
+
+6. Create one commit containing the converged code, manifest, documentation,
+   immutable locator, bibliography, and manuscript sources.
+7. Run every commit-bound and source-sensitive gate serially; reject any drift.
+
+After A:
+
+8. Qualify on the exact locked Update 5 stack.
+9. Run the fresh 100-trial benchmark and retain its complete evidence.
+10. Build and revalidate the real complete host graph.
+11. Run real-data contact closure, then final dispatch authorization.
+12. Only then start the scientific campaign.
+
+Until steps 1–5 are complete: **NOT READY; do not create commit A.**

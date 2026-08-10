@@ -31,14 +31,26 @@ import torch
 from sklearn.model_selection import train_test_split
 
 from core.campaign_contract import (
+    EXPECTED_CHANNEL_SCHEMA_ID,
     EXPECTED_GENERATION_BEHAVIOR_VERSION,
     EXPECTED_GEN_SCHEMA,
+    EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
+    EXPECTED_RAIL_END_CLEARANCE_M,
     campaign_stage_contract,
     generation_config_expectations,
 )
 from core.environment import (
     load_environment_lock,
     matlab_environment_descriptor,
+)
+from core.generation_state_contract import (
+    STATE_DATA_FIELDS,
+    STATE_TOP_LEVEL_FIELDS,
+    require_canonical_state_names,
+    require_exact_fields,
+    validate_bearing_fixity,
+    validate_contact_log,
+    validate_raw_metadata,
 )
 from core.source_provenance import (
     generator_source_root,
@@ -158,31 +170,33 @@ from core.preprocessing import TTBIPreprocessor
 
 # Contact-validity gate (audit R5 2026-07-17; recalibrated 2026-07-19 at first
 # campaign dispatch; F-tier recalibrated AGAIN 2026-07-22 on the second observed
-# event). The solver couples wheel and rail BILATERALLY, so brief wheel
-# unloading past zero shows up as small spurious TENSION instead of a few-ms
-# separation + re-contact. Two regimes, two-tier gate:
-#   * TOLERATED (logged, reported): brief micro-unloading — peak tension a
-#     small fraction of the ~118 kN static wheel load, on a tiny fraction of
-#     the path. Observed events (both physically plausible superposition
-#     tails; censoring/resampling them would MNAR-bias exactly the severe
-#     cases the paper is about):
+# event). The solver couples wheel and rail BILATERALLY and has no
+# separation/re-contact state. Every positive reaction is therefore an
+# out-of-domain tensile artifact, not a simulated physical contact event.
+# The fixed two-tier gate is a prospectively source-locked engineering admissibility
+# envelope, not a literature-validated separation criterion:
+#   * TOLERATED (logged, reported): bounded tensile artifact — peak tension a
+#     limited fraction of the ~118 kN static wheel load, on a tiny fraction of
+#     the path. The historical observations used to calibrate the envelope
+#     were:
 #       - s23_all4 state 24 (60% scour + FRA-4 + track damage + poly OOR):
 #         6.4 kN (5.4% static) on 0.042% of samples.
 #       - s15_track state 244 (50%/13% scour + track damage): 13.4 kN (11.4%
 #         static) on 0.063% of samples — ONE sample at dt=1 ms, on the track
-#         portion (off-bridge; the void rung is DESIGNED to hammer the contact
-#         patch, so its unloading tail is naturally heavier).
-#   * FATAL (physics regression): tension beyond 20% of static (24 kN, ~1.8x
+#         portion (off-bridge).
+#   * INADMISSIBLE: tension beyond 20% of static (24 kN, ~1.8x
 #     the worst observed event) OR sustained tension (> 0.2% of path samples)
 #     OR non-finite. The known true regressions sit far above: the R3
 #     profile-seam bug gave 170 kN (144% of static); wheel flats exceed the
 #     uplift threshold 12-38x. Watch item unchanged: an event of tens of kN
-#     or sustained means the tail is heavier than believed -> revisit
-#     (unilateral contact vs censor-with-report), do NOT raise again.
+#     or sustained requires revisiting the model/domain decision
+#     (unilateral contact vs explicit exclusion), not another threshold raise.
+# A separate exhaustive qualification gate must demonstrate time-step and
+# waveform closure for this finite numerical design before dispatch.
 # The generator (A00 F_CONTACT_TOL_N / F_CONTACT_FRACTOL) enforces the SAME
 # two-tier rule per passage at generation time; values must stay identical.
-_CONTACT_F_TOL_N  = 24000.0  # FATAL above this peak tension [N] (20% static)
-_CONTACT_FRAC_TOL = 0.002    # FATAL above this fraction of path samples in tension
+_CONTACT_F_TOL_N  = 24000.0  # INADMISSIBLE above this peak tension [N] (20% static)
+_CONTACT_FRAC_TOL = 0.002    # INADMISSIBLE above this path fraction
 _re_state = re.compile(r'\d{4}\.mat$')   # NNNN.mat state-file matcher
 
 # Payload-validation tolerances (audit R7 P4).
@@ -196,6 +210,7 @@ _CROP_RAGGED_TOL = 4        # max samples the per-passage crop may differ by
 # them, or with a different value, aborts — so pre-audit or R2/R3 data can never
 # silently enter the pipeline. Must equal A00_Run.m's gen_schema exactly.
 _EXPECTED_GEN_SCHEMA = EXPECTED_GEN_SCHEMA
+_EXPECTED_CHANNEL_SCHEMA_ID = EXPECTED_CHANNEL_SCHEMA_ID
 _EXPECTED_GENERATION_BEHAVIOR_VERSION = (
     EXPECTED_GENERATION_BEHAVIOR_VERSION
 )
@@ -230,10 +245,33 @@ N_SEGMENTS      = 512    # PAA segment count (TTBIPreprocessor)
 NOISE_RNG_SEED  = 42     # load-time sensor-noise RNG (deterministic rebuilds)
 LOAD_N_PASSAGES = 200    # passage cap requested from the loader (manifest npass
                          # is authoritative; the loader enforces exact ==)
-CACHE_SCHEMA_TAG = "_gs7"  # R11: semantic StateUID/StateSeedID identity,
-                           # UID-stable cross-rung split, and UID-bound cache
-                           # provenance.  Pre-gs7 scalers used row-sensitive
-                           # assignments and must never be reused.
+CACHE_SCHEMA_TAG = "_gs9"  # R12/v8: physical8_v1 wheelset channels plus the
+                           # R11 UID-stable split/cache provenance. Pre-gs9
+                           # caches contain the legacy virtual-rail DOFs 3-4.
+
+
+_PHYSICAL8_DOF_SOURCE = {
+    0: ('AcelPrimVag',         0),
+    1: ('AcelPrimVag',         1),
+    2: ('AcelPrimVag',         2),
+    3: ('AcelWheelsetPrimVag', 0),
+    4: ('AcelWheelsetPrimVag', 1),
+    5: ('PitchPrimVag',        0),
+    6: ('PitchPrimVag',        1),
+    7: ('PitchPrimVag',        2),
+}
+
+
+def _resolve_dof_source(channel_schema_id: str) -> dict[int, tuple[str, int]]:
+    """Resolve deployed DOFs only after authenticating the manifest schema."""
+
+    if channel_schema_id != _EXPECTED_CHANNEL_SCHEMA_ID:
+        raise RuntimeError(
+            f"unsupported channel_schema_id={channel_schema_id!r}; expected "
+            f"{_EXPECTED_CHANNEL_SCHEMA_ID!r}. Regenerate from the reviewed "
+            "physical8_v1 source instead of guessing a channel mapping."
+        )
+    return _PHYSICAL8_DOF_SOURCE
 
 
 # ── Feature A (2026-07-19): state families + stratified grouped split ────────
@@ -342,11 +380,18 @@ def load_ttbi_dataset(
         0  CarBody_Vert      <- AcelPrimVag[0]
         1  FrontBogie_Vert   <- AcelPrimVag[1]
         2  RearBogie_Vert    <- AcelPrimVag[2]
-        3  Wheel1_Vert       <- AcelRodaPrimVag[0]
-        4  Wheel2_Vert       <- AcelRodaPrimVag[1]
-        5  CarBody_Pitch      <- PitchPrimVag[0]
-        6  FrontBogie_Pitch   <- PitchPrimVag[1]
-        7  RearBogie_Pitch    <- PitchPrimVag[2]
+        3  Wheel1_Vert*      <- AcelWheelsetPrimVag[0]
+        4  Wheel2_Vert*      <- AcelWheelsetPrimVag[1]
+        5  CarBody_Pitch      <- PitchPrimVag[0] (angular velocity)
+        6  FrontBogie_Pitch   <- PitchPrimVag[1] (angular velocity)
+        7  RearBogie_Pitch    <- PitchPrimVag[2] (angular velocity)
+
+    ``Wheel1_Vert`` and ``Wheel2_Vert`` are frozen public identifiers. Under
+    ``physical8_v1`` they carry the idealized model-predicted constrained-
+    wheelset acceleration along the moving contact coordinate, used as an
+    axle-box response proxy. It is not an instrument model or a measured
+    axle-box signal. The legacy Eulerian rail-field diagnostic remains stored
+    in ``AcelRodaPrimVag`` but is not a deployed DOF.
 
     Args:
         filepath       (str):       Sub-folder name inside 'data/'.
@@ -369,22 +414,15 @@ def load_ttbi_dataset(
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"Dataset folder not found: {dataset_path}")
 
-    # DOF index -> (field_name, row_index) inside the MATLAB struct
-    _DOF_SOURCE = {
-        0: ('AcelPrimVag',     0),
-        1: ('AcelPrimVag',     1),
-        2: ('AcelPrimVag',     2),
-        3: ('AcelRodaPrimVag', 0),
-        4: ('AcelRodaPrimVag', 1),
-        5: ('PitchPrimVag',    0),
-        6: ('PitchPrimVag',    1),
-        7: ('PitchPrimVag',    2),
-    }
+    # Legacy single-output files do not have case_info provenance. They may use
+    # only the current deployed mapping; multi-output production below resolves
+    # this mapping from its authenticated case_info.channel_schema_id.
+    dof_source = _resolve_dof_source(_EXPECTED_CHANNEL_SCHEMA_ID)
 
     # ── Multi-output mode: per-pier scour vector labels ───────────────────────
     if target_supports is not None:
         return _load_multi_output(dataset_path, requested_dofs, n_passages,
-                                  target_supports, _DOF_SOURCE,
+                                  target_supports,
                                   bearing_targets=bearing_targets,
                                   bearing_max=bearing_max)
 
@@ -396,7 +434,7 @@ def load_ttbi_dataset(
         filepath_ = os.path.join(dataset_path, filename)
 
         try:
-            mat         = sio.loadmat(filepath_)
+            mat         = sio.loadmat(filepath_, mat_dtype=True)
             data_struct = mat['data'][0, 0]
 
             available   = data_struct['AcelPrimVag'].shape[1]
@@ -405,7 +443,7 @@ def load_ttbi_dataset(
             for p in range(to_load):
                 channels = []
                 for dof in requested_dofs:
-                    field, row = _DOF_SOURCE[dof]
+                    field, row = dof_source[dof]
                     channels.append(data_struct[field][0, p][row, :])
 
                 X_list.append(np.vstack(channels))   # (C, L)
@@ -431,7 +469,6 @@ def _load_multi_output(
     requested_dofs:  list[int],
     n_passages:      int,
     target_supports: list[int],
-    dof_source:      dict,
     bearing_targets: list | None = None,
     bearing_max:     float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -441,12 +478,11 @@ def _load_multi_output(
     `bearing_targets` is given (Stage 1), followed by the bearing heads:
         [scour_1..scour_S, bearing_1..bearing_B]
     * Scour   = data.scour_vector at the (1-based) `target_supports`, x100 (%).
-    * Bearing = data.bearing_vector at the requested targets ('left'->0,
-      'right'->1), normalised by `bearing_max` (the seized stiffness, Nm/rad)
-      x100 -> a "seized %" on the SAME 0-100 scale as scour, so the MSE loss
-      balances the heads instead of being swamped by the 1e9-scale stiffness.
-      `bearing_max` defaults to the dataset manifest (case_info.mat /
-      damage_states.mat); if absent, the observed max is used (with a warning).
+    * Bearing = data.bearing_fixity at the requested targets ('left'->0,
+      'right'->1), multiplied by 100. This is the dimensionless nominal
+      end-restraint coordinate, not a seized-bearing or material-damage
+      percentage. `bearing_vector` stores the corresponding absolute spring
+      stiffness for traceability but is not the current learning label.
 
     Returns X (N, C, L) float32, y (N, n_scour[+n_bearing]) float32, and
     groups (N,) int64 = source MAT-file index per sample (one file = one
@@ -497,6 +533,9 @@ def _load_multi_output(
             f"{dataset_path}: manifest gen_schema={exp_schema!r} != expected "
             f"{_EXPECTED_GEN_SCHEMA!r} — regenerate with the current A00.")
     manifest_generation = _validate_campaign_generation_metadata(dataset_path)
+    dof_source = _resolve_dof_source(
+        manifest_generation["channel_schema_id"]
+    )
     manifest_release = manifest_generation["matlab_release"]
     manifest_qualification = manifest_generation[
         "release_qualification_run"
@@ -527,11 +566,12 @@ def _load_multi_output(
             f"file_digests {src_root[:12]}…, recomputed "
             f"{_root_digest(src_digests)[:12]}…) — tampered/corrupt digest set.")
     # Exact inventory: no missing AND no EXTRA numbered files beyond n_states.
-    nnnn = [f for f in os.listdir(dataset_path) if _re_state.fullmatch(f)]
-    if len(nnnn) != exp_states:
-        raise RuntimeError(
-            f"{dataset_path}: {len(nnnn)} NNNN.mat files but manifest says "
-            f"n_states={exp_states} (extra or missing state files).")
+    require_canonical_state_names(
+        os.listdir(dataset_path),
+        exp_states,
+        dataset_path,
+        error_type=RuntimeError,
+    )
     n_files = exp_states
     # Physical scour ceiling (audit R7.1 P5): dano_max is MANDATORY (no [0,100]
     # fallback) and must be a fraction in (0, 1]. The label then must lie in
@@ -558,7 +598,7 @@ def _load_multi_output(
     g_list:  list[int]        = []            # source file index per sample
     n_seen = 0                               # passages loaded (contact gate is hard-fail)
     bearing_is_fixity = False
-    # Tolerated micro-tension incidence across the dataset (2026-07-19):
+    # Bounded tensile-artifact incidence across the dataset (2026-07-19):
     # reported in the load summary; the paper quotes it as the scope of the
     # bilateral-contact approximation on the severe-EOV rungs.
     n_tension_passages = 0
@@ -588,11 +628,27 @@ def _load_multi_output(
                 f"{src_digests[fname][:12]}… — corrupt or overwritten state file.")
         # No blanket exception swallow (audit R4): any failure on a state file is
         # fatal — a corrupt/foreign file must stop the run, not be skipped.
-        loaded_state = sio.loadmat(fp)
+        loaded_state = sio.loadmat(fp, mat_dtype=True)
+        require_exact_fields(
+            (
+                name
+                for name in loaded_state
+                if not str(name).startswith("__")
+            ),
+            STATE_TOP_LEVEL_FIELDS,
+            fname,
+            error_type=RuntimeError,
+        )
         if 'data' not in loaded_state:
             raise KeyError(f"{fname}: no data payload.")
         data_struct = loaded_state['data'][0, 0]
         names = data_struct.dtype.names or ()
+        require_exact_fields(
+            names,
+            STATE_DATA_FIELDS,
+            f"{fname}: data",
+            error_type=RuntimeError,
+        )
         if 'scour_vector' not in names:
             raise KeyError(
                 f"{fname}: multi-output load needs data.scour_vector - "
@@ -764,7 +820,7 @@ def _load_multi_output(
             file_latent_bearing.shape != (2,)
             or not np.all(np.isfinite(file_latent_bearing))
             or np.any(file_latent_bearing < 0.0)
-            or np.any(file_latent_bearing > 1.0)
+            or np.any(file_latent_bearing >= 1.0)
             or not np.array_equal(
                 file_latent_bearing,
                 state_table['latent_bearing_fixity'][idx],
@@ -840,7 +896,7 @@ def _load_multi_output(
             full_fix.shape != (2,)
             or not np.all(np.isfinite(full_fix))
             or np.any(full_fix < 0.0)
-            or np.any(full_fix > 1.0)
+            or np.any(full_fix >= 1.0)
             or not np.array_equal(full_fix, state_table['bearing_fixity'][idx])
         ):
             raise RuntimeError(
@@ -871,49 +927,34 @@ def _load_multi_output(
             raise KeyError(
                 f"{fname}: missing RAW-format field(s) {missing_raw} — R7 requires "
                 f"the raw un-interpolated format. Regenerate with the current A00.")
-        for f in _RAW_FIELDS:
-            v = np.ravel(np.asarray(data_struct[f]))
-            if v.size != exp_npass or not np.all(np.isfinite(v)):
-                raise RuntimeError(
-                    f"{fname}: RAW field {f} has {v.size} entries (or non-finite) "
-                    f"!= Npass {exp_npass} — corrupt/foreign state.")
+        validate_raw_metadata(
+            {field: data_struct[field] for field in STATE_DATA_FIELDS},
+            n_passages=exp_npass,
+            bridge_length_m=manifest_generation["L_bridge_m"],
+            owner=f"{fname}: data",
+            error_type=RuntimeError,
+        )
         raw_fmt = True
 
         # Contact-validity gate (audit R5; TWO-TIER since 2026-07-19 — see the
-        # _CONTACT_F_TOL_N comment at the top of this module). Brief
-        # micro-unloading (small tension, tiny path fraction) is TOLERATED and
-        # counted for the dataset summary; peak tension beyond 10% of the
-        # static wheel load OR sustained tension is a physics regression and
-        # aborts — never silently censored (MNAR).
+        # _CONTACT_F_TOL_N comment at the top of this module). A bounded
+        # tensile artifact is TOLERATED and counted for the dataset summary;
+        # peak tension beyond 20% of the static wheel load OR sustained
+        # tension is inadmissible and aborts — never silently censored (MNAR).
         # contact_log must also be present, exactly (Npass, 4), and finite.
         if 'contact_log' not in names:
             raise KeyError(f"{fname}: no contact_log (audit-schema file must "
                            f"carry it) - regenerate with the current A00.")
-        clog = np.atleast_2d(np.asarray(data_struct['contact_log'], dtype=float))
+        clog = validate_contact_log(
+            data_struct['contact_log'],
+            n_passages=exp_npass,
+            max_tension_N=_CONTACT_F_TOL_N,
+            max_tension_fraction=_CONTACT_FRAC_TOL,
+            owner=f"{fname}: data.contact_log",
+            error_type=RuntimeError,
+        )
         available = data_struct['AcelPrimVag'].shape[1]
         npass_here = exp_npass                       # manifest count, now guaranteed > 0
-        if clog.shape != (npass_here, 4):
-            raise RuntimeError(
-                f"{fname}: contact_log shape {clog.shape} != expected "
-                f"({npass_here}, 4) — corrupt or partially-written file.")
-        # Finiteness on EVERY column (audit R6 C4): a NaN in any contact metric
-        # signals a corrupt solve, not just the tension column.
-        if not np.all(np.isfinite(clog)):
-            raise RuntimeError(
-                f"{fname}: contact_log has non-finite entries — "
-                f"corrupt solve output; regenerate this state.")
-        # Physical ranges (audit R7 P4): the two lost-contact flags (cols 0,1) are
-        # booleans and tension_frac_max (col 2) is non-negative. Values like 9 or
-        # -1 mean a corrupt/foreign log, not a valid solve.
-        if not np.all(np.isin(clog[:, 0:2], (0.0, 1.0))):
-            raise RuntimeError(
-                f"{fname}: contact_log lost-contact flags (cols 1-2) must be 0/1, "
-                f"got values {np.unique(clog[:, 0:2]).tolist()} — corrupt state.")
-        if np.any(clog[:, 2] < 0.0) or np.any(clog[:, 2] > 1.0):
-            raise RuntimeError(
-                f"{fname}: contact_log tension_frac_max (col 3) outside [0, 1] "
-                f"(min {clog[:, 2].min():.3g}, max {clog[:, 2].max():.3g}) — "
-                f"corrupt state; regenerate.")
         # EXACT count (audit R6 C4): the old one-sided `available < npass_here`
         # let a file with MORE passages than the manifest declares load its extra
         # passages, which the contact gate below (spanning only npass_here rows)
@@ -923,11 +964,16 @@ def _load_multi_output(
                 f"{fname}: {available} signal passages but manifest says "
                 f"passages_per_state={npass_here} — count mismatch (partial write "
                 f"or foreign file). Regenerate this state.")
-        # ALL THREE channel fields are MANDATORY and must have exactly npass_here
+        # All four stored channel fields are mandatory and must have exactly npass_here
         # passages (audit R7.1 P5) — regardless of which DOFs this call requests. A
         # complete r7 state carries every channel; a missing PitchPrimVag (etc.) is
         # a partial/foreign file even if the current study doesn't read it.
-        for _field in ('AcelPrimVag', 'AcelRodaPrimVag', 'PitchPrimVag'):
+        # AcelRodaPrimVag remains a solver diagnostic; AcelWheelsetPrimVag is
+        # the physical8_v1 source for deployed DOFs 3-4. Both stay mandatory.
+        for _field in (
+            'AcelPrimVag', 'AcelRodaPrimVag',
+            'AcelWheelsetPrimVag', 'PitchPrimVag',
+        ):
             if _field not in names:
                 raise KeyError(
                     f"{fname}: missing channel field {_field} — incomplete r7 state.")
@@ -944,8 +990,9 @@ def _load_multi_output(
                 f"{_CONTACT_FRAC_TOL:.1%} of the path; worst F "
                 f"{clog[hot, 3].max():.3g} N, worst frac "
                 f"{clog[hot, 2].max():.3g}, passages {hot[:8].tolist()}). "
-                f"This exceeds the tolerated brief micro-unloading tier — "
-                f"physics regression; inspect the generator before training.")
+                f"This exceeds the source-locked bilateral-model admissibility "
+                f"envelope; inspect the generator/solver before training and "
+                f"do not raise the threshold post hoc.")
         # Tolerated-tier incidence (2026-07-19): count passages with ANY
         # tension for the dataset summary — the paper reports this number as
         # the scope of the bilateral-contact approximation.
@@ -980,16 +1027,27 @@ def _load_multi_output(
                     f"[{crop_s}, {crop_e}]) — need finite integer "
                     f"1<=crop_start<=crop_end<=DimSpace. Corrupt state; regenerate.")
             # ALL raw channel arrays for this passage must be finite (audit R7.1
-            # P6) — not just the requested DOFs — 2-D and DimAcel-long. The row
-            # count is vehicle-model-specific (not hard-coded); the requested rows'
-            # existence is enforced when they are indexed below.
-            for _src in ('AcelPrimVag', 'AcelRodaPrimVag', 'PitchPrimVag'):
+            # P6) — not just the requested DOFs — 2-D, exact-row and
+            # DimAcel-long.
+            expected_rows = {
+                "AcelPrimVag": 3,
+                "AcelRodaPrimVag": 4,
+                "AcelWheelsetPrimVag": 4,
+                "PitchPrimVag": 3,
+            }
+            for _src in (
+                'AcelPrimVag', 'AcelRodaPrimVag',
+                'AcelWheelsetPrimVag', 'PitchPrimVag',
+            ):
                 arr = np.asarray(data_struct[_src][0, p])
-                if arr.ndim != 2 or arr.shape[1] != int(dim_acel) \
+                if arr.ndim != 2 \
+                        or arr.shape[0] != expected_rows[_src] \
+                        or arr.shape[1] != int(dim_acel) \
                         or not np.all(np.isfinite(arr)):
                     raise RuntimeError(
                         f"{fname}: passage {p} channel {_src} shape {arr.shape} not "
-                        f"(rows, DimAcel={int(dim_acel)}) or non-finite — corrupt state.")
+                        f"({expected_rows[_src]}, DimAcel={int(dim_acel)}) or "
+                        "non-finite — corrupt state.")
             channels = []
             for dof in requested_dofs:
                 src, row = dof_source[dof]
@@ -1064,7 +1122,7 @@ def _load_multi_output(
     print(f"  [multi-output] {X.shape[0]} passages, {n_files} states, "
           f"{y.shape[1]} heads ({len(tgt0)} scour{extra}).")
     if n_tension_passages:
-        print(f"  [contact] tolerated micro-tension tier: {n_tension_passages}/"
+        print(f"  [contact] bounded tensile-artifact tier: {n_tension_passages}/"
               f"{X.shape[0]} passages ({n_tension_passages / X.shape[0]:.2%}) "
               f"show brief wheel unloading past zero (worst "
               f"{worst_tension_N:.3g} N = "
@@ -1092,7 +1150,7 @@ def _load_scalar_mat_struct(
             f"{owner}: {os.path.basename(path)} must be a regular local file."
         )
     try:
-        loaded = sio.loadmat(path)
+        loaded = sio.loadmat(path, mat_dtype=True)
     except Exception as exc:
         raise RuntimeError(
             f"{owner}: {os.path.basename(path)} cannot be parsed."
@@ -1311,6 +1369,12 @@ def _read_manifest_generation_metadata(dataset_path: str) -> dict | None:
         "gen_fingerprint": _required_mat_text(
             info, names, "gen_fingerprint", owner
         ),
+        "channel_schema_id": _required_mat_text(
+            info, names, "channel_schema_id", owner
+        ),
+        "state_design_kind": _required_mat_text(
+            info, names, "state_design_kind", owner
+        ),
         "generation_config_json": _required_mat_text(
             info, names, "generation_config_json", owner
         ),
@@ -1322,6 +1386,12 @@ def _read_manifest_generation_metadata(dataset_path: str) -> dict | None:
         ),
         "damage_mode": _required_mat_text(
             info, names, "damage_mode", owner
+        ),
+        "rail_end_clearance_m": _required_mat_number(
+            info, names, "rail_end_clearance_m", owner
+        ),
+        "rail_end_clearance_decision_id": _required_mat_text(
+            info, names, "rail_end_clearance_decision_id", owner
         ),
         "L_bridge_m": _required_mat_number(
             info, names, "L_bridge_m", owner
@@ -1494,6 +1564,8 @@ def _validate_campaign_generation_metadata(
     )
     dynamic_expected = {
         "schema": _EXPECTED_GEN_SCHEMA,
+        "channel_schema_id": metadata["channel_schema_id"],
+        "state_design_kind": metadata["state_design_kind"],
         "generation_behavior_version":
             metadata["generation_behavior_version"],
         "campaign_matlab_release":
@@ -1507,6 +1579,9 @@ def _validate_campaign_generation_metadata(
         "STAGE": metadata["stage"],
         "n_states": metadata["n_states"],
         "Npass": metadata["passages_per_state"],
+        "rail_end_clearance_m": metadata["rail_end_clearance_m"],
+        "rail_end_clearance_decision_id":
+            metadata["rail_end_clearance_decision_id"],
     }
     dynamic_mismatches = {
         field: (generation_config.get(field), wanted)
@@ -1606,6 +1681,7 @@ def _validate_campaign_generation_metadata(
         )
 
     expected = {
+        "channel_schema_id": _EXPECTED_CHANNEL_SCHEMA_ID,
         "generation_behavior_version":
             _EXPECTED_GENERATION_BEHAVIOR_VERSION,
         "matlab_release": _EXPECTED_MATLAB_RELEASE,
@@ -1620,6 +1696,9 @@ def _validate_campaign_generation_metadata(
             _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
         "qualification_source_sha256": "PRODUCTION",
         "release_qualification_run": False,
+        "rail_end_clearance_m": EXPECTED_RAIL_END_CLEARANCE_M,
+        "rail_end_clearance_decision_id":
+            EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
     }
     mismatches = {
         field: (metadata.get(field), wanted)
@@ -1632,6 +1711,18 @@ def _validate_campaign_generation_metadata(
             f"does not match the reviewed production contract: {mismatches}. "
             "Regenerate from the converged bundle; qualification output and "
             "restamped/foreign data are never campaign input."
+        )
+
+    expected_state_design_kind = (
+        "dense-scour-61x5-v1"
+        if metadata["stage"] == "F40-S"
+        else "five-family-multidamage-v2"
+    )
+    if metadata["state_design_kind"] != expected_state_design_kind:
+        raise RuntimeError(
+            f"{dataset_path}: state_design_kind="
+            f"{metadata['state_design_kind']!r} is incompatible with stage "
+            f"{metadata['stage']!r}; expected {expected_state_design_kind!r}."
         )
 
     if expected_stage is not None:
@@ -1679,6 +1770,7 @@ def _validate_campaign_generation_metadata(
         expected_manifest = {
             "case_name": expected_dataset,
             "stage": expected_stage,
+            "state_design_kind": expected_state_design_kind,
             "damage_mode": contract["scenario"]["damage_mode"],
             "L_bridge_m": contract["geometry"]["L_bridge_m"],
             "num_spans": contract["geometry"]["num_spans"],
@@ -1697,6 +1789,10 @@ def _validate_campaign_generation_metadata(
             "profile_mode": contract["scenario"]["profile_mode"],
             "profile_draw": "per_state",
             "profile_jitter_sd_mm": 0.0,
+            "rail_end_clearance_m":
+                contract["scenario"]["rail_end_clearance_m"],
+            "rail_end_clearance_decision_id":
+                contract["scenario"]["rail_end_clearance_decision_id"],
             "use_track_eov": contract["scenario"]["use_track_eov"],
             "track_draw": "per_state",
             "track_L_app": 30.0,
@@ -1852,6 +1948,7 @@ def _validate_state_generation_metadata(
     )
 
     nested_expected = {
+        "channel_schema_id": manifest["channel_schema_id"],
         "matlab_release": manifest["matlab_release"],
         "campaign_matlab_release": manifest["campaign_matlab_release"],
         "actual_matlab_environment_descriptor":
@@ -1949,7 +2046,11 @@ def validate_dataset_state_provenance_stamps(
             raise RuntimeError(
                 f"{dataset_path}: expected state stamp file is missing: {name}."
             )
-        loaded = sio.loadmat(path, variable_names=variables)
+        loaded = sio.loadmat(
+            path,
+            variable_names=variables,
+            mat_dtype=True,
+        )
         _validate_state_top_level_generation_metadata(
             loaded,
             manifest,
@@ -2323,7 +2424,7 @@ def _state_identity_damage_seed(dataset_path: str) -> int:
 
     path = os.path.join(dataset_path, "case_info.mat")
     try:
-        info = sio.loadmat(path)["case_info"][0, 0]
+        info = sio.loadmat(path, mat_dtype=True)["case_info"][0, 0]
     except Exception as exc:
         raise RuntimeError(
             f"{dataset_path}: cannot read case_info.mat for StateSeedID "
@@ -2494,7 +2595,7 @@ def read_state_table(dataset_path: str) -> dict:
         raise RuntimeError(
             f"{dataset_path}: no damage_states.mat — the semantic-state split "
             f"needs the generator's CRN table. Regenerate with current A00.")
-    m = sio.loadmat(ds)
+    m = sio.loadmat(ds, mat_dtype=True)
     required = (
         'StateFamily', 'AnchorTarget', 'AnchorLevel', 'StateUID',
         'StateSeedID', 'LatentBearingFixity', 'LatentCrackOn', 'CrackOn',
@@ -2557,12 +2658,12 @@ def read_state_table(dataset_path: str) -> dict:
         np.any(damage_states < 0.0)
         or np.any(damage_states > 1.0)
         or np.any(bearing_fixity < 0.0)
-        or np.any(bearing_fixity > 1.0)
+        or np.any(bearing_fixity >= 1.0)
         or np.any(latent_bearing < 0.0)
-        or np.any(latent_bearing > 1.0)
+        or np.any(latent_bearing >= 1.0)
     ):
         raise RuntimeError(
-            f"{dataset_path}: scour/fixity state matrices are outside [0,1]."
+            f"{dataset_path}: scour is outside [0,1] or fixity is outside [0,1)."
         )
     if bearing_fixity.shape[1] != 2 or latent_bearing.shape[1] != 2:
         raise RuntimeError(
@@ -2804,7 +2905,7 @@ def _read_dano_max(dataset_path: str) -> float | None:
     ci = os.path.join(dataset_path, 'case_info.mat')
     if not os.path.exists(ci):
         return None
-    info = sio.loadmat(ci)['case_info'][0, 0]
+    info = sio.loadmat(ci, mat_dtype=True)['case_info'][0, 0]
     # A00 writes it as `scour_dano_max_frac`; accept the shorter aliases too.
     for f in ('scour_dano_max_frac', 'dano_max_frac', 'dano_max'):
         if f in (info.dtype.names or ()):
@@ -2833,7 +2934,7 @@ def _read_bearing_max(dataset_path: str) -> float | None:
     ci = os.path.join(dataset_path, 'case_info.mat')
     if os.path.exists(ci):
         try:
-            info = sio.loadmat(ci)['case_info'][0, 0]
+            info = sio.loadmat(ci, mat_dtype=True)['case_info'][0, 0]
             if 'bearing_max_Nm_rad' in (info.dtype.names or ()):
                 v = float(np.ravel(info['bearing_max_Nm_rad'])[0])
                 if v > 0:
@@ -2843,7 +2944,7 @@ def _read_bearing_max(dataset_path: str) -> float | None:
     ds = os.path.join(dataset_path, 'damage_states.mat')
     if os.path.exists(ds):
         try:
-            bs = sio.loadmat(ds).get('BearingStates')
+            bs = sio.loadmat(ds, mat_dtype=True).get('BearingStates')
             if bs is not None and np.size(bs) and float(np.max(bs)) > 0:
                 return float(np.max(bs))
         except Exception:
@@ -3185,7 +3286,7 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     """
     Build the base filename fragment that uniquely identifies a cache file.
 
-    Format:  <dataset>_<method>_dofs_<d0>_<d1>_..._disc<k>_gs7
+    Format:  <dataset>_<method>_dofs_<d0>_<d1>_..._disc<k>_gs9
 
     The trailing schema tag versions everything baked into the cache: the split
     policy (scaler fit on the canonical grouped TRAIN partition) AND the loaded
@@ -3197,7 +3298,8 @@ def _cache_stem(dataset_name: str, config: dict) -> str:
     2026-07-22 (TRUE Keogh PAA replaces the linear resampler + per-global-DOF
     paired noise RNG + segment count named in the stem); **gs7** = R11 semantic
     UID/stream authentication and row-invariant UID split (which changes the
-    TRAIN states used to fit the scaler). Older-tag caches are orphaned.
+    TRAIN states used to fit the scaler); **gs9** = physical8_v1 DOFs 3-4 and
+    channel-schema-bound provenance. Older-tag caches are orphaned.
 
     Kept private; the public filenames (features, labels, groups, scaler) are
     constructed in get_or_create_cache by appending the appropriate suffix.
@@ -3255,7 +3357,8 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
     Generation is noise-free from stage1_crack onward (A00 use_signal_noise =
     false -> D01 adds nothing), so any noise a study needs is injected HERE,
     where the model stays configurable per experiment and per channel.
-    Per-channel LEVELS must come from sensor DATASHEETS (noise density
+    For physically measurable vehicle channels, per-channel levels must come
+    from sensor DATASHEETS (noise density
     [ug/rtHz] x sqrt(bandwidth) -> additive floor; e.g. the rail-qualified
     IMUs in the reference shortlist). NOTE: EN 61373 position severities
     (carbody < bogie < axle) describe the VIBRATION ENVIRONMENT for equipment
@@ -3267,23 +3370,17 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
 
     Modes:
       {'mode': 'legacy_wheel', 'desvio': 0.05}
-          The legacy MATLAB D01 noise: multiplicative gaussian
-          (std = desvio·|signal|) on the WHEEL channels only (global DOFs 3,4).
-          APPROXIMATES (does NOT bit-reproduce) the Stage-0/1 baked-in noise:
-          D01 added the noise in the TIME domain BEFORE the space interpolation,
-          whereas here it is added in the SPACE domain after. Because interp1 is
-          linear, baked noise = interp(white) = band-limited/COLORED and
-          speed-dependent, with ~0.67x the variance but ~1.46x the energy
-          surviving PAA (verified: scratchpad/noise_domain_check.py). Same
-          nominal 5%, materially different perturbation - fine as a robustness
-          knob, NOT a reproduction. See framework_rationale (noise-domain entry).
-    Per-channel additive noise-floor modes (the physically-correct model: a
-    signal-INDEPENDENT floor from sensor datasheets, noise-density x sqrt(BW)):
-    add here when the noise-robustness arm lands.
+          Frozen compatibility key: multiplicative Gaussian robustness noise
+          (std = desvio·|signal|) on deployed DOFs 3-4. Under physical8_v1
+          these are idealized constrained-wheelset/axle-box response proxies.
+          This mode does NOT reproduce the old baked AcelRodaPrimVag noise.
+    Per-channel additive noise-floor modes require a signal-independent floor
+    from sensor datasheets plus an explicit observation model; the idealized
+    wheelset proxy must not be described as a measured axle-box signal.
     """
     X = np.array(X, dtype=np.float32, copy=True)
     desvio = float(sn.get('desvio', 0.05))
-    WHEELS = (3, 4)
+    WHEELSET_PROXY_CHANNELS = (3, 4)
 
     # NOISE PAIRING (fix 2026-07-22, external audit r3, verified): the RNG is
     # keyed by the GLOBAL DOF id, so a given channel receives the IDENTICAL
@@ -3302,22 +3399,19 @@ def _inject_sensor_noise(X: np.ndarray, dofs: list[int], sn: dict) -> np.ndarray
                                .astype(np.float32))
 
     if sn['mode'] == 'legacy_wheel':
-        # Reproduce (approximately) the legacy baked model: mult noise, WHEELS only.
-        add_mult(WHEELS)
+        # Frozen mode key; physical8_v1 applies it to wheelset proxy DOFs 3-4.
+        add_mult(WHEELSET_PROXY_CHANNELS)
     elif sn['mode'] == 'all_mult':
         # Channel-symmetric Gaussian multiplicative noise on EVERY channel
         # (pointwise sigma = desvio*|signal|). Use on NOISE-FREE data
         # (varVST / new stages) to make all channels equally noisy. Do NOT use on
-        # legacy baked-wheel data (varNVST Stage-0/1) - the wheels would be
+        # legacy baked AcelRoda data (varNVST Stage-0/1) - those channels would be
         # DOUBLE-noised; use 'sprung_mult' there instead.
         add_mult(set(dofs))
     elif sn['mode'] == 'sprung_mult':
-        # Multiplicative 5% on the SPRUNG channels only (all DOFs except wheels
-        # 3,4). For the legacy baked-wheel data: brings the sprung channels up to
-        # ~5% without re-noising the already-noisy wheels. NOTE the channels then
-        # differ in noise CHARACTER (wheels = baked colored/speed-dep; sprung =
-        # load-time white) - see the domain caveat above; state it if reported.
-        add_mult({d for d in dofs if d not in WHEELS})
+        # Frozen mode key: multiplicative noise on sprung-vehicle channels,
+        # excluding the wheelset proxy indices 3-4.
+        add_mult({d for d in dofs if d not in WHEELSET_PROXY_CHANNELS})
     else:
         raise ValueError(f"unknown sensor_noise mode {sn['mode']!r}")
     return X
@@ -3453,6 +3547,14 @@ def get_or_create_cache(
     # source ROOT digest (audit R7.1 P4), so regenerating the dataset — which
     # rewrites file_digests + the marker root — invalidates a stale cache.
     cur_src = {"gen_schema": cur_schema, "gen_fingerprint": cur_fp,
+               "channel_schema_id": (
+                   cur_generation_metadata.get("channel_schema_id")
+                   if cur_generation_metadata else None
+               ),
+               "state_design_kind": (
+                   cur_generation_metadata.get("state_design_kind")
+                   if cur_generation_metadata else None
+               ),
                "python_runtime_source_root_sha256": (
                    cur_runtime_source.sha256
                    if cur_runtime_source else None

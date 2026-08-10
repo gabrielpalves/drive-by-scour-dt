@@ -1,5 +1,14 @@
 # The digital twin — Torzoni 2024 vs 2026, and how ours maps (Paper 2 teaser)
 
+> **Scientific-status correction (2026-08-03):** this is a Paper-2 concept
+> explainer, not validation evidence. The lifecycle layer borrows the generic
+> gradual/compound-Poisson deterioration form and gradual-prior values from
+> Kamariotis et al. (2023), but maps them to support-stiffness loss as an
+> author-chosen scenario. Its flood rate, jump law, gauge model, and
+> scour-to-stiffness interpretation require hydraulic/site calibration before
+> physical claims. Software checks below establish implementation behavior,
+> not field validity.
+
 Purpose: a self-contained explainer for the SHM-group talk's DT portion (optional/backup) and
 the Paper-2 framing. Explains the two Torzoni frameworks we build on, their difference, and our
 staged drive-by DT — "for Torzoni the DBN works like this; for us what changes is…". Grounded

@@ -3,8 +3,8 @@ function [Calc] = B25_WheelProfiles(Calc,Veh,Damage)
 % Calculates the profile under each wheel
 %
 % Optional 3rd argument Damage may carry per-passage WHEEL damage descriptors
-% (Stage 3 EOVs; NOT labels) — literature-anchored, see
-% docs/stage3_alldamage_spec.md:
+% (NOT labels). Status, units, evidence scope, and limitations are defined in
+% docs/damage_model_reference.md:
 %   Damage.oor_flats  : rows [veh, wheel, flat_length_m, depth_m, phase_rad]
 %                       -> periodic haversine dip, period 2*pi*R. Depth is
 %                       PRE-COMPUTED by the caller (fresh d=L^2/8R, run-in
@@ -21,6 +21,9 @@ has_poly  = isfield(Damage,'oor_poly')  && ~isempty(Damage.oor_poly);
 oor_R = 0.46;
 if isfield(Damage,'oor_radius') && ~isempty(Damage.oor_radius)
     oor_R = Damage.oor_radius;
+end
+if has_poly
+    local_validate_polygonization(Damage.oor_poly,Veh,oor_R);
 end
 
 % *************************************************************************
@@ -89,7 +92,6 @@ for veh_num = 1:Veh(1).Tnum
         rows = find(Damage.oor_poly(:,1) == veh_num)';
         for r = rows
             wheel = Damage.oor_poly(r,2);
-            if wheel < 1 || wheel > Veh(veh_num).Wheels.num, continue; end
             n_ord = Damage.oor_poly(r,3);       % harmonic order
             amp   = Damage.oor_poly(r,4);       % radius deviation [m]
             phase = Damage.oor_poly(r,5);       % phase [rad]
@@ -129,3 +131,50 @@ for veh_num = 1:Veh(1).Tnum
 end % for veh_num = 1:Veh(1).Tnum
 
 % ---- End of script ----
+end
+
+function local_validate_polygonization(polygons,Veh,radius_m)
+% Fail before invalid rows can be ignored or interpreted as array indices.
+
+if ~isnumeric(polygons) || ~isreal(polygons) || ~ismatrix(polygons) || ...
+        size(polygons,2) ~= 5 || any(~isfinite(polygons(:)))
+    error('B25_WheelProfiles:InvalidPolygonization', ...
+        ['Damage.oor_poly must be a finite real N-by-5 matrix ' ...
+         '[vehicle,wheel,order,amplitude_m,phase_rad].']);
+end
+if ~isnumeric(radius_m) || ~isreal(radius_m) || ~isscalar(radius_m) || ...
+        ~isfinite(radius_m) || radius_m <= 0
+    error('B25_WheelProfiles:InvalidOorRadius', ...
+        'Damage.oor_radius must be a finite, strictly positive scalar [m].');
+end
+vehicle_count = Veh(1).Tnum;
+vehicle_index = polygons(:,1);
+wheel_index = polygons(:,2);
+order = polygons(:,3);
+amplitude_m = polygons(:,4);
+if any(vehicle_index < 1) || any(vehicle_index ~= fix(vehicle_index)) || ...
+        any(vehicle_index > vehicle_count)
+    error('B25_WheelProfiles:InvalidPolygonVehicleIndex', ...
+        'Polygon vehicle indices must be integers in [1, Veh(1).Tnum].');
+end
+if any(wheel_index < 1) || any(wheel_index ~= fix(wheel_index))
+    error('B25_WheelProfiles:InvalidPolygonWheelIndex', ...
+        'Polygon wheel indices must be positive integers.');
+end
+for row = 1:size(polygons,1)
+    vehicle = vehicle_index(row);
+    if wheel_index(row) > Veh(vehicle).Wheels.num
+        error('B25_WheelProfiles:InvalidPolygonWheelIndex', ...
+            ['Polygon row %d requests wheel %d, but vehicle %d has only ' ...
+             '%d wheels.'],row,wheel_index(row),vehicle,Veh(vehicle).Wheels.num);
+    end
+end
+if any(order < 1) || any(order ~= fix(order))
+    error('B25_WheelProfiles:InvalidPolygonOrder', ...
+        'Polygon harmonic orders must be positive integers.');
+end
+if any(amplitude_m <= 0)
+    error('B25_WheelProfiles:InvalidPolygonAmplitude', ...
+        'Polygon amplitudes must be strictly positive [m].');
+end
+end

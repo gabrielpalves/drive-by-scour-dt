@@ -11,11 +11,15 @@ Run:
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import redirect_stderr
 from copy import deepcopy
 from dataclasses import dataclass, replace
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
+import shutil
 import tempfile
 from typing import Callable
 from unittest.mock import patch
@@ -29,15 +33,17 @@ from core.environment import (
     matlab_environment_descriptor,
 )
 from make_micro_smoke import (
-    MICRO_DS,
+    main as micro_main,
     qualification_source_sha256,
     render_micro_a00,
     render_toy_driver,
     verify_qualification_source_bytes,
+    write_micro_a00,
 )
 
 
 Mutation = Callable[[dict], None]
+FIXTURE_K_REF_BEAR = 1.0e8
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,11 @@ class MatlabEnvironment:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _fixture_mat(path: Path) -> dict:
+    """Parse fixture bytes through the comparator's current buffer parser."""
+    return comparison._public_mat_bytes(path.read_bytes(), str(path))
 
 
 def _environment(release: str, *, variant: str = "default") -> MatlabEnvironment:
@@ -104,11 +115,13 @@ def _base_data(
     latent_bearing_fixity: np.ndarray,
     latent_crack_on: bool,
     state_named_stream_seed_id: np.ndarray,
+    passage_named_stream_seed_id: np.ndarray,
     qualification_sha: str,
     generation_fingerprint: str,
 ) -> dict:
     acel_prim = np.empty(n_passages, dtype=object)
     acel_roda = np.empty(n_passages, dtype=object)
+    acel_wheelset = np.empty(n_passages, dtype=object)
     pitch = np.empty(n_passages, dtype=object)
     for passage in range(n_passages):
         acel_prim[passage] = (
@@ -116,6 +129,9 @@ def _base_data(
         )
         acel_roda[passage] = (
             np.arange(16.0).reshape(4, 4) - passage * 0.25
+        )
+        acel_wheelset[passage] = (
+            np.arange(16.0).reshape(4, 4) + 100.0 + passage * 0.5
         )
         pitch[passage] = (
             np.arange(12.0).reshape(3, 4) * 0.01 + passage * 0.001
@@ -131,6 +147,10 @@ def _base_data(
     dim_space = bridge_samp + 3000
     crop_start = 1001
     crop_end = crop_start - 1 + bridge_samp + 1831
+    dim_acel = 4
+    # The fixture keeps tiny signals but still reproduces the generator's exact
+    # spatial-grid equation DimSpace = round(Velocidade * DimAcel / 10).
+    velocity = np.full(n_passages, dim_space * 10.0 / dim_acel)
     if stage_policy["use_track_eov"]:
         track_log = _cell(
             [
@@ -176,12 +196,17 @@ def _base_data(
     else:
         profile_log = np.ones(n_passages, dtype=float)
 
+    bearing_fixity = np.asarray(bearing_vector, dtype=float)
+    bearing_stiffness = (
+        FIXTURE_K_REF_BEAR * bearing_fixity / (1.0 - bearing_fixity)
+    )
     return {
         "AcelPrimVag": acel_prim,
         "AcelRodaPrimVag": acel_roda,
+        "AcelWheelsetPrimVag": acel_wheelset,
         "PitchPrimVag": pitch,
         # Four time samples in each signal: DimAcel must be four, not dt.
-        "DimAcel": np.full(n_passages, 4, dtype=np.int64),
+        "DimAcel": np.full(n_passages, dim_acel, dtype=np.int64),
         "DimSpace": np.full(n_passages, dim_space, dtype=np.int64),
         "crop_start": np.full(n_passages, crop_start, dtype=np.int64),
         "crop_end": np.full(n_passages, crop_end, dtype=np.int64),
@@ -198,13 +223,16 @@ def _base_data(
         "state_named_stream_seed_id": np.asarray(
             state_named_stream_seed_id, dtype=np.uint32
         ),
+        "passage_named_stream_seed_id": np.asarray(
+            passage_named_stream_seed_id, dtype=np.uint32
+        ),
         "latent_bearing_fixity":
             np.asarray(latent_bearing_fixity, dtype=float),
         "latent_crack_on": bool(latent_crack_on),
         "crack_on": bool(crack_on),
         "beam_f1_Hz": 4.2 if bridge_length < 80 else 2.8,
-        "bearing_vector": np.asarray(bearing_vector, dtype=float),
-        "bearing_fixity": np.asarray(bearing_vector, dtype=float),
+        "bearing_vector": bearing_stiffness,
+        "bearing_fixity": bearing_fixity,
         "crack_log": crack_log,
         "profile_mode": profile_mode,
         "profile_log": profile_log,
@@ -212,10 +240,11 @@ def _base_data(
         "oor_log": oor_log,
         "contact_log": np.zeros((n_passages, 4), dtype=float),
         "Temperatura": np.linspace(5.0, 25.0, n_passages),
-        "Velocidade": np.linspace(70.0, 90.0, n_passages),
+        "Velocidade": velocity,
         "VehiclesProps": np.arange(15.0).reshape(5, 3),
         "gen_schema": policy.gen_schema,
         "gen_fingerprint": generation_fingerprint,
+        "channel_schema_id": policy.channel_schema_id,
         "matlab_release": actual.release,
         "campaign_matlab_release": campaign.release,
         "actual_matlab_environment_descriptor": actual.descriptor,
@@ -448,7 +477,7 @@ def _write_dataset(
     mutate_generation_config: Mutation | None = None,
     n_states: int | None = None,
     n_passages: int = 3,
-    stage: str = "s0_scour",
+    stage: str = "F40-S",
     actual_environment: MatlabEnvironment | None = None,
     campaign_environment: MatlabEnvironment | None = None,
     host_id: str = "fixture-host",
@@ -510,13 +539,14 @@ def _write_dataset(
     scour_supports = np.asarray(labels["supports"], dtype=np.int64)
     num_supports = int(stage_policy["num_supports"])
     num_spans = int(stage_policy["num_spans"])
-    qualification_sha = qualification_source_sha256(stage)
-    source_path = Path(__file__).resolve().parent / "scour_MATLAB" / "A00_Run.m"
-    qualification_executable = render_micro_a00(
-        source_path.read_text(encoding="utf-8"),
-        qualification=True,
-        stage=stage,
-    ).encode("utf-8")
+    qualification_sha = comparison._expected_qualification_source_sha256(
+        stage, policy.source_snapshot
+    )
+    qualification_executable = (
+        comparison._expected_qualification_source_bytes(
+            stage, policy.source_snapshot
+        )
+    )
     (path / "qualification_executed.m").write_bytes(
         qualification_executable
     )
@@ -529,10 +559,16 @@ def _write_dataset(
             qualification_executable
         ).hexdigest(),
     )
+    active_bearing_fixity = np.asarray(labels["bearing"], dtype=float)
+    active_bearing_stiffness = (
+        FIXTURE_K_REF_BEAR
+        * active_bearing_fixity
+        / (1.0 - active_bearing_fixity)
+    )
     damage_states = {
         "DamageStates": labels["damage"],
-        "BearingStates": labels["bearing"],
-        "BearingFixity": labels["bearing"],
+        "BearingStates": active_bearing_stiffness,
+        "BearingFixity": active_bearing_fixity,
         "LatentBearingFixity": labels["latent_bearing"],
         "StateFamily": np.array(labels["families"], dtype=object),
         "AnchorTarget": labels["anchor_target"],
@@ -553,7 +589,7 @@ def _write_dataset(
         ),
         "LatentCrackOn": labels["latent_crack"],
         "CrackOn": labels["crack_on"],
-        "k_ref_bear": 1.0e8,
+        "k_ref_bear": FIXTURE_K_REF_BEAR,
         "scour_supports": scour_supports,
     }
     if mutate_damage_table:
@@ -643,6 +679,13 @@ def _write_dataset(
         "gen_fingerprint": generation_fingerprint,
         "generation_config_json": generation_config_json,
         "generation_behavior_version": policy.generation_behavior_version,
+        "channel_schema_id": policy.channel_schema_id,
+        "state_design_kind": generation_config.get(
+            "state_design_kind",
+            "dense-scour-61x5-v1"
+            if stage == "F40-S"
+            else "five-family-multidamage-v2",
+        ),
         "matlab_release": actual.release,
         "campaign_matlab_release": campaign.release,
         "actual_matlab_environment_descriptor": actual.descriptor,
@@ -717,6 +760,8 @@ def _write_dataset(
                 ),
                 state_named_stream_seed_id=
                     state_named_stream_seed_ids[row],
+                passage_named_stream_seed_id=
+                    passage_named_stream_seed_ids[row],
                 qualification_sha=qualification_sha,
                 generation_fingerprint=generation_fingerprint,
             )
@@ -770,9 +815,11 @@ def _write_dataset(
         },
         long_field_names=True,
     )
-    (path / "_GENERATION_COMPLETE").write_text(
-        f"{policy.gen_schema}\n{generation_fingerprint}\n{dataset_root}\n",
-        encoding="utf-8",
+    (path / "_GENERATION_COMPLETE").write_bytes(
+        (
+            f"{policy.gen_schema}\n{generation_fingerprint}\n"
+            f"{dataset_root}\n"
+        ).encode("utf-8")
     )
 
 
@@ -801,7 +848,7 @@ def _pair(
     campaign_environment: MatlabEnvironment | None = None,
     n_states: int | None = None,
     n_passages: int = 3,
-    stage: str = "s0_scour",
+    stage: str = "F40-S",
 ) -> tuple[Path, Path]:
     campaign = _campaign_environment()
     release_a = release_a or campaign.release
@@ -850,6 +897,180 @@ def _expect_invalid(name: str, call: Callable[[], object]) -> None:
     raise AssertionError(f"invalid qualification evidence escaped: {name}")
 
 
+def _flip_last_byte(path: Path) -> None:
+    raw = bytearray(path.read_bytes())
+    raw[-1] ^= 0x01
+    path.write_bytes(bytes(raw))
+
+
+def _expect_invalid_from(
+    name: str,
+    needle: str,
+    call: Callable[[], object],
+) -> None:
+    """Require rejection BY A NAMED GUARD, not merely rejection.
+
+    The atomicity bindings overlap on purpose - a late mutation is caught by the
+    end-of-run reassertion even if the per-member parse-time binding is absent -
+    so a probe that only asserts "something raised" cannot tell which binding is
+    doing the work, and would keep passing after the binding it was written for
+    is deleted.  Pinning the diagnostic makes each probe fail when ITS OWN guard
+    is removed.
+    """
+    try:
+        call()
+    except comparison.QualificationInputError as exc:
+        message = str(exc)
+        if needle not in message:
+            raise AssertionError(
+                f"{name}: rejected, but not by the intended guard "
+                f"(expected {needle!r} in: {message})"
+            ) from exc
+        print(f"  [PASS] invalid evidence rejected: {name}")
+        return
+    raise AssertionError(f"invalid qualification evidence escaped: {name}")
+
+
+def _intra_invocation_mutation_checks(root: Path) -> None:
+    """Prove atomicity WITHIN one comparison, not merely between two runs.
+
+    A qualification directory is an ordinary mutable folder: it can be
+    synchronised, copied over, or edited while a long validation is running.
+    Hashing a member and then re-opening it to parse it are two separate reads,
+    so without the bindings these cases exercise, a verdict could describe a
+    mixture of pre- and post-change content while the evidence quoted digests
+    that were never parsed.  No malicious actor is required.
+
+    Both content windows and the separate authorization-sidecar window are
+    covered:
+
+    * hash-to-parse, inside one member - the mutation lands after the header's
+      digest verification and must be caught when the payload is parsed; and
+    * parse-to-publish, across members - the mutation lands after endpoint A was
+      fully parsed, while endpoint B is still being read, and must be caught by
+      the end-of-run digest reassertion before any verdict is returned; and
+    * sidecar-parse-to-publish - each authorization sidecar outside the digest
+      table is mutated after endpoint A was parsed and must be caught by its
+      specifically named final sidecar guard.
+
+    The mutations are installed by wrapping the comparator's own entry points,
+    which is what makes them intra-invocation; mutating between two calls (as
+    the inventory checker's stale-endpoint case does) proves only that the
+    endpoint is reopened per invocation.
+    """
+    original_header = comparison._validate_dataset_header
+    original_payload = comparison._validated_payload
+
+    # (1) hash-to-parse: mutate a state file after the header validated every
+    # digest, before _validated_payload parses that state.
+    a, b = _pair(root, "toctou_hash_to_parse")
+    fired = {"count": 0}
+
+    def mutating_header(path: Path, policy: object) -> object:
+        result = original_header(path, policy)
+        if fired["count"] == 0:
+            fired["count"] = 1
+            _flip_last_byte(Path(path) / "0001.mat")
+        return result
+
+    comparison._validate_dataset_header = mutating_header
+    try:
+        _expect_invalid_from(
+            "state file mutated between digest verification and parsing "
+            "(intra-invocation)",
+            "at parse time",
+            lambda: comparison.compare_directories(a, b),
+        )
+    finally:
+        comparison._validate_dataset_header = original_header
+    if fired["count"] != 1:
+        raise AssertionError(
+            "hash-to-parse probe never fired: the comparator did not call "
+            "_validate_dataset_header, so the case proves nothing"
+        )
+
+    # (2) parse-to-publish: mutate endpoint A after it was fully parsed, while
+    # endpoint B is still being validated.  Only the end-of-run reassertion can
+    # catch this, because every per-member parse already succeeded.
+    c, d = _pair(root, "toctou_parse_to_publish")
+    calls = {"count": 0}
+
+    def mutating_payload(path: Path, policy: object) -> object:
+        result = original_payload(path, policy)
+        calls["count"] += 1
+        if calls["count"] == 1:
+            _flip_last_byte(Path(c) / "0001.mat")
+        return result
+
+    comparison._validated_payload = mutating_payload
+    try:
+        _expect_invalid_from(
+            "endpoint mutated after it was parsed, while the other endpoint "
+            "was still being read (intra-invocation)",
+            "changed during validation",
+            lambda: comparison.compare_directories(c, d),
+        )
+    finally:
+        comparison._validated_payload = original_payload
+    if calls["count"] < 2:
+        raise AssertionError(
+            "parse-to-publish probe never reached the second endpoint: the "
+            "case proves nothing"
+        )
+
+    # (3) authorization sidecars are intentionally outside file_digests.mat,
+    # so exercise their separate final snapshot guard one by one.  Pinning each
+    # sidecar's diagnostic makes these probes fail if that specific binding is
+    # removed while the digested-member reassertion remains green.
+    sidecars = (
+        "qualification_executed.m",
+        "qualification_host_receipt.json",
+        "_GENERATION_COMPLETE",
+    )
+    for sidecar in sidecars:
+        safe_name = sidecar.lower().replace(".", "_")
+        e, f = _pair(root, f"toctou_sidecar_{safe_name}")
+        sidecar_calls = {"count": 0}
+
+        def mutating_sidecar_payload(
+            path: Path,
+            policy: object,
+            *,
+            endpoint: Path = e,
+            member: str = sidecar,
+        ) -> object:
+            result = original_payload(path, policy)
+            sidecar_calls["count"] += 1
+            if sidecar_calls["count"] == 1:
+                _flip_last_byte(endpoint / member)
+            return result
+
+        comparison._validated_payload = mutating_sidecar_payload
+        try:
+            _expect_invalid_from(
+                f"{sidecar} mutated after endpoint parsing "
+                "(intra-invocation)",
+                f"endpoint sidecar {sidecar} changed during validation",
+                lambda e=e, f=f: comparison.compare_directories(e, f),
+            )
+        finally:
+            comparison._validated_payload = original_payload
+        if sidecar_calls["count"] < 2:
+            raise AssertionError(
+                f"{sidecar} probe never reached the second endpoint: the "
+                "case proves nothing"
+            )
+
+    # The wrappers are gone; an unmutated pair must still be comparable, so a
+    # failure above cannot be an artifact of leftover patching.
+    e, f = _pair(root, "toctou_control")
+    _expect_verdict(
+        "unmutated control pair after the intra-invocation probes",
+        "SEMANTICALLY-BIT-IDENTICAL",
+        lambda: comparison.compare_directories(e, f),
+    )
+
+
 def _expect_verdict(
     name: str, expected: str, call: Callable[[], comparison.ComparisonResult]
 ) -> comparison.ComparisonResult:
@@ -868,7 +1089,7 @@ def _rewrite_digest_table(
     mutate: Callable[[dict], None],
 ) -> None:
     value = deepcopy(
-        comparison._public_mat(path / "file_digests.mat")["file_digests"]
+        _fixture_mat(path / "file_digests.mat")["file_digests"]
     )
     mutate(value)
     savemat(
@@ -876,13 +1097,12 @@ def _rewrite_digest_table(
         {"file_digests": value},
         long_field_names=True,
     )
-    marker_lines = (path / "_GENERATION_COMPLETE").read_text(
-        encoding="utf-8"
+    marker_lines = (path / "_GENERATION_COMPLETE").read_bytes().decode(
+        "utf-8"
     ).splitlines()
     marker_lines[2] = str(value["root"])
-    (path / "_GENERATION_COMPLETE").write_text(
-        "\n".join(marker_lines) + "\n",
-        encoding="utf-8",
+    (path / "_GENERATION_COMPLETE").write_bytes(
+        ("\n".join(marker_lines) + "\n").encode("utf-8")
     )
 
 
@@ -896,12 +1116,12 @@ def _micro_patch_checks() -> None:
         Path(__file__).resolve().parent / "scour_MATLAB" / "A00_Run.m"
     )
     source = source_path.read_text(encoding="utf-8")
-    expected = qualification_source_sha256("s16_all")
+    expected = qualification_source_sha256("F40-M")
     assert len(expected) == 64
     qualification = render_micro_a00(
-        source, qualification=True, stage="s16_all"
+        source, qualification=True, stage="F40-M"
     )
-    assert "STAGE = 's16_all';" in qualification
+    assert "STAGE = 'F40-M';" in qualification
     assert "qualification_run = true;" in qualification
     assert expected in qualification
     assert "Results', 'release_qualification'" in qualification
@@ -913,11 +1133,66 @@ def _micro_patch_checks() -> None:
     assert raw_sha == hashlib.sha256(
         qualification.encode("utf-8")
     ).hexdigest()
-    assert "local_qualification_script_identity(" in qualification
-    assert "qualification_executed.m" in qualification
-    assert "TTBI_QUALIFICATION_HOST_ID" in qualification
-    assert "qualification_host_receipt.json" in qualification
-    assert "host_diagnostic_sha256" in qualification
+
+    policy = comparison._current_policy()
+    original_capture = policy.source_snapshot
+    mutated_entries = []
+    capture_changed = False
+    for name, captured_file in original_capture.snapshots:
+        if name == "scour_MATLAB/A00_Run.m":
+            capture_changed = True
+            captured_file = replace(
+                captured_file,
+                raw=captured_file.raw + b"\n% CAPTURE-ONLY HYBRID PROBE\n",
+            )
+        mutated_entries.append((name, captured_file))
+    if not capture_changed:
+        raise AssertionError("A00 was absent from coherent source capture")
+    capture_only = replace(
+        original_capture,
+        snapshots=tuple(mutated_entries),
+    )
+    captured_digest = comparison._expected_qualification_source_sha256(
+        "F40-M", capture_only
+    )
+    captured_executable = comparison._expected_qualification_source_bytes(
+        "F40-M", capture_only
+    )
+    if captured_digest == expected or captured_executable == qualification.encode(
+        "utf-8"
+    ):
+        raise AssertionError(
+            "qualification helper reopened the live A00 pathname instead of "
+            "using the supplied coherent capture"
+        )
+    verify_qualification_source_bytes(captured_executable, captured_digest)
+    print(
+        "  [PASS] qualification identity/executable use one supplied source "
+        "capture"
+    )
+    assert "ttbi.qualification_script_identity(" in qualification
+    assert "ttbi.preserve_qualification_evidence(" in qualification
+    # Qualification publication moved into the +ttbi package.  Assert both
+    # halves of that boundary: the generated script must delegate to the
+    # reviewed owner, and the owner must retain the executed script and host
+    # receipt.  Every package source below is part of the stamped generator
+    # source root.
+    package = Path(__file__).resolve().parent / "scour_MATLAB" / "+ttbi"
+    preservation_src = (
+        package / "preserve_qualification_evidence.m"
+    ).read_text(encoding="utf-8")
+    host_receipt_src = (package / "qualification_host_receipt.m").read_text(
+        encoding="utf-8"
+    )
+    writer_src = (package / "write_qualification_host_receipt.m").read_text(
+        encoding="utf-8"
+    )
+    assert "qualification_executed.m" in preservation_src
+    assert "ttbi.qualification_host_receipt(" in preservation_src
+    assert "ttbi.write_qualification_host_receipt(" in preservation_src
+    assert "TTBI_QUALIFICATION_HOST_ID" in host_receipt_src
+    assert "host_diagnostic_sha256" in host_receipt_src
+    assert "qualification_host_receipt.json" in writer_src
     mutated = qualification.replace(
         "% Main script to run TTB-2D model",
         "% MUTATED after source stamp",
@@ -935,68 +1210,37 @@ def _micro_patch_checks() -> None:
         "  [PASS] micro qualification patch self-authenticates exact executable "
         "bytes and preserves them as evidence"
     )
-    driver_source = (
-        Path(__file__).resolve().parent
-        / "comprehensive_ablation_multidamage.py"
-    ).read_text(encoding="utf-8")
-    toy_driver = render_toy_driver(driver_source)
-    compile(toy_driver, "generated_micro_dryrun.py", "exec")
-    assert (
-        toy_driver.count(
-            f'DATASET = "{MICRO_DS}"  # GENERATED MICRO-DRYRUN OVERRIDE'
-        )
-        == 1
+    source = source_path.read_text(encoding="utf-8")
+    retired_calls = (
+        (lambda: render_micro_a00(source), ValueError),
+        (lambda: write_micro_a00(), ValueError),
+        (lambda: render_toy_driver("irrelevant"), RuntimeError),
     )
-    assert (
-        "return _micro_read_dataset_provenance(dataset_dir)" in toy_driver
-    )
-    toy_config = toy_driver[
-        toy_driver.index("def make_config"):
-        toy_driver.index("def run_phase")
-    ]
-    assert (
-        toy_config.count(
-            '"qualification_mode": "toy_nonpublication_legacy"'
-        )
-        == 1
-    )
-    for forbidden in (
-        '"protocol_hash"',
-        '"protocol_core_hash"',
-        '"protocol_descriptor"',
-        '"execution_runtime"',
-        '"hyperparameter_mode"',
-        '"hyperparameter_manifest"',
+    for call, error_type in retired_calls:
+        try:
+            call()
+        except error_type:
+            pass
+        else:
+            raise AssertionError("retired unmarked micro API remained callable")
+
+    for argv, message in (
+        ([], "no-argument micro generation is retired"),
+        (["--dryrun"], "--dryrun is retired"),
+        (["--qualification"], "--qualification requires --stage"),
     ):
-        assert forbidden not in toy_config
-    assert "N_TRIALS       = 2            # DRY-RUN" in toy_driver
-    assert "EPOCHS         = 2            # DRY-RUN" in toy_driver
-    assert "USE_PRUNER     = False        # DRY-RUN" in toy_driver
-    assert "SEEDS          = [42]         # DRY-RUN" in toy_driver
-    assert (
-        "*** TOY NON-PUBLICATION LEGACY MECHANICS RUN ***"
-        in toy_driver
-    )
+        stderr = io.StringIO()
+        try:
+            with redirect_stderr(stderr):
+                micro_main(argv)
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"retired/incomplete CLI escaped: {argv!r}")
+        assert message in stderr.getvalue()
     print(
-        "  [PASS] toy driver is an explicit 2-trial/1-seed LEGACY mechanics "
-        "fixture and carries no campaign/HPO/runtime identity"
-    )
-    broken_assignment = driver_source.replace(
-        "DATASET, TARGET_SUPPORTS, BEARING_TARGETS = _LADDER[STAGE]",
-        "DATASET, TARGET_SUPPORTS = _LADDER[STAGE]",
-        1,
-    )
-    try:
-        render_toy_driver(broken_assignment)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError(
-            "toy-driver dataset override survived removal of its semantic anchor"
-        )
-    print(
-        "  [PASS] toy driver overrides the resolved campaign-contract dataset "
-        "without a stale literal and fails when its semantic anchor is mutated"
+        "  [PASS] no-argument/toy micro paths fail closed; qualification "
+        "requires one explicit current Paper-1 stage"
     )
 
 
@@ -1005,6 +1249,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="environment-comparison-check-") as tmp:
         root = Path(tmp)
         policy = comparison._current_policy()
+        assert len(comparison._REQUIRED_TOP_LEVEL_FIELDS) == 13
+        assert len(comparison._REQUIRED_DATA_FIELDS) == 48
         lock = load_environment_lock(
             Path(__file__).resolve().parent
             / "environment"
@@ -1040,6 +1286,30 @@ def main() -> None:
         )
         assert exact.stats.compared_signal_values > 0
         assert exact.stats.compared_leaves > 0
+        exact_receipt = root / "exact-receipt.json"
+        assert (
+            comparison.main(
+                [str(a), str(b), "--receipt", str(exact_receipt)]
+            )
+            == 0
+        )
+        exact_receipt_payload = json.loads(
+            exact_receipt.read_text(encoding="utf-8")
+        )
+        assert (
+            exact_receipt_payload["verdict"]
+            == "SEMANTICALLY-BIT-IDENTICAL"
+        )
+        assert (
+            exact_receipt_payload[
+                "numerical_equivalence_explicitly_accepted"
+            ]
+            is False
+        )
+        _expect_invalid(
+            "exact verdict cannot claim numerical-equivalence acceptance",
+            lambda: comparison._receipt_payload(exact, accepted=True),
+        )
 
         same_family_candidate = _environment(
             policy.campaign_matlab_release, variant="different-update"
@@ -1060,31 +1330,45 @@ def main() -> None:
         for stage in comparison._STAGE_POLICIES:
             a, b = _pair(root, f"exact_policy_{stage}", stage=stage)
             result = _expect_verdict(
-                f"exact ten-rung policy: {stage}",
+                f"exact four-block qualification policy: {stage}",
                 "SEMANTICALLY-BIT-IDENTICAL",
                 lambda a=a, b=b: comparison.compare_directories(a, b),
             )
             expected_policy = comparison._STAGE_POLICIES[stage]
             assert result.evidence_a.n_states == expected_policy["n_states"]
             assert result.evidence_a.passages_per_state == 3
-            expected_total = (
-                35 if expected_policy["num_spans"] == 3 else 39
-            )
+            expected_total = {
+                "F40-S": 31,
+                "F40-M": 31,
+                "L99-S": 39,
+                "L99-M": 39,
+            }[stage]
             assert expected_policy["n_states"] == expected_total
             assert expected_policy["family_counts"]["bearing_only"] == 8
             assert expected_policy["family_counts"]["nuisance_only"] == 6
             assert expected_policy["family_counts"]["joint"] == 10
+            coverage = result.evidence_a.mechanism_coverage
+            assert coverage.required is False
+            assert (
+                coverage.crack_active_passages,
+                coverage.profile_active_passages,
+                coverage.ballast_patch_rows,
+                coverage.hanging_group_rows,
+                coverage.pad_departure_passages,
+                coverage.polygon_rows,
+            ) == (0, 0, 0, 0, 0, 0)
+            assert coverage.witnesses == {}
 
         coherent_policy_mutations = (
-            ("bridge length", "s0_scour", "L_bridge_m", 61.0),
-            ("span count", "s0_scour", "num_spans", 4),
-            ("support count", "s0_scour", "num_supports", 5),
-            ("bearing mode", "s11_bear", "bearing_mode", "off"),
-            ("crack toggle", "s16_all", "use_crack_eov", False),
-            ("track toggle", "s16_all", "use_track_eov", False),
-            ("OOR toggle", "s16_all", "use_oor_eov", False),
-            ("profile mode", "s16_all", "profile_mode", "fixed"),
-            ("flat policy", "s16_all", "oor_flats_enabled", True),
+            ("bridge length", "F40-S", "L_bridge_m", 41.0),
+            ("span count", "F40-S", "num_spans", 3),
+            ("support count", "F40-S", "num_supports", 4),
+            ("bearing mode", "F40-M", "bearing_mode", "off"),
+            ("crack toggle", "F40-M", "use_crack_eov", False),
+            ("track toggle", "F40-M", "use_track_eov", True),
+            ("OOR toggle", "F40-M", "use_oor_eov", True),
+            ("profile mode", "F40-M", "profile_mode", "psd_fra"),
+            ("flat policy", "F40-M", "oor_flats_enabled", True),
         )
         for name, stage, key, value in coherent_policy_mutations:
             def mutate_policy(
@@ -1212,6 +1496,56 @@ def main() -> None:
             lambda: comparison.compare_directories(a, b),
         )
 
+        def extra_damage_field(table: dict) -> None:
+            table["UnreviewedDamageLabel"] = np.zeros(
+                np.asarray(table["StateSeedID"]).shape,
+                dtype=np.float64,
+            )
+
+        a, b = _pair(
+            root,
+            "damage_table_extra_field",
+            mutate_damage_table_a=extra_damage_field,
+            mutate_damage_table_b=extra_damage_field,
+        )
+        _expect_invalid(
+            "damage_states.mat has exactly 19 fields",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def transposed_damage_matrix(table: dict) -> None:
+            table["DamageStates"] = np.asarray(
+                table["DamageStates"]
+            ).T.copy()
+
+        a, b = _pair(
+            root,
+            "damage_table_transposed_shape",
+            mutate_damage_table_a=transposed_damage_matrix,
+            mutate_damage_table_b=transposed_damage_matrix,
+        )
+        _expect_invalid(
+            "damage_states.mat rejects equal-size transposed shapes",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        a, b = _pair(
+            root,
+            "damage_table_uint64_state_seed",
+            mutate_damage_table_a=lambda table: table.__setitem__(
+                "StateSeedID",
+                np.asarray(table["StateSeedID"], dtype=np.uint64),
+            ),
+            mutate_damage_table_b=lambda table: table.__setitem__(
+                "StateSeedID",
+                np.asarray(table["StateSeedID"], dtype=np.uint64),
+            ),
+        )
+        _expect_invalid(
+            "damage_states StateSeedID requires MATLAB uint32 dtype",
+            lambda: comparison.compare_directories(a, b),
+        )
+
         def nonderived_named_stream(table: dict) -> None:
             values = np.asarray(
                 table["StateNamedStreamSeedID"], dtype=np.uint64
@@ -1292,12 +1626,34 @@ def main() -> None:
         a, b = _pair(
             root,
             "active_latent_bearing_disagreement",
-            stage="s11_bear",
+            stage="F40-M",
             mutate_damage_table_a=active_latent_bearing_disagreement,
             mutate_damage_table_b=active_latent_bearing_disagreement,
         )
         _expect_invalid(
             "same active/latent bearing disagreement in both inputs",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def linearized_bearing_table(table: dict) -> None:
+            fixity = np.asarray(table["BearingFixity"], dtype=float)
+            table["BearingStates"] = FIXTURE_K_REF_BEAR * fixity
+
+        def linearized_bearing_state(data: dict) -> None:
+            fixity = np.asarray(data["bearing_fixity"], dtype=float)
+            data["bearing_vector"] = FIXTURE_K_REF_BEAR * fixity
+
+        a, b = _pair(
+            root,
+            "coherent_linearized_bearing_transform",
+            stage="F40-M",
+            mutate_a=linearized_bearing_state,
+            mutate_b=linearized_bearing_state,
+            mutate_damage_table_a=linearized_bearing_table,
+            mutate_damage_table_b=linearized_bearing_table,
+        )
+        _expect_invalid(
+            "coherent linear phi-to-k_r transform in both inputs",
             lambda: comparison.compare_directories(a, b),
         )
 
@@ -1309,7 +1665,7 @@ def main() -> None:
         a, b = _pair(
             root,
             "crack_activation_policy_drift",
-            stage="s12_crack",
+            stage="F40-M",
             mutate_damage_table_a=crack_activation_policy_drift,
             mutate_damage_table_b=crack_activation_policy_drift,
         )
@@ -1350,7 +1706,7 @@ def main() -> None:
         )
 
         def small_signal(data: dict) -> None:
-            data["AcelPrimVag"][0][0, 1] += 5e-11
+            data["AcelWheelsetPrimVag"][0][0, 1] += 5e-11
 
         a, b = _pair(root, "small_signal", mutate_b=small_signal)
         numerical = _expect_verdict(
@@ -1359,8 +1715,57 @@ def main() -> None:
             lambda: comparison.compare_directories(a, b),
         )
         assert numerical.default_exit_code == 3
+        original_reader = comparison._read_single_link_regular_bytes
+        state_reads: Counter[tuple[Path, str]] = Counter()
+
+        def recording_reader(path: Path, owner: str) -> bytes:
+            candidate = Path(path)
+            if (
+                candidate.parent in {Path(a), Path(b)}
+                and comparison._STATE_RE.fullmatch(candidate.name)
+            ):
+                state_reads[(candidate.parent, candidate.name)] += 1
+            return original_reader(candidate, owner)
+
+        comparison._read_single_link_regular_bytes = recording_reader
+        try:
+            digest_bound_numerical = comparison.compare_directories(a, b)
+        finally:
+            comparison._read_single_link_regular_bytes = original_reader
+        assert (
+            digest_bound_numerical.raw_byte_identical_states
+            == numerical.raw_byte_identical_states
+        )
+        expected_state_reads = {
+            (endpoint, name)
+            for endpoint in (Path(a), Path(b))
+            for name in numerical.evidence_a.state_files
+        }
+        assert set(state_reads) == expected_state_reads
+        assert all(count == 3 for count in state_reads.values())
+        print(
+            "  [PASS] raw state identity comes from authenticated digest "
+            "tables, with no fourth late pathname read"
+        )
         assert comparison.main([str(a), str(b)]) == 3
         assert comparison.main([str(a), str(b), "--accept-numerical"]) == 2
+        pending_receipt = root / "pending-receipt.json"
+        assert (
+            comparison.main(
+                [str(a), str(b), "--receipt", str(pending_receipt)]
+            )
+            == 3
+        )
+        pending_receipt_payload = json.loads(
+            pending_receipt.read_text(encoding="utf-8")
+        )
+        assert pending_receipt_payload["verdict"] == "NUMERICALLY-EQUIVALENT"
+        assert (
+            pending_receipt_payload[
+                "numerical_equivalence_explicitly_accepted"
+            ]
+            is False
+        )
         receipt = root / "accepted-receipt.json"
         assert (
             comparison.main(
@@ -1375,6 +1780,11 @@ def main() -> None:
             == 0
         )
         receipt_payload = json.loads(receipt.read_text(encoding="utf-8"))
+        assert receipt_payload["verdict"] == "NUMERICALLY-EQUIVALENT"
+        assert (
+            receipt_payload["numerical_equivalence_explicitly_accepted"]
+            is True
+        )
         assert (
             receipt_payload["schema"]
             == "matlab-environment-qualification-receipt-v4"
@@ -1398,14 +1808,14 @@ def main() -> None:
             receipt_payload["python_runtime_source_file_count"]
             == numerical.python_runtime_source_file_count
         )
-        assert receipt_payload["stage"] == "s0_scour"
+        assert receipt_payload["stage"] == "F40-S"
         assert (
             receipt_payload["generator_source_root_sha256"]
             == policy.generator_source_root_sha256
         )
         assert (
             receipt_payload["qualification_source_sha256"]
-            == qualification_source_sha256("s0_scour")
+            == qualification_source_sha256("F40-S")
         )
         assert receipt_payload["dataset_content_roots_sha256"] == [
             numerical.evidence_a.dataset_content_root_sha256,
@@ -1464,88 +1874,222 @@ def main() -> None:
             ),
         )
         _expect_invalid(
+            "receipt with stale Python runtime source file count",
+            lambda: comparison._receipt_payload(
+                replace(
+                    numerical,
+                    python_runtime_source_file_count=(
+                        numerical.python_runtime_source_file_count + 1
+                    ),
+                ),
+                accepted=True,
+            ),
+        )
+        stale_evidence_bindings = (
+            ("campaign_matlab_release", "R2099a"),
+            (
+                "campaign_matlab_environment_descriptor",
+                "release=R2099a",
+            ),
+            ("campaign_matlab_environment_sha256", "0" * 64),
+            ("gen_schema", "foreign-schema"),
+            ("channel_schema_id", "legacy_virtual8"),
+            ("generation_behavior_version", "foreign-behavior"),
+            ("generator_source_root_sha256", "0" * 64),
+            (
+                "generator_source_file_count",
+                numerical.evidence_a.generator_source_file_count + 1,
+            ),
+            (
+                "max_parfor_workers",
+                numerical.evidence_a.max_parfor_workers + 1,
+            ),
+            ("qualification_source_sha256", "0" * 64),
+            ("qualification_executed_file_sha256", "0" * 64),
+        )
+        for field, value in stale_evidence_bindings:
+            forged_evidence = replace(
+                numerical.evidence_a, **{field: value}
+            )
+            _expect_invalid(
+                f"receipt with stale evidence binding {field}",
+                lambda forged=forged_evidence: comparison._receipt_payload(
+                    replace(numerical, evidence_a=forged),
+                    accepted=True,
+                ),
+            )
+        _expect_invalid(
+            "receipt rejects forged ComparisonResult tolerance",
+            lambda: comparison._receipt_payload(
+                replace(numerical, tolerance_rtol=1e-3),
+                accepted=True,
+            ),
+        )
+
+        original_endpoint_reassert = comparison._reassert_endpoint_snapshot
+        receipt_reassertions: list[Path] = []
+
+        def recording_endpoint_reassert(
+            path: Path,
+            evidence: object,
+            current_policy: comparison.CurrentPolicy,
+        ) -> None:
+            receipt_reassertions.append(Path(path))
+            original_endpoint_reassert(path, evidence, current_policy)
+
+        comparison._reassert_endpoint_snapshot = recording_endpoint_reassert
+        try:
+            comparison._receipt_payload(numerical, accepted=True)
+        finally:
+            comparison._reassert_endpoint_snapshot = original_endpoint_reassert
+        assert receipt_reassertions == [Path(a), Path(b)]
+        print("  [PASS] receipt construction reasserts both endpoints")
+
+        original_current_policy = comparison._current_policy
+        policy_calls = {"count": 0}
+
+        def drifting_current_policy() -> comparison.CurrentPolicy:
+            observed = original_current_policy()
+            policy_calls["count"] += 1
+            if policy_calls["count"] >= 2:
+                return replace(
+                    observed,
+                    generator_source_root_sha256="0" * 64,
+                )
+            return observed
+
+        comparison._current_policy = drifting_current_policy
+        try:
+            _expect_invalid(
+                "receipt construction reasserts current policy at the end",
+                lambda: comparison._receipt_payload(
+                    numerical, accepted=True
+                ),
+            )
+        finally:
+            comparison._current_policy = original_current_policy
+        assert policy_calls["count"] >= 2
+        _expect_invalid(
             "looser-than-reviewed tolerance",
             lambda: comparison.compare_directories(a, b, rtol=1e-3),
         )
 
         def large_signal(data: dict) -> None:
-            data["AcelRodaPrimVag"][0][0, 0] += 1e-3
+            data["AcelWheelsetPrimVag"][0][0, 0] += 1e-3
 
         a, b = _pair(root, "large_signal", mutate_b=large_signal)
-        _expect_verdict(
+        material = _expect_verdict(
             "out-of-tolerance solver difference",
             "MATERIALLY-DIFFERENT",
             lambda: comparison.compare_directories(a, b),
         )
         assert comparison.main([str(a), str(b), "--accept-numerical"]) == 1
+        material_receipt = root / "material-receipt.json"
+        assert (
+            comparison.main(
+                [
+                    str(a),
+                    str(b),
+                    "--accept-numerical",
+                    "--receipt",
+                    str(material_receipt),
+                ]
+            )
+            == 1
+        )
+        material_receipt_payload = json.loads(
+            material_receipt.read_text(encoding="utf-8")
+        )
+        assert material_receipt_payload["verdict"] == "MATERIALLY-DIFFERENT"
+        assert (
+            material_receipt_payload[
+                "numerical_equivalence_explicitly_accepted"
+            ]
+            is False
+        )
+        _expect_invalid(
+            "material verdict cannot claim numerical-equivalence acceptance",
+            lambda: comparison._receipt_payload(material, accepted=True),
+        )
 
         def random_input_drift(data: dict) -> None:
-            data["Velocidade"][0] += 1e-14
+            # Move by one representable float so this exact-input probe cannot
+            # become vacuous when the fixture velocity is large enough that a
+            # fixed decimal increment rounds back to the original value.
+            before = data["Velocidade"].copy()
+            data["Velocidade"][0] = np.nextafter(
+                data["Velocidade"][0], np.inf
+            )
+            assert not np.array_equal(before, data["Velocidade"])
+            assert before.tobytes() != data["Velocidade"].tobytes()
 
         a, b = _pair(root, "random_drift", mutate_b=random_input_drift)
-        _expect_verdict(
+        saved_velocity_a = np.asarray(
+            _fixture_mat(a / "0001.mat")["data"]["Velocidade"]
+        )
+        saved_velocity_b = np.asarray(
+            _fixture_mat(b / "0001.mat")["data"]["Velocidade"]
+        )
+        assert not np.array_equal(saved_velocity_a, saved_velocity_b)
+        assert saved_velocity_a.tobytes() != saved_velocity_b.tobytes()
+        random_drift_result = _expect_verdict(
             "tiny random-input drift remains exact",
             "MATERIALLY-DIFFERENT",
             lambda: comparison.compare_directories(a, b),
         )
-
-        def nested_drift(data: dict) -> None:
-            data["track_log"][0]["ballast_patches"][0, 2] += 0.01
-
-        a, b = _pair(
-            root, "nested_drift", mutate_b=nested_drift, stage="s16_all"
-        )
-        _expect_verdict(
-            "nested nuisance mutation",
-            "MATERIALLY-DIFFERENT",
-            lambda: comparison.compare_directories(a, b),
-        )
-
-        a, b = _pair(root, "mechanism_coverage", stage="s16_all")
-        covered = _expect_verdict(
-            "all-mechanism aggregate witnesses",
-            "SEMANTICALLY-BIT-IDENTICAL",
-            lambda: comparison.compare_directories(a, b),
-        )
-        coverage = covered.evidence_a.mechanism_coverage
-        assert coverage.required
-        assert min(
-            coverage.crack_active_passages,
-            coverage.profile_active_passages,
-            coverage.ballast_patch_rows,
-            coverage.hanging_group_rows,
-            coverage.pad_departure_passages,
-            coverage.polygon_rows,
-        ) > 0
-        assert set(coverage.witnesses) == {
-            "crack",
-            "profile",
-            "ballast",
-            "hanging",
-            "pad",
-            "polygonization",
-        }
-
-        a, b = _pair(root, "mechanism_coverage_4span", stage="s23_all4")
-        _expect_verdict(
-            "four-span all-mechanism aggregate witnesses",
-            "SEMANTICALLY-BIT-IDENTICAL",
-            lambda: comparison.compare_directories(a, b),
+        expected_velocity_mismatches = [
+            f"{state_index:04d}.mat.data.Velocidade: "
+            "exact numerical values differ"
+            for state_index in range(
+                1, len(random_drift_result.evidence_a.state_files) + 1
+            )
+        ]
+        assert (
+            random_drift_result.stats.mismatches
+            == expected_velocity_mismatches
         )
 
-        def remove_polygon(data: dict) -> None:
-            for passage in data["oor_log"]:
-                passage["poly"] = np.zeros((0, 5), dtype=float)
+        def inject_disabled_track(data: dict) -> None:
+            data["track_log"][0] = {
+                "ballast_patches": np.array(
+                    [[12.5, 16.5, 0.55, 0.60]], dtype=float
+                ),
+                "hanging_groups": np.zeros((0, 2), dtype=float),
+                "pad_stiff_mult": 1.0,
+                "pad_damp_mult": 1.0,
+                "pad_failures": np.zeros((0,), dtype=float),
+                "x_bridge_local": 30.0,
+            }
 
         a, b = _pair(
             root,
-            "missing_coverage",
-            mutate_a=remove_polygon,
-            mutate_b=remove_polygon,
-            stage="s16_all",
+            "disabled_track_payload",
+            mutate_a=inject_disabled_track,
+            mutate_b=inject_disabled_track,
+            stage="F40-M",
         )
         _expect_invalid(
-            "all-mechanism stage without polygonization witness",
+            "same forbidden track payload in both disabled-mechanism inputs",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def inject_disabled_oor(data: dict) -> None:
+            data["oor_log"][0] = {
+                "flats": np.zeros((0, 5), dtype=float),
+                "poly": np.array(
+                    [[1.0, 1.0, 8.0, 2.5e-5, 0.75]], dtype=float
+                ),
+            }
+
+        a, b = _pair(
+            root,
+            "disabled_oor_payload",
+            mutate_a=inject_disabled_oor,
+            mutate_b=inject_disabled_oor,
+            stage="L99-M",
+        )
+        _expect_invalid(
+            "same forbidden OOR payload in both disabled-mechanism inputs",
             lambda: comparison.compare_directories(a, b),
         )
 
@@ -1577,12 +2121,129 @@ def main() -> None:
             lambda: comparison.compare_directories(a, b),
         )
 
+        def wrong_dim_space_equation(data: dict) -> None:
+            data["DimSpace"][0] += 1
+
+        a, b = _pair(
+            root,
+            "wrong_dim_space_equation",
+            mutate_b=wrong_dim_space_equation,
+        )
+        _expect_invalid(
+            "RAW DimSpace formula mutation",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def wrong_registered_crop_start(data: dict) -> None:
+            data["crop_start"][0] = 1000
+
+        a, b = _pair(
+            root,
+            "wrong_registered_crop_start",
+            mutate_b=wrong_registered_crop_start,
+        )
+        _expect_invalid(
+            "RAW registered crop-start mutation",
+            lambda: comparison.compare_directories(a, b),
+        )
+
         def fatal_contact(data: dict) -> None:
+            data["contact_log"][0, 1] = 1.0
+            data["contact_log"][0, 2] = (
+                policy.contact_fraction_tolerance / 2.0
+            )
             data["contact_log"][0, 3] = policy.contact_force_tolerance_N + 1
 
         a, b = _pair(root, "fatal_contact", mutate_b=fatal_contact)
         _expect_invalid(
             "contact gate violation",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def negative_compression(data: dict) -> None:
+            data["contact_log"][:, 3] = -87913.0
+
+        a, b = _pair(
+            root,
+            "negative_compression",
+            mutate_a=negative_compression,
+            mutate_b=negative_compression,
+        )
+        _expect_verdict(
+            "signed negative compression remains admissible",
+            "SEMANTICALLY-BIT-IDENTICAL",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def inconsistent_contact_flag(data: dict) -> None:
+            data["contact_log"][0, 3] = 1.0
+
+        a, b = _pair(
+            root,
+            "inconsistent_contact_flag",
+            mutate_b=inconsistent_contact_flag,
+        )
+        _expect_invalid(
+            "positive signed reaction without flag/fraction",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def missing_passage_seed(data: dict) -> None:
+            data.pop("passage_named_stream_seed_id")
+
+        a, b = _pair(
+            root,
+            "missing_passage_seed",
+            mutate_b=missing_passage_seed,
+        )
+        _expect_invalid(
+            "missing per-state passage seed matrix",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def extra_data_field(data: dict) -> None:
+            data["unexpected_scientific_alias"] = 1.0
+
+        a, b = _pair(
+            root,
+            "extra_data_field",
+            mutate_b=extra_data_field,
+        )
+        _expect_invalid(
+            "unexpected nested state field",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def extra_top_field(state: dict) -> None:
+            state["unexpected_top_alias"] = "forged"
+
+        a, b = _pair(
+            root,
+            "extra_top_field",
+            mutate_state_b=extra_top_field,
+        )
+        _expect_invalid(
+            "unexpected top-level state field",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        def unit_bearing_fixity(data: dict) -> None:
+            data["bearing_fixity"][0] = 1.0
+
+        a, b = _pair(
+            root,
+            "unit_bearing_fixity",
+            mutate_b=unit_bearing_fixity,
+        )
+        _expect_invalid(
+            "bearing_fixity equal to one",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        a, b = _pair(root, "numeric_state_alias")
+        shutil.copy2(a / "0001.mat", a / "1.mat")
+        _expect_invalid(
+            "numeric state filename alias",
             lambda: comparison.compare_directories(a, b),
         )
 
@@ -1606,7 +2267,7 @@ def main() -> None:
             mutate_b=unhealthy_healthy_frequency,
         )
         _expect_invalid(
-            "healthy L60 deck frequency outside audited gate",
+            "healthy F40 deck frequency outside audited gate",
             lambda: comparison.compare_directories(a, b),
         )
 
@@ -1662,9 +2323,9 @@ def main() -> None:
             lambda: comparison.compare_directories(a, b),
         )
 
-        a, b = _pair(root, "sixty_five_states", n_states=65)
+        a, b = _pair(root, "thirty_two_states", n_states=32)
         _expect_invalid(
-            "qualification with 65 states",
+            "F40-S qualification with 32 states",
             lambda: comparison.compare_directories(a, b),
         )
 
@@ -1731,6 +2392,19 @@ def main() -> None:
             lambda: comparison.compare_directories(a, b),
         )
 
+        a, b = _pair(root, "noncanonical_host_receipt_bytes")
+        host_path = b / "qualification_host_receipt.json"
+        host_receipt = json.loads(host_path.read_text(encoding="utf-8"))
+        host_path.write_text(
+            json.dumps(host_receipt, indent=4, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        _expect_invalid(
+            "host receipt rejects semantically equal noncanonical JSON bytes",
+            lambda: comparison.compare_directories(a, b),
+        )
+
         a, b = _pair(root, "wrong_host_environment_binding")
         host_path = b / "qualification_host_receipt.json"
         host_receipt = json.loads(host_path.read_text(encoding="utf-8"))
@@ -1772,6 +2446,30 @@ def main() -> None:
         )
         _expect_invalid(
             "manifest source root differs from current generator bytes",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        a, b = _pair(
+            root,
+            "bad_channel_schema",
+            mutate_manifest_b=lambda manifest: manifest.__setitem__(
+                "channel_schema_id", "legacy_virtual8"
+            ),
+        )
+        _expect_invalid(
+            "manifest channel schema differs from physical8_v1",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        a, b = _pair(
+            root,
+            "mixed_payload_channel_schema",
+            mutate_b=lambda data: data.__setitem__(
+                "channel_schema_id", "legacy_virtual8"
+            ),
+        )
+        _expect_invalid(
+            "per-state channel schema differs from manifest",
             lambda: comparison.compare_directories(a, b),
         )
 
@@ -1820,6 +2518,31 @@ def main() -> None:
         )
         _expect_invalid(
             "wrong top-level semantic state seed",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        a, b = _pair(
+            root,
+            "uint64_top_state_seed",
+            mutate_state_b=lambda state: state.__setitem__(
+                "file_state_seed_id",
+                np.uint64(state["file_state_seed_id"]),
+            ),
+        )
+        _expect_invalid(
+            "top-level state seed requires scalar MATLAB uint32 dtype",
+            lambda: comparison.compare_directories(a, b),
+        )
+
+        a, b = _pair(
+            root,
+            "uint64_nested_state_seed",
+            mutate_b=lambda data: data.__setitem__(
+                "state_seed_id", np.uint64(data["state_seed_id"])
+            ),
+        )
+        _expect_invalid(
+            "nested state seed requires scalar MATLAB uint32 dtype",
             lambda: comparison.compare_directories(a, b),
         )
 
@@ -2013,9 +2736,9 @@ def main() -> None:
 
         a, b = _pair(root, "digest_extra_top_level")
         for dataset in (a, b):
-            value = comparison._public_mat(
-                dataset / "file_digests.mat"
-            )["file_digests"]
+            value = _fixture_mat(dataset / "file_digests.mat")[
+                "file_digests"
+            ]
             savemat(
                 dataset / "file_digests.mat",
                 {"file_digests": value, "unreviewed": 1},
@@ -2028,9 +2751,9 @@ def main() -> None:
 
         a, b = _pair(root, "digest_nonscalar_struct")
         for dataset in (a, b):
-            value = comparison._public_mat(
-                dataset / "file_digests.mat"
-            )["file_digests"]
+            value = _fixture_mat(dataset / "file_digests.mat")[
+                "file_digests"
+            ]
             savemat(
                 dataset / "file_digests.mat",
                 {
@@ -2069,6 +2792,29 @@ def main() -> None:
                 lambda: comparison.compare_directories(a, b),
             )
 
+        hardlink_members = (
+            "file_digests.mat",
+            "case_info.mat",
+            "damage_states.mat",
+            "0001.mat",
+            "qualification_executed.m",
+            "qualification_host_receipt.json",
+            "_GENERATION_COMPLETE",
+        )
+        for index, member in enumerate(hardlink_members):
+            a, _b = _pair(
+                root,
+                f"hardlink_guard_{index}_{member.replace('.', '_')}",
+            )
+            target = a / member
+            alias = a / f"hardlink-alias-{index}.bin"
+            os.link(target, alias)
+            _expect_invalid_from(
+                f"hard-link alias rejected for {member}",
+                "single-link",
+                lambda a=a: comparison._validated_payload(a, policy),
+            )
+
         a, b = _pair(root, "tampered")
         with (b / "0001.mat").open("ab") as handle:
             handle.write(b"tamper")
@@ -2078,16 +2824,16 @@ def main() -> None:
         )
 
         a, b = _pair(root, "marker_tampered")
-        with (b / "_GENERATION_COMPLETE").open("a", encoding="utf-8") as handle:
-            handle.write("unexpected-fourth-line\n")
+        with (b / "_GENERATION_COMPLETE").open("ab") as handle:
+            handle.write(b"unexpected-fourth-line\n")
         _expect_invalid(
             "completion marker extension",
             lambda: comparison.compare_directories(a, b),
         )
 
         a, b = _pair(root, "marker_blank_extension")
-        with (b / "_GENERATION_COMPLETE").open("a", encoding="utf-8") as handle:
-            handle.write("\n")
+        with (b / "_GENERATION_COMPLETE").open("ab") as handle:
+            handle.write(b"\n")
         _expect_invalid(
             "completion marker blank-line extension",
             lambda: comparison.compare_directories(a, b),
@@ -2111,6 +2857,8 @@ def main() -> None:
             "unsafe generation worker cap",
             lambda: comparison.compare_directories(a, b),
         )
+
+        _intra_invocation_mutation_checks(root)
 
     _micro_patch_checks()
     print("GENERATION ENVIRONMENT COMPARISON: ALL ADVERSARIAL CHECKS PASS")

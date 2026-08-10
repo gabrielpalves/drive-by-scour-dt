@@ -3,7 +3,11 @@ class EmptyObj:
 
 def a02_track():
     """
-    Definition of Track Properties (Zhai et al. with Ballast on Bridge)
+    Inherited TTB-2D track baseline using scalar values attributed to Zhai.
+
+    This is not Zhai's complete five-parameter ballast topology: adjacent
+    ballast shear coupling is omitted and the bridge path condenses ballast
+    mass onto deck DOFs. See docs/numerical_vv_protocol.md.
     """
     Track = EmptyObj()
     

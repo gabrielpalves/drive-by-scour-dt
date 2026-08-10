@@ -1,4 +1,4 @@
-"""Adversarial R11 test of the unified protocol/source hash.
+"""Adversarial R12 test of the unified four-stage protocol/source hash.
 
 Run:  python check_protocol_hash.py   (needs numpy + scipy + torch/sklearn;
                                        does NOT need optuna or MATLAB)
@@ -38,6 +38,7 @@ from core.protocol import (canonical_json, protocol_hash, short_hash,      # noq
                            read_dataset_provenance, OPTUNA_PROTOCOL)
 import core.protocol as cprotocol                                          # noqa: E402
 from core.dataset import (                                                # noqa: E402
+    _EXPECTED_CHANNEL_SCHEMA_ID,
     _EXPECTED_GENERATION_BEHAVIOR_VERSION,
     _EXPECTED_GEN_SCHEMA,
     _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
@@ -48,10 +49,14 @@ import core.dataset as cds                                                 # noq
 from core.execution_environment import EXECUTION_BLOCK_POLICY             # noqa: E402
 from core.hyperparameter_policy import HYPERPARAMETER_POLICY              # noqa: E402
 from core.capacity_preflight import CAPACITY_PREFLIGHT_POLICY             # noqa: E402
-from core.campaign_contract import EXPECTED_PROTOCOL_SCHEMA_TAG           # noqa: E402
+from core.campaign_contract import (                                      # noqa: E402
+    EXPECTED_PROTOCOL_SCHEMA_TAG,
+    EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
+    EXPECTED_RAIL_END_CLEARANCE_M,
+    STAGE_ORDER,
+    campaign_stage_contract,
+)
 from core.source_provenance import (                                      # noqa: E402
-    ENVIRONMENT_LOCK,
-    REQUIREMENTS_LOCK,
     generator_source_root,
     python_runtime_source_root,
 )
@@ -92,6 +97,8 @@ def _generation_config_json(
     return json.dumps(
         {
             "schema": schema,
+            "channel_schema_id": _EXPECTED_CHANNEL_SCHEMA_ID,
+            "state_design_kind": "five-family-multidamage-v2",
             "generation_behavior_version": behavior,
             "campaign_matlab_release": campaign_release,
             "campaign_matlab_environment_sha256":
@@ -103,6 +110,9 @@ def _generation_config_json(
             "n_states": _FIXTURE_N_STATES,
             "Npass": _FIXTURE_NPASS,
             "damage_seed": _FIXTURE_DAMAGE_SEED,
+            "rail_end_clearance_m": EXPECTED_RAIL_END_CLEARANCE_M,
+            "rail_end_clearance_decision_id":
+                EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
             # The nonce models a genuine regeneration while leaving the
             # semantic state universe unchanged.
             "unit_fixture_variant": str(variant),
@@ -170,12 +180,11 @@ with tempfile.TemporaryDirectory(prefix="runtime-root-") as runtime_tmp:
         line for line in manifest_source.read_text(encoding="utf-8").splitlines()
         if line and not line.lstrip().startswith("#")
     ]
-    runtime_names = [
-        name for name in manifest_names
-        if name.endswith(".py")
-        or name in {ENVIRONMENT_LOCK, REQUIREMENTS_LOCK}
-    ]
-    for name in runtime_names:
+    # The runtime digest is a Python/environment subset, but its source
+    # inventory is accepted only after the complete reviewed repository layout
+    # (including scour_MATLAB) has been authenticated.  Reproduce that boundary
+    # in the isolated fixture instead of constructing a partial pseudo-repo.
+    for name in manifest_names:
         source = REPO.joinpath(*name.split("/"))
         target = runtime_root.joinpath(*name.split("/"))
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -312,7 +321,7 @@ def _named_seed(root_seed, uid, stream, passage=None):
 
 
 def _write_semantic_state_table(path, *, damage_level=0.0):
-    """Write the complete R11 semantic UID/CRN sidecar used by production."""
+    """Write the complete R12 semantic UID/CRN sidecar used by production."""
     state_seed_ids = np.asarray(
         [_state_seed_id(uid) for uid in _STATE_UIDS],
         dtype=np.uint32,
@@ -384,9 +393,11 @@ def _fixture(path, variant="A", schema=_EXPECTED_GEN_SCHEMA, manifest=True,
              marker_extra_line=None, metadata_overrides=None,
              metadata_drop=(), state_stamp_overrides=None,
              state_stamp_drop=(), state_stamp_index=2):
-    """Minimal R11 identity with manifest, state stamps, digests and marker."""
+    """Minimal R12 identity with manifest, state stamps, digests and marker."""
     os.makedirs(path, exist_ok=True)
     generation = {
+        'channel_schema_id': _EXPECTED_CHANNEL_SCHEMA_ID,
+        'state_design_kind': 'five-family-multidamage-v2',
         'generation_behavior_version':
             _EXPECTED_GENERATION_BEHAVIOR_VERSION,
         'matlab_release': matlab_release,
@@ -443,6 +454,9 @@ def _fixture(path, variant="A", schema=_EXPECTED_GEN_SCHEMA, manifest=True,
               'case_name': _FIXTURE_DATASET,
               'stage': _FIXTURE_STAGE,
               'damage_mode': 'multi_scour',
+              'rail_end_clearance_m': EXPECTED_RAIL_END_CLEARANCE_M,
+              'rail_end_clearance_decision_id':
+                  EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
               'L_bridge_m': 60.0,
               'num_spans': 3,
               'num_supports': 4,
@@ -471,6 +485,8 @@ def _fixture(path, variant="A", schema=_EXPECTED_GEN_SCHEMA, manifest=True,
               'use_speed_variability': True,
               'use_temp_variability': True,
               **generation}
+        for field in metadata_drop:
+            ci.pop(field, None)
         if drop_release:
             del ci['matlab_release']
         if drop_campaign_release:
@@ -519,7 +535,7 @@ def _fixture(path, variant="A", schema=_EXPECTED_GEN_SCHEMA, manifest=True,
         'file_qualification_source_sha256':
             canonical_generation['qualification_source_sha256'],
     }
-    # Audit r4 verifies bytes; R11 also parses every top-level provenance stamp
+    # Audit r4 verifies bytes; R12 also parses every top-level provenance stamp
     # before a study can be created.
     for state_index, (state_uid, state_seed_id) in enumerate(
         zip(
@@ -638,8 +654,8 @@ def _mutate_digest_contract(path, mutation):
 def _args(dataset_dir, **over):
     """Baseline build_protocol_descriptors kwargs; **over mutates one knob."""
     base = dict(
-        stage="s0_scour", dataset="fixture_ds", dataset_dir=dataset_dir,
-        target_supports=[2, 3], bearing_targets=None,
+        stage="F40-S", dataset="fixture_ds", dataset_dir=dataset_dir,
+        target_supports=[2], bearing_targets=None,
         task="regression", discretization=1,
         seeds=[42, 1337, 2026], n_trials=100, epochs=50,
         use_pruner=True,
@@ -647,10 +663,10 @@ def _args(dataset_dir, **over):
         architectures=[{"name_short": "PAA_NHiTS", "method": "PAA",
                         "use_space2vec": False, "use_lstm": False,
                         "use_nhits": True, "model_type": "1D_MODULAR"}],
-        extra_pairs=[[1, 3]],
-        pair_search_stages={"s0_scour", "s16_all"},
-        arch_selection_stages={"s0_scour"},
-        multi_arch_pair_selection_stages={"s0_scour", "s16_all"},
+        extra_pairs=[],
+        pair_search_stages={"F40-S"},
+        arch_selection_stages={"F40-S"},
+        multi_arch_pair_selection_stages={"F40-S"},
         schema_tag=EXPECTED_PROTOCOL_SCHEMA_TAG,
         train_protocol=TRAIN_PROTOCOL,
         search_space=SEARCH_SPACE,
@@ -662,6 +678,23 @@ def _args(dataset_dir, **over):
     return base
 
 
+def _stage_args(dataset_dir, stage, **over):
+    """Descriptor kwargs for one of the exact four registered Paper-1 stages."""
+    if stage not in STAGE_ORDER:
+        raise AssertionError(f"unregistered test stage {stage!r}")
+    learning = campaign_stage_contract(stage)["learning"]
+    return _args(
+        dataset_dir,
+        stage=stage,
+        target_supports=list(learning["target_supports"]),
+        bearing_targets=(
+            list(learning["bearing_targets"])
+            if learning["bearing_targets"] is not None else None
+        ),
+        **over,
+    )
+
+
 root_dir = tempfile.mkdtemp(prefix="protohash_")
 _real_descriptor_provenance_reader = cprotocol.read_dataset_provenance
 
@@ -669,7 +702,7 @@ _real_descriptor_provenance_reader = cprotocol.read_dataset_provenance
 def _standalone_fixture_provenance(dataset_dir, **_registered_expectations):
     """Use the real reader while isolating generic descriptor unit fixtures.
 
-    The three-state dataset intentionally is not a registered 450/475-state
+    The three-state dataset intentionally is not a registered 305/425/475-state
     campaign rung.  Production descriptor assembly still passes and enforces
     all registered-stage expectations; this local adapter suppresses only
     those expectations for sections C/D/F.  Section E calls the unpatched real
@@ -690,8 +723,15 @@ try:
     core0, full0 = build_protocol_descriptors(**_args(ds_a))
     ch0, fh0 = protocol_hash(core0), protocol_hash(full0)
 
-    check("structured protocol schema is version 6",
-          core0["protocol_version"] == 6)
+    check("structured protocol schema is version 7",
+          core0["protocol_version"] == 7)
+    check("core protocol binds physical8_v1",
+          core0["code"]["expected_channel_schema_id"]
+              == _EXPECTED_CHANNEL_SCHEMA_ID)
+    channel_mutant = json.loads(json.dumps(core0))
+    channel_mutant["code"]["expected_channel_schema_id"] = "legacy_virtual8"
+    check("core hash changes on: channel schema",
+          protocol_hash(channel_mutant) != ch0)
     check("protocol binds live Python runtime source root",
           core0["code"]["python_runtime_source_root_sha256"]
               == _PYTHON_RUNTIME.sha256
@@ -703,8 +743,20 @@ try:
     check("execution policy is hash-carried but runtime hardware is not",
           core0["execution_blocking"] == EXECUTION_BLOCK_POLICY
           and "execution_runtime" not in core0
-          and full0["rung"]["execution_block"] == "l60"
-          and full0["rung"]["execution_anchor"] == "s0_scour")
+          and full0["rung"]["execution_block"] == "f40s"
+          and full0["rung"]["execution_anchor"] == "F40-S")
+    check("full protocol binds reviewed explicit 6 m decision",
+          full0["rung"]["dataset_provenance"]["rail_end_clearance_m"]
+              == EXPECTED_RAIL_END_CLEARANCE_M
+          and full0["rung"]["dataset_provenance"]
+              ["rail_end_clearance_decision_id"]
+              == EXPECTED_RAIL_END_CLEARANCE_DECISION_ID)
+    clearance_mutant = json.loads(json.dumps(full0))
+    clearance_mutant["rung"]["dataset_provenance"][
+        "rail_end_clearance_m"
+    ] = 15.0
+    check("full hash changes on: reviewed rail-end clearance",
+          protocol_hash(clearance_mutant) != fh0)
 
     core0b, full0b = build_protocol_descriptors(**_args(ds_a))
     check("rebuild with identical inputs -> identical hashes",
@@ -737,7 +789,7 @@ try:
                                                 "use_nhits": True,
                                                 "model_type": "1D_MODULAR"}]},
         "extra_pairs":      {"extra_pairs": [[0, 3]]},
-        "pair_search set":  {"pair_search_stages": {"s0_scour"}},
+        "pair_search set":  {"pair_search_stages": {"F40-S", "F40-M"}},
         "schema_tag":       {"schema_tag": "gs5a-r8"},
         "train_protocol":   {"train_protocol": {**TRAIN_PROTOCOL, "batch_size": 64}},
         "objective policy": {
@@ -773,9 +825,9 @@ try:
         "task":             {"task": "classification"},
         "discretization":   {"discretization": 5},
         # Feature B knobs (2026-07-19): deployment stages + bootstrap policy.
-        "deployment set":   {"deployment_selection_stages": {"s16_all"}},
+        "deployment set":   {"deployment_selection_stages": {"F40-M"}},
         "multi-arch pair set": {
-            "multi_arch_pair_selection_stages": {"s0_scour"}
+            "multi_arch_pair_selection_stages": {"F40-S", "F40-M"}
         },
         "environment lock": {
             "environment_lock": {
@@ -788,14 +840,15 @@ try:
             "execution_block_policy": {
                 **EXECUTION_BLOCK_POLICY,
                 "cross_block_inference": {
-                    "s0_scour_to_s21_scour4": {
+                    **EXECUTION_BLOCK_POLICY["cross_block_inference"],
+                    "F40-S_to_L99-S": {
                         **EXECUTION_BLOCK_POLICY[
                             "cross_block_inference"
-                        ]["s0_scour_to_s21_scour4"],
+                        ]["F40-S_to_L99-S"],
                         "rationale": (
                             EXECUTION_BLOCK_POLICY[
                                 "cross_block_inference"
-                            ]["s0_scour_to_s21_scour4"]["rationale"]
+                            ]["F40-S_to_L99-S"]["rationale"]
                             + " (alternate registered wording)"
                         ),
                     },
@@ -874,22 +927,45 @@ try:
           protocol_hash(full_sidecar_1) != protocol_hash(full_sidecar_0))
     check("sidecar identity does not change the CORE hash",
           protocol_hash(core_sidecar_1) == ch0)
-    core_s, full_s = build_protocol_descriptors(
-        **_args(ds_a, stage="s11_bear", bearing_targets=["left", "right"]))
-    check("stage/targets change the FULL hash", protocol_hash(full_s) != fh0)
-    check("stage/targets do NOT change the CORE hash", protocol_hash(core_s) == ch0)
-    core_l99, full_l99 = build_protocol_descriptors(
-        **_args(ds_a, stage="s21_scour4"))
-    check("L99 rung is assigned to its independent execution block",
-          full_l99["rung"]["execution_block"] == "l99"
-          and full_l99["rung"]["execution_anchor"] == "s21_scour4"
-          and protocol_hash(core_l99) == ch0)
-    check("s0->s21 is explicitly descriptive/non-confirmatory",
-          core0["execution_blocking"]["cross_block_inference"]
-              ["s0_scour_to_s21_scour4"]["confirmatory"] is False
-          and core0["execution_blocking"]["cross_block_inference"]
-              ["s0_scour_to_s21_scour4"]["status"]
-              == "descriptive_nonconfirmatory")
+    expected_stage_blocks = {
+        "F40-S": "f40s",
+        "F40-M": "f40m",
+        "L99-S": "l99s",
+        "L99-M": "l99m",
+    }
+    stage_descriptors = {"F40-S": (core0, full0)}
+    for stage in STAGE_ORDER[1:]:
+        stage_descriptors[stage] = build_protocol_descriptors(
+            **_stage_args(ds_a, stage)
+        )
+    check("all four current stages have independent execution blocks",
+          tuple(stage_descriptors) == STAGE_ORDER
+          and all(
+              full["rung"]["execution_block"] == expected_stage_blocks[stage]
+              and full["rung"]["execution_anchor"] == stage
+              and full["rung"]["stage"] == stage
+              and protocol_hash(core) == ch0
+              for stage, (core, full) in stage_descriptors.items()
+          ))
+    check("stage/targets change only the FULL hash",
+          all(
+              protocol_hash(full) != fh0 and protocol_hash(core) == ch0
+              for stage, (core, full) in stage_descriptors.items()
+              if stage != "F40-S"
+          ))
+    expected_cross = {
+        "F40-S_to_F40-M",
+        "F40-S_to_L99-S",
+        "F40-S_to_L99-M",
+    }
+    cross = core0["execution_blocking"]["cross_block_inference"]
+    check("all current cross-block contrasts are descriptive/non-confirmatory",
+          set(cross) == expected_cross
+          and all(
+              item["confirmatory"] is False
+              and item["status"] == "descriptive_nonconfirmatory"
+              for item in cross.values()
+          ))
 
     # ══════════════════════════════════════════════════════════════════════════
     # E. Dataset-provenance hard-fails
@@ -1007,6 +1083,21 @@ try:
                  lambda: read_dataset_provenance(p), RuntimeError)
 
     r11_manifest_mutations = (
+        ("wrong channel schema rejected",
+         {'channel_schema_id': 'legacy_virtual8'}, ()),
+        ("missing channel schema rejected", {}, ('channel_schema_id',)),
+        ("wrong state design kind rejected",
+         {'state_design_kind': 'dense-scour-61x5-v1'}, ()),
+        ("missing state design kind rejected", {}, ('state_design_kind',)),
+        ("wrong rail-end clearance rejected",
+         {'rail_end_clearance_m': 15.0}, ()),
+        ("missing rail-end clearance rejected", {},
+         ('rail_end_clearance_m',)),
+        ("wrong rail-end clearance decision ID rejected",
+         {'rail_end_clearance_decision_id':
+              'paper1-rail-domain-clearance-c15-v1'}, ()),
+        ("missing rail-end clearance decision ID rejected", {},
+         ('rail_end_clearance_decision_id',)),
         ("wrong generation behaviour rejected",
          {'generation_behavior_version': 'generation-rules-v3'}, ()),
         ("missing actual MATLAB environment descriptor rejected", {},
@@ -1092,7 +1183,9 @@ try:
               == _EXPECTED_MATLAB_ENVIRONMENT_SHA256
           and prov["generator_source_root_sha256"] == _GENERATOR.sha256
           and prov["generator_source_file_count"] == _GENERATOR.file_count
-          and prov["qualification_source_sha256"] == "PRODUCTION")
+          and prov["qualification_source_sha256"] == "PRODUCTION"
+          and prov["channel_schema_id"] == _EXPECTED_CHANNEL_SCHEMA_ID
+          and prov["state_design_kind"] == "five-family-multidamage-v2")
 
     # ══════════════════════════════════════════════════════════════════════════
     # F. descriptor_diff names the changed knob

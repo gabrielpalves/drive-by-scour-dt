@@ -6,7 +6,8 @@ Two functions that sit at the top of the training call stack:
     execute_ablation_pipeline  - the master loop that drives every step for
                                  every model in the ablation grid: Optuna
                                  optimisation, confusion matrix, DT package
-                                 export, stochastic stress-test, and slice plots.
+                                 export, optional development adjudication, and
+                                 slice plots.
 
     export_digital_twin_package - bundles the champion weights, scaler, and
                                   architecture metadata into the three files
@@ -42,6 +43,7 @@ from core.hyperparameter_policy import (
     ANCHOR_HPO_MODE,
     FROZEN_SINGLETON_MODE,
     LEGACY_MODE,
+    SELECTED_PAIR_HPO_MODE,
     anchor_study_identity,
     build_manifest_entry,
     derive_execution_plan,
@@ -51,8 +53,8 @@ from core.hyperparameter_policy import (
 from core.protocol import OPTUNA_PROTOCOL, protocol_hash
 from core.utils    import set_global_seed, DOF_NAME_TO_IDX
 from plotting.confusion        import plot_cached_confusion_matrix
-from plotting.robustness_plots import generate_optuna_robustness_plots, plot_stochastic_summary
-from training.robustness       import evaluate_stochastic_robustness, evaluate_parametric_robustness
+from plotting.robustness_plots import generate_optuna_robustness_plots
+from training.robustness       import evaluate_development_adjudication
 from training.trainer          import (
     TRAIN_PROTOCOL,
     Objective,
@@ -213,13 +215,17 @@ def _stamp_study_protocol(
             )
     record = {
         "schema": (
-            "optuna-study-provenance-v4"
+            "optuna-study-provenance-v6"
             if is_campaign else "optuna-study-provenance-v2"
         ),
         "protocol_hash": config.get("protocol_hash"),
         "protocol_descriptor": config.get("protocol_descriptor"),
         "execution_environment_sha256": (
             execution_runtime["execution_environment_sha256"]
+            if execution_runtime is not None else None
+        ),
+        "execution_compatibility_sha256": (
+            execution_runtime["execution_compatibility_sha256"]
             if execution_runtime is not None else None
         ),
         "execution_runtime": execution_runtime,
@@ -252,6 +258,9 @@ def _stamp_study_protocol(
                 hyperparameter_plan["execution_receipt_sha256"],
             "block_reference_manifest_sha256":
                 hyperparameter_plan["block_reference_manifest_sha256"],
+            "selection_artifact_sha256":
+                hyperparameter_plan["selection_artifact_sha256"],
+            "selection_slot": hyperparameter_plan["selection_slot"],
         })
     # Optuna persists user attributes through JSON.  Canonicalise before both
     # storage and comparison because tuples (notably search-space bounds) return
@@ -311,6 +320,7 @@ def _validated_study_hyperparameter_record(
         "protocol_hash",
         "protocol_descriptor",
         "execution_environment_sha256",
+        "execution_compatibility_sha256",
         "execution_runtime",
         "dataset",
         "model_name",
@@ -330,14 +340,16 @@ def _validated_study_hyperparameter_record(
         "campaign_run_tag",
         "execution_receipt_sha256",
         "block_reference_manifest_sha256",
+        "selection_artifact_sha256",
+        "selection_slot",
     }
     if (
         not isinstance(record, dict)
         or set(record) != expected_keys
-        or record.get("schema") != "optuna-study-provenance-v4"
+        or record.get("schema") != "optuna-study-provenance-v6"
     ):
         raise RuntimeError(
-            f"{study.study_name}: malformed/missing v4 campaign study record."
+            f"{study.study_name}: malformed/missing v6 campaign study record."
         )
     canonical_record = _canonical_json_value(record)
     plan = canonical_record["hyperparameter_execution_plan"]
@@ -362,6 +374,8 @@ def _validated_study_hyperparameter_record(
         ),
         "execution_environment_sha256":
             execution_runtime["execution_environment_sha256"],
+        "execution_compatibility_sha256":
+            execution_runtime["execution_compatibility_sha256"],
         "execution_runtime": execution_runtime,
         "model_name": config.get("name"),
         "seed": int(config["seed"]),
@@ -377,6 +391,8 @@ def _validated_study_hyperparameter_record(
         "execution_receipt_sha256": plan["execution_receipt_sha256"],
         "block_reference_manifest_sha256":
             plan["block_reference_manifest_sha256"],
+        "selection_artifact_sha256": plan["selection_artifact_sha256"],
+        "selection_slot": plan["selection_slot"],
     }
     mismatches = {
         key: (canonical_record.get(key), expected)
@@ -470,6 +486,10 @@ def verify_digital_twin_package(
             execution_runtime["execution_environment_sha256"]
             if execution_runtime is not None else None
         ),
+        "execution_compatibility_sha256": (
+            execution_runtime["execution_compatibility_sha256"]
+            if execution_runtime is not None else None
+        ),
         "execution_runtime": execution_runtime,
         "dataset": (
             study_record.get("dataset")
@@ -511,6 +531,14 @@ def verify_digital_twin_package(
             hyperparameter_plan["block_reference_manifest_sha256"]
             if hyperparameter_plan is not None else None
         ),
+        "selection_artifact_sha256": (
+            hyperparameter_plan["selection_artifact_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        "selection_slot": (
+            hyperparameter_plan["selection_slot"]
+            if hyperparameter_plan is not None else None
+        ),
         "study_name": study.study_name,
         "best_trial_number": int(study.best_trial.number),
         "best_trial_value": float(study.best_value),
@@ -522,6 +550,8 @@ def verify_digital_twin_package(
             "campaign_run_tag",
             "execution_receipt_sha256",
             "block_reference_manifest_sha256",
+            "selection_artifact_sha256",
+            "selection_slot",
         }
         missing_campaign_lineage = sorted(
             required_campaign_lineage - set(metadata)
@@ -555,7 +585,7 @@ def verify_digital_twin_package(
 
     expected_artifact = {
         "schema": (
-            "champion-artifact-v4"
+            "champion-artifact-v6"
             if config.get("protocol_hash") else "champion-artifact-v2"
         ),
         "best_trial_number": int(study.best_trial.number),
@@ -565,6 +595,10 @@ def verify_digital_twin_package(
         "protocol_hash": config.get("protocol_hash"),
         "execution_environment_sha256": (
             execution_runtime["execution_environment_sha256"]
+            if execution_runtime is not None else None
+        ),
+        "execution_compatibility_sha256": (
+            execution_runtime["execution_compatibility_sha256"]
             if execution_runtime is not None else None
         ),
     }
@@ -586,6 +620,9 @@ def verify_digital_twin_package(
                 hyperparameter_plan["execution_receipt_sha256"],
             "block_reference_manifest_sha256":
                 hyperparameter_plan["block_reference_manifest_sha256"],
+            "selection_artifact_sha256":
+                hyperparameter_plan["selection_artifact_sha256"],
+            "selection_slot": hyperparameter_plan["selection_slot"],
         })
     artifact = study.user_attrs.get("ttbi_champion_artifact")
     if artifact != expected_artifact:
@@ -603,12 +640,16 @@ def _execute_protocol_study(
     study: optuna.Study,
     objective,
     hyperparameter_plan: dict,
+    *,
+    callbacks=None,
+    show_progress_bar: bool = True,
 ) -> dict:
     """Run exactly the derived campaign budget, without catch/retry semantics."""
 
     hyperparameter_plan = validate_run_plan(hyperparameter_plan)
     if hyperparameter_plan.get("mode") not in {
         ANCHOR_HPO_MODE,
+        SELECTED_PAIR_HPO_MODE,
         FROZEN_SINGLETON_MODE,
     }:
         raise RuntimeError("protocol study helper received a non-campaign plan")
@@ -639,15 +680,124 @@ def _execute_protocol_study(
         )
     remaining = budget - useful
     if remaining:
+        if callbacks is None:
+            callbacks = [print_best_callback]
+        elif not isinstance(callbacks, (list, tuple)):
+            raise TypeError("protocol-study callbacks must be a list or tuple")
+        if not isinstance(show_progress_bar, bool):
+            raise TypeError("show_progress_bar must be boolean")
         # Deliberately omit catch=: CUDA OOM and every other exception are
         # fatal and persist as evidence rather than triggering another trial.
         study.optimize(
             objective,
             n_trials=remaining,
-            callbacks=[print_best_callback],
-            show_progress_bar=True,
+            callbacks=list(callbacks),
+            show_progress_bar=show_progress_bar,
         )
     return validate_terminal_study(study, hyperparameter_plan)
+
+
+def execute_registered_hpo_study(
+    *,
+    config: dict,
+    dataset_name: str,
+    storage: str,
+    output_dir: str,
+    cache_dir: str,
+    requested_n_trials: int,
+    epochs: int,
+    sampler_seed: int,
+    requested_use_pruner: bool,
+    capacity_receipt: dict | None = None,
+    require_fresh: bool = False,
+    callbacks=None,
+    show_progress_bar: bool = True,
+) -> tuple[optuna.Study, dict, dict]:
+    """Execute one registered campaign HPO through the canonical Objective.
+
+    This is the single campaign-study implementation shared by the production
+    ablation pipeline and non-scientific compute qualification.  It derives
+    the policy plan, validates capacity before study creation, creates and
+    stamps the real Optuna study, builds ``training.trainer.Objective``, and
+    applies the fail-closed terminal-state contract.  ``require_fresh`` is for
+    qualification runs only: any pre-existing trial is fatal and cannot be
+    converted into a partial-resume performance claim.
+    """
+
+    if not isinstance(require_fresh, bool):
+        raise TypeError("require_fresh must be boolean")
+    if not isinstance(show_progress_bar, bool):
+        raise TypeError("show_progress_bar must be boolean")
+    execution_runtime = _validated_config_execution_runtime(config)
+    hyperparameter_plan = derive_execution_plan(
+        config,
+        dataset_name=dataset_name,
+        requested_n_trials=requested_n_trials,
+        requested_use_pruner=requested_use_pruner,
+        execution_runtime=execution_runtime,
+    )
+    if hyperparameter_plan["mode"] == LEGACY_MODE:
+        raise RuntimeError(
+            "execute_registered_hpo_study requires a protocol-hashed "
+            "campaign configuration"
+        )
+    capacity_receipt = (
+        ensure_capacity_preflight(execution_runtime)
+        if capacity_receipt is None
+        else validate_capacity_receipt(
+            capacity_receipt, expected_runtime=execution_runtime
+        )
+    )
+    study = _create_or_resume_study(
+        config["name"],
+        storage,
+        hyperparameter_plan["effective_n_trials"],
+        sampler_seed=sampler_seed,
+        use_pruner=hyperparameter_plan["effective_use_pruner"],
+        force_nop_pruner=(
+            hyperparameter_plan["mode"] == FROZEN_SINGLETON_MODE
+        ),
+    )
+    if require_fresh and study.trials:
+        storage_object = getattr(study, "_storage", None)
+        if storage_object is not None and hasattr(storage_object, "remove_session"):
+            storage_object.remove_session()
+        backend = getattr(storage_object, "_backend", storage_object)
+        engine = getattr(backend, "engine", None)
+        if engine is not None:
+            engine.dispose()
+        raise RuntimeError(
+            f"{study.study_name}: qualifying execution requires a fresh "
+            "study, but {len(study.trials)} pre-existing trial(s) were found; "
+            "choose a new output directory"
+        )
+    _stamp_study_protocol(
+        study,
+        config=config,
+        dataset_name=dataset_name,
+        n_trials=hyperparameter_plan["effective_n_trials"],
+        epochs=epochs,
+        sampler_seed=sampler_seed,
+        use_pruner=hyperparameter_plan["effective_use_pruner"],
+        hyperparameter_plan=hyperparameter_plan,
+        capacity_receipt=capacity_receipt,
+    )
+    set_global_seed(sampler_seed, TRAIN_PROTOCOL["determinism"])
+    objective = Objective(
+        config=config,
+        dataset_name=dataset_name,
+        n_epochs=epochs,
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+    )
+    _execute_protocol_study(
+        study,
+        objective,
+        hyperparameter_plan,
+        callbacks=callbacks,
+        show_progress_bar=show_progress_bar,
+    )
+    return study, hyperparameter_plan, capacity_receipt
 
 
 # 1. Master ablation loop
@@ -661,15 +811,16 @@ def execute_ablation_pipeline(
     dataset:          str,
     n_trials:         int  = 50,
     epochs:           int  = 50,
-    skip_robustness:  bool = True,
+    skip_robustness:  bool | None = None,
     optuna_seed:      int  = 42,
     use_pruner:       bool = False,
-    run_robustness:   bool = True,
+    run_robustness:   bool = False,
+    development_adjudication_plan: dict | None = None,
 ) -> list[dict]:
     """
     Run the full ablation pipeline for every model configuration in
-    experiment_path and return a list of robustness scorecards for models
-    that passed the stochastic gatekeeper.
+    experiment_path and return development-adjudication records when that
+    explicitly planned phase is enabled.
 
     Per-model steps
     ---------------
@@ -677,15 +828,15 @@ def execute_ablation_pipeline(
     2. Evaluate the champion on the canonical validation set and save its
        confusion matrix.
     3. Bundle the champion weights, scaler, and metadata into a DT package.
-    4. Run the 30-seed stochastic stress-test (skipped when the model's
-       Optuna score exceeds the physical error tolerance and
-       skip_robustness=True).
+    4. Optionally run prospectively seeded repeated grouped folds over the
+       development partition. Sealed outer-test stability is deliberately not
+       part of this pre-freeze loop.
     5. Generate per-parameter Optuna slice plots.
 
     Resumability
     ------------
-    Both the Optuna study (load_if_exists=True) and the robustness JSON
-    checkpoints (written after every seed) survive interruptions.  Re-running
+    Both the Optuna study (load_if_exists=True) and the adjudication JSON
+    checkpoints (written after every refit) survive interruptions. Re-running
     the pipeline with the same arguments resumes from where it left off with
     no duplicate work.
 
@@ -710,14 +861,51 @@ def execute_ablation_pipeline(
         dataset (str):         Dataset sub-folder name passed to the cache.
         n_trials (int):        Maximum Optuna trials per model.
         epochs (int):          Maximum training epochs per trial.
-        skip_robustness (bool): Skip the 30-seed test when the Optuna score
-                                exceeds the physical error tolerance threshold.
+        skip_robustness: Removed compatibility argument. Supplying a value
+                         fails closed because outcome-based skipping is not
+                         part of the adjudication protocol.
+        run_robustness: Enable development-only adjudication. Defaults to
+                        False and requires ``development_adjudication_plan``.
+        development_adjudication_plan: Explicit ``development_idx``,
+                        ``strata_by_state``, ``split_seeds``,
+                        ``initialization_seeds``, ``n_splits``, and
+                        ``n_repeats``. No seed list is synthesized internally.
 
     Returns:
-        list[dict]: One scorecard dict per model that completed the stochastic
-                    test.  Keys: 'Model', 'Optuna_Lucky_Score',
-                    'Stochastic_Mean_MSE', 'Stochastic_Std_MSE', 'UCB_95_MSE'.
+        list[dict]: One protocol-labelled development-adjudication result per
+                    model when that optional phase is enabled.
     """
+    if skip_robustness is not None:
+        raise ValueError(
+            "skip_robustness was removed: development adjudication cannot be "
+            "skipped based on an observed score"
+        )
+    required_adjudication_keys = {
+        "development_idx",
+        "strata_by_state",
+        "split_seeds",
+        "initialization_seeds",
+        "n_splits",
+        "n_repeats",
+    }
+    if run_robustness and development_adjudication_plan is None:
+        raise ValueError(
+            "run_robustness=True requires an explicit "
+            "development_adjudication_plan"
+        )
+    if not run_robustness and development_adjudication_plan is not None:
+        raise ValueError(
+            "development_adjudication_plan was supplied while "
+            "run_robustness=False"
+        )
+    if development_adjudication_plan is not None:
+        supplied_keys = set(development_adjudication_plan)
+        if supplied_keys != required_adjudication_keys:
+            raise ValueError(
+                "development_adjudication_plan keys must be exactly "
+                f"{sorted(required_adjudication_keys)}; got "
+                f"{sorted(supplied_keys)}"
+            )
     os.makedirs(cache_dir_name, exist_ok=True)
     set_global_seed(optuna_seed, TRAIN_PROTOCOL["determinism"])
 
@@ -740,42 +928,56 @@ def execute_ablation_pipeline(
             requested_use_pruner=use_pruner,
             execution_runtime=execution_runtime,
         )
-        # This qualification is deliberately before create_study(): an
-        # incapable GPU cannot leave a misleading resumable campaign study.
-        capacity_receipt = (
-            ensure_capacity_preflight(execution_runtime)
-            if hyperparameter_plan["mode"] != LEGACY_MODE else None
-        )
         effective_n_trials = hyperparameter_plan["effective_n_trials"]
         effective_use_pruner = hyperparameter_plan["effective_use_pruner"]
-        study = _create_or_resume_study(
-            step['name'], database_name, effective_n_trials,
-            sampler_seed=optuna_seed,
-            use_pruner=effective_use_pruner,
-            force_nop_pruner=(
-                hyperparameter_plan["mode"] == FROZEN_SINGLETON_MODE
-            ),
-        )
-        _stamp_study_protocol(
-            study,
-            config=step,
-            dataset_name=dataset,
-            n_trials=effective_n_trials,
-            epochs=epochs,
-            sampler_seed=optuna_seed,
-            use_pruner=effective_use_pruner,
-            hyperparameter_plan=hyperparameter_plan,
-            capacity_receipt=capacity_receipt,
-        )
+        if hyperparameter_plan["mode"] == LEGACY_MODE:
+            study = _create_or_resume_study(
+                step['name'], database_name, effective_n_trials,
+                sampler_seed=optuna_seed,
+                use_pruner=effective_use_pruner,
+            )
+            _stamp_study_protocol(
+                study,
+                config=step,
+                dataset_name=dataset,
+                n_trials=effective_n_trials,
+                epochs=epochs,
+                sampler_seed=optuna_seed,
+                use_pruner=effective_use_pruner,
+                hyperparameter_plan=hyperparameter_plan,
+                capacity_receipt=None,
+            )
+            objective = Objective(
+                config=step, dataset_name=dataset, n_epochs=epochs,
+                cache_dir=cache_dir_name, output_dir=output_dir,
+            )
+        else:
+            # The shared helper is also exercised by the non-scientific
+            # compute benchmark.  Capacity is qualified before study creation;
+            # the real campaign Objective and fail-closed state accounting are
+            # therefore one implementation, not parallel raw optimize paths.
+            study, observed_plan, _capacity_receipt = (
+                execute_registered_hpo_study(
+                    config=step,
+                    dataset_name=dataset,
+                    storage=database_name,
+                    output_dir=output_dir,
+                    cache_dir=cache_dir_name,
+                    requested_n_trials=n_trials,
+                    epochs=epochs,
+                    sampler_seed=optuna_seed,
+                    requested_use_pruner=use_pruner,
+                )
+            )
+            if observed_plan != hyperparameter_plan:
+                raise RuntimeError(
+                    f"{step['name']}: shared HPO helper returned a foreign plan"
+                )
 
         # Legacy callers retain their historical bounded OOM handling.  The
-        # protocol-hashed campaign takes the separate fail-closed helper below:
-        # no caught exception, no replacement trial, exact derived terminal
-        # budget.
-        objective = Objective(
-            config=step, dataset_name=dataset, n_epochs=epochs,
-            cache_dir=cache_dir_name, output_dir=output_dir,
-        )
+        # protocol-hashed campaign has already executed through the shared
+        # fail-closed helper above: no caught exception, no replacement trial,
+        # exact derived terminal budget.
         TS = optuna.trial.TrialState
         if hyperparameter_plan["mode"] == LEGACY_MODE:
             import torch as _torch
@@ -830,9 +1032,6 @@ def execute_ablation_pipeline(
                     f"{effective_n_trials}, in-flight={n_inflight})."
                 )
         else:
-            _execute_protocol_study(
-                study, objective, hyperparameter_plan
-            )
             if hyperparameter_plan["mode"] == FROZEN_SINGLETON_MODE:
                 if _canonical_json_value(study.best_params) != (
                     _canonical_json_value(step["frozen_hyperparameters"])
@@ -889,21 +1088,20 @@ def execute_ablation_pipeline(
             output_dir=output_dir,
         )
 
-        # ── 4. Stochastic stress-test ─────────────────────────────────────────
-        # run_robustness=False skips the multi-seed Monte-Carlo entirely (the
-        # reduced multi-damage grid runs a single seed); the default-True path is
-        # unchanged for the single-scour ablation.
+        # ── 4. Development-only adjudication ──────────────────────────────────
+        # The sealed outer test is intentionally unavailable from this loop.
         if run_robustness:
-            scorecard = evaluate_stochastic_robustness(
+            scorecard = evaluate_development_adjudication(
                 study=study, config=step,
                 dataset_name=dataset,
                 n_epochs=epochs,
+                max_epochs=epochs,
+                n_scour_heads=task.n_scour_outputs(step),
                 cache_dir=cache_dir_name,
                 output_dir=output_dir,
-                skip_robustness=skip_robustness,
+                **development_adjudication_plan,
             )
-            if scorecard:
-                all_results.append({'Model': step['name'], **scorecard})
+            all_results.append({'Model': step['name'], **scorecard})
 
         # ── 5. Optuna slice plots ─────────────────────────────────────────────
         generate_optuna_robustness_plots(
@@ -986,6 +1184,10 @@ def export_digital_twin_package(
             execution_runtime["execution_environment_sha256"]
             if execution_runtime is not None else None
         ),
+        'execution_compatibility_sha256': (
+            execution_runtime["execution_compatibility_sha256"]
+            if execution_runtime is not None else None
+        ),
         'execution_runtime': execution_runtime,
         'dataset': dataset_name,
         'hyperparameter_mode': (
@@ -1022,6 +1224,14 @@ def export_digital_twin_package(
         ),
         'block_reference_manifest_sha256': (
             hyperparameter_plan["block_reference_manifest_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        'selection_artifact_sha256': (
+            hyperparameter_plan["selection_artifact_sha256"]
+            if hyperparameter_plan is not None else None
+        ),
+        'selection_slot': (
+            hyperparameter_plan["selection_slot"]
             if hyperparameter_plan is not None else None
         ),
     }
@@ -1071,7 +1281,7 @@ def export_digital_twin_package(
 
     artifact = {
         "schema": (
-            "champion-artifact-v4"
+            "champion-artifact-v6"
             if config.get("protocol_hash") else "champion-artifact-v2"
         ),
         "best_trial_number": int(best_trial_num),
@@ -1081,6 +1291,10 @@ def export_digital_twin_package(
         "protocol_hash": config.get("protocol_hash"),
         "execution_environment_sha256": (
             execution_runtime["execution_environment_sha256"]
+            if execution_runtime is not None else None
+        ),
+        "execution_compatibility_sha256": (
+            execution_runtime["execution_compatibility_sha256"]
             if execution_runtime is not None else None
         ),
     }
@@ -1102,6 +1316,9 @@ def export_digital_twin_package(
                 hyperparameter_plan["execution_receipt_sha256"],
             "block_reference_manifest_sha256":
                 hyperparameter_plan["block_reference_manifest_sha256"],
+            "selection_artifact_sha256":
+                hyperparameter_plan["selection_artifact_sha256"],
+            "selection_slot": hyperparameter_plan["selection_slot"],
         })
     study.set_user_attr("ttbi_champion_artifact", artifact)
     metadata.update({

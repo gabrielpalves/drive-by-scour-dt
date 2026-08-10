@@ -1,77 +1,81 @@
-# Audit R11 results (legacy filename)
+# Paper-1 dispatch authorization (legacy filename)
 
-**Status: DISPATCH BLOCKED.**
+**Status: PAPER-1 DISPATCH BLOCKED.**
 
 **Tested source commit:** PENDING
+**Dispatch authorization manifest SHA-256:** PENDING
 
-The filename `audit_r5_results.md` is retained because the bundle authorization
-gate already binds to it. The contents are the R11 audit record. This file does
-**not** yet authorize generation, ablation, bundle publication, or dispatch.
+The filename `audit_r5_results.md` is retained because the fail-closed bundle
+builder and authorization lineage bind this path. This pending report does not
+authorize production generation, training, bundle publication, or dispatch.
 
-## Locked R11 boundary
+## Contract under review
 
-The contract under review is `audit-2026-07-27-r11` /
-`generation-rules-v6` / `gs8a20260727r11`. All ten production rungs are locked
-to the exact MATLAB **25.2.0.3177638 (R2025b) Update 5** numerical-stack
-descriptor and the registered Python/Torch/CUDA environment. MATLAB and Python
-authenticate their source, numerical assets, environments, semantic state
-inventories, protocol descriptors, caches, studies, weights, scalers, capacity
-receipts, HPO manifests, and champion manifests. Qualification output remains
-segregated and is rejected as campaign data.
+The candidate Paper 1 campaign has four production blocks:
 
-The champion manifest carries `frozen_selection_sha256`. The anchor prints its
-canonical SHA-256, and every follower must provide that exact value through
-`TTBI_BLOCK_REFERENCE_SHA256`; a missing or mismatched operator pin is fatal.
-The final audit must confirm this hardening after its implementation checks
-complete.
+| Block | States | Passages/state | Response schema | Rail-end clearance |
+|---|---:|---:|---|---:|
+| `F40-S` | 305 | 50 | `physical8_v1` | 6 m |
+| `F40-M` | 425 | 50 | `physical8_v1` | 6 m |
+| `L99-S` | 475 | 50 | `physical8_v1` | 6 m |
+| `L99-M` | 475 | 50 | `physical8_v1` | 6 m |
 
-The legacy-named `benchmark_r5_compute.py` is now a contract-guarded genuine R11
-runner. It derives and authenticates a
-475-state × 50-passage × 8-channel × 512-segment workload with five heads,
-runs one 100-trial anchor HPO study through the production objective, and runs
-exactly one shared finalist-CV refit. The heavy run has **not** yet executed.
-Its final run must be bound to clean commit A and must contain zero Optuna
-`FAIL` states, zero OOM events, no Optuna-trial retries/replacements, and
-exactly 100 registered anchor trials. The one durably accepted CV refit must
-also be a clean first attempt: `attempt_count=1`,
-`prior_unaccepted_attempt_count=0`, `timing_complete=true`, and
-`memory_complete=true`. The benchmark's explicit `--recover-stale` path can
-record an interrupted refit and a later accepted attempt, but that evidence is
-non-qualifying for authorization/timing and requires a fresh clean benchmark
-run. Only non-scientific
-throughput, provenance, hardware, terminal-state, and immutable-artifact
-evidence may be reported; objective and prediction values must not be
-published.
+The clearance is bound to decision
+`paper1-rail-domain-clearance-c06-v1`. The publishable output is exactly four
+generation bundles plus two balanced training bundles. Historical datasets,
+benchmarks, caches, studies, champions, results, and ZIPs do not qualify.
 
-## Gates still required
+## Evidence required before report-only commit B
 
-1. Freeze the converged source as one clean 40-character lowercase Git commit
-   A. Rerun any source-sensitive checks if the tree changes before A.
-2. Complete the fast MATLAB/Python, environment/source, artifact/provenance,
-   statistical, capacity, mutation, and production-path preflight suites
-   against A, including the new block-reference hash pin.
-3. Run the genuine R11 heavy benchmark above against A and review its timing,
-   provenance, hardware, immutable artifacts, and exact terminal accounting.
-4. On **every** intended MATLAB generation host, freshly generate and execute
-   all three commit-A qualification stages: `s0_scour`, `s16_all`, and
-   `s23_all4`. Each host must use a stable unique
-   `TTBI_QUALIFICATION_HOST_ID`. Corresponding stage outputs from independent
-   hosts must have distinct authenticated host IDs and accepted
-   `matlab-environment-qualification-receipt-v4` pairwise receipts. A
-   numerically equivalent comparator exit alone does not authorize anything.
-5. Obtain the independent audit of the converged source and evidence.
-6. Create report-only commit B. Relative to A, B may change **only**
-   `docs/audit_r5_results.md`, retaining the exact R11 legacy heading above,
-   replacing the status with the exact
-   `**Status: DISPATCH AUTHORIZED.**` verdict and the pending source line with
-   the tested A SHA, and recording the reviewed evidence. The report must state
-   that the benchmark ran on A, not B.
+All entries below must bind the same clean commit A and be independently
+revalidated before this report changes status.
 
-The completed 35-state × 3-passage `s0_scour` laptop micro is
-pre-convergence, one-host integration/timing evidence only. It is not one of
-the final commit-A three-stage host qualifications and does not satisfy the
-cross-host gate.
+| Evidence | Pending requirement |
+|---|---|
+| Source | clean 40-character commit A; final MATLAB-generator and Python-runtime source roots; complete integrated and mutation checks |
+| Model form | final source-bound clearance, track-parameter, and fixed-Rayleigh evidence ledger |
+| Capacity and benchmark | genuine `ttbi-paper1-compute-benchmark-v2` run from `benchmark_paper1_compute.py`, with its exact CUDA capacity receipt and zero forbidden trial states/events |
+| MATLAB hosts | all four qualification stages on every intended host; complete pairwise receipt graph and aggregate inventory |
+| Contact closure | independently verified 420-case four-stage contact/time-step result and external authorization receipt |
+| Dispatch authorization | canonical create-once manifest from `dispatch_authorization.py create`, stored outside the repository and binding every item above |
+| Independent review | confirmation that the evidence, source identities, A/B lineage, and exact six-bundle inventory agree |
 
-Until every gate passes, do not rebuild or dispatch the ten bundles. The
-builder must reject this status. The stale pre-R11 ZIP set is quarantined under
-`stale_pre_r11_bundles/` and must not be used.
+Any source change after evidence collection reopens the source-sensitive gates.
+An interrupted or partially resumed benchmark is diagnostic only. Qualification
+host labels remain trusted-operator self-attestation; they do not prove physical
+machine identity.
+
+## Report-only B procedure
+
+After every evidence row passes:
+
+1. Keep the tested commit A unchanged and clean.
+2. Replace the blocked status on line 3 with the builder's exact authorized
+   status string: `**Status: PAPER-1 DISPATCH AUTHORIZED.**`
+3. Replace `PENDING` on line 5 with the exact lowercase 40-character commit A
+   enclosed in backticks.
+4. Replace `PENDING` on line 6 with the exact lowercase 64-character SHA-256 of
+   the external dispatch-authorization manifest enclosed in backticks.
+5. Record the independently reviewed evidence below this section without adding
+   another status, tested-source, or authorization-manifest header.
+6. Create commit B with this file as the only A-to-B change. The benchmark and
+   all qualifying evidence must have run against A, not B.
+7. Invoke `build_stage_bundles.py` with the absolute external authorization
+   manifest. The builder must mechanically revalidate the manifest and evidence;
+   this report alone is never sufficient.
+
+## Reviewed evidence record for commit B
+
+- Clean tested commit A: **PENDING**
+- MATLAB generator source root: **PENDING**
+- Python runtime source root: **PENDING**
+- Model-form evidence root: **PENDING**
+- Paper 1 benchmark evidence root: **PENDING**
+- CUDA capacity receipt SHA-256: **PENDING**
+- Qualification inventory SHA-256: **PENDING**
+- Contact-closure result/receipt SHA-256: **PENDING**
+- External dispatch-authorization manifest path and SHA-256: **PENDING**
+- Independent reviewer and review date: **PENDING**
+
+Until those fields are completed and the fixed header is authorized, the exact
+six bundles must not be built or dispatched.

@@ -9,7 +9,7 @@ class EmptyObj:
 def _track_vectors(Track, Model, Calc, Damage):
     """Per-sleeper track-layer property vectors from Damage.track descriptors.
 
-    Exact mirror of scour_MATLAB/B54_ModelMatrices.m::local_track_vectors.
+    Development mirror of scour_MATLAB/B54_TrackVectors.m.
     COORDINATE FRAME (audit fix 2026-07-17): descriptors carrying an
     x_bridge_local field are in A00's BRIDGE-LOCAL window frame (deck starts
     at x = x_bridge_local); the sleeper axis here is GLOBAL and under redux=0
@@ -19,7 +19,7 @@ def _track_vectors(Track, Model, Calc, Damage):
     Optional fields of Damage.track (attribute container or dict):
         ballast_patches : rows [x_start, x_end, eta_k, eta_c]
         hanging_groups  : rows [x_start, n_consec]  (ballast support -> ~0)
-        pad_stiff_mult  : scalar chi_pad (global pad aging)
+        pad_stiff_mult  : scalar chi_pad (global pad service condition)
         pad_damp_mult   : scalar beta_pad
         pad_failures    : x-positions of failed pads (k -> ~0)
         x_bridge_local  : deck-start position in the descriptor frame [m]
@@ -111,7 +111,7 @@ def b54_model_matrices(Beam, Track, Calc, Damage=None):
 
     Optional Damage argument may carry per-passage TRACK-LAYER damage
     descriptors in Damage.track — see _track_vectors and
-    docs/stage3_alldamage_spec.md. Mirrors scour_MATLAB/B54_ModelMatrices.m.
+    docs/damage_model_reference.md. Mirrors scour_MATLAB/B54_ModelMatrices.m.
     """
 
     if not hasattr(Calc, 'Model'):
@@ -270,8 +270,19 @@ def b54_model_matrices(Beam, Track, Calc, Damage=None):
     # Ballast on approach
     Model.Mesh.Mg = funAdd1(Model.Mesh.Mg, Model.Mesh.DOF.ballast_app, funDiag(Track.Sleeper.num_app, Track.Ballast.Prop.m))
 
-    # Ballast on bridge (Distributed to all Beam's vertical DOF)
-    Model.Mesh.Mg = funAdd1(Model.Mesh.Mg, Model.Mesh.DOF.beam_vert, funDiag(Beam.Mesh.Nodes.Tnum, Track.BallastOnBeam.Prop.m / Beam.Mesh.Ele.num_per_spacing))
+    # Ballast on bridge. Zhai et al. (2004), Eq. (5) and Table 1, support a
+    # 531.4 kg discrete mass per rail support point, but their topology keeps
+    # independent ballast motion and adjacent-mass Kw/Cw shear coupling. This
+    # inherited TTB-2D bridge path has no on-bridge ballast DOF: it condenses
+    # one retained Mb value onto each deck DOF under an on-bridge sleeper and
+    # omits the shear branch. The source therefore informs the per-seat
+    # inventory unit/value, not this condensation, shear omission, or endpoint
+    # ownership. Full endpoint lumps are the inherited partition convention.
+    Model.Mesh.Mg = funAdd1(
+        Model.Mesh.Mg,
+        Model.Mesh.DOF.beam_vert_under_sleeper,
+        funDiag(Track.Sleeper.num_onbeam, Track.BallastOnBeam.Prop.m),
+    )
 
     # Ballast after approach (Note: MATLAB script says 'after approach' but assigns to 'ballast_aft')
     Model.Mesh.Mg = funAdd1(Model.Mesh.Mg, Model.Mesh.DOF.ballast_aft, funDiag(Track.Sleeper.num_aft, Track.Ballast.Prop.m))

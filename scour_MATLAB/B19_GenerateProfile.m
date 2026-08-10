@@ -44,6 +44,53 @@ end
 Calc.Profile.x = (Calc.Position.x(1):Calc.Profile.dx:Calc.Profile.L);
 Calc.Profile.nx = length(Calc.Profile.x);
 
+% Optional rail-domain study coordinate contract. Ordinary production runs
+% never set this field and retain the historical FFT realization exactly.
+% Clearance arms have different finite-domain lengths and global origins; an
+% FFT synthesized independently on each live domain would change its frequency
+% grid and phase realization. The study instead synthesizes on one fixed
+% comparison coordinate and samples h(x-shift), keeping excitation identical
+% over the retained bridge window.
+common_coordinate_enabled = false;
+profile_synthesis_x = Calc.Profile.x;
+profile_query_x = Calc.Profile.x;
+if isfield(Calc.Profile,'rail_domain_common_coordinate') && ...
+        ~isempty(Calc.Profile.rail_domain_common_coordinate)
+    common = Calc.Profile.rail_domain_common_coordinate;
+    if ~isstruct(common) || ~isscalar(common) || ...
+            ~isfield(common,'schema') || ...
+            ~strcmp(common.schema,'rail-domain-common-coordinate-v1') || ...
+            ~isfield(common,'x_bounds_m') || ...
+            ~isnumeric(common.x_bounds_m) || ...
+            ~isreal(common.x_bounds_m) || ...
+            ~isequal(size(common.x_bounds_m),[1 2]) || ...
+            any(~isfinite(common.x_bounds_m)) || ...
+            common.x_bounds_m(2) <= common.x_bounds_m(1)
+        error('B19_GenerateProfile:InvalidCommonCoordinate', ...
+            ['rail_domain_common_coordinate must be a scalar struct with ' ...
+             'schema rail-domain-common-coordinate-v1 and finite increasing ' ...
+             '1-by-2 x_bounds_m.']);
+    end
+    translation_m = 0;
+    if isfield(Calc.Profile,'rail_domain_translation_m')
+        translation_m = Calc.Profile.rail_domain_translation_m;
+    end
+    profile_synthesis_x = ...
+        common.x_bounds_m(1):Calc.Profile.dx:common.x_bounds_m(2);
+    profile_query_x = Calc.Profile.x-translation_m;
+    coverage_tolerance = 256*eps(max(abs(common.x_bounds_m))+1);
+    if numel(profile_synthesis_x) < 2 || ...
+            profile_query_x(1) < profile_synthesis_x(1)-coverage_tolerance || ...
+            profile_query_x(end) > profile_synthesis_x(end)+coverage_tolerance
+        error('B19_GenerateProfile:CommonCoordinateCoverage', ...
+            ['The fixed synthesis coordinate [%.17g, %.17g] m does not ' ...
+             'cover the translated live profile query [%.17g, %.17g] m.'], ...
+            profile_synthesis_x(1),profile_synthesis_x(end), ...
+            profile_query_x(1),profile_query_x(end));
+    end
+    common_coordinate_enabled = true;
+end
+
 % ---- Type of Road Profile ----
 
 % -- Smooth --
@@ -60,7 +107,8 @@ elseif Calc.Profile.Type == 1
     max_spaf = 1/Calc.Profile.min_WaveLength;
     
     % Auxiliary variables
-    N = 2^nextpow2(Calc.Profile.nx);     % Number of frequencies to calculate
+    synthesis_nx = length(profile_synthesis_x);
+    N = 2^nextpow2(synthesis_nx);        % Number of frequencies to calculate
 
     % PSD X values
     PSD_X = (1/Calc.Profile.dx)*(0:N/2)/N;            % Output
@@ -82,11 +130,27 @@ elseif Calc.Profile.Type == 1
     % per-passage draws are unaffected.
     if isfield(Calc.Profile,'phase_seed') && ~isempty(Calc.Profile.phase_seed)
         rng_state_ = rng;
-        rng(Calc.Profile.phase_seed);
-        [Calc.Profile.h] = PSD2profile(PSD_Y,N,Calc.Profile.x);
+        rng(double(Calc.Profile.phase_seed), 'twister');
+        profile_synthesis_h = PSD2profile( ...
+            PSD_Y,N,profile_synthesis_x);
         rng(rng_state_);
     else
-        [Calc.Profile.h] = PSD2profile(PSD_Y,N,Calc.Profile.x);
+        profile_synthesis_h = PSD2profile( ...
+            PSD_Y,N,profile_synthesis_x);
+    end
+    if common_coordinate_enabled
+        Calc.Profile.h = interp1(profile_synthesis_x, ...
+            profile_synthesis_h,profile_query_x,'linear');
+        if any(~isfinite(Calc.Profile.h))
+            error('B19_GenerateProfile:CommonCoordinateInterpolation', ...
+                'Common-coordinate profile interpolation returned nonfinite data.');
+        end
+        Calc.Profile.rail_domain_common_coordinate.realized_bounds_m = ...
+            profile_synthesis_x([1,end]);
+        Calc.Profile.rail_domain_common_coordinate.translation_m = ...
+            translation_m;
+    else
+        Calc.Profile.h = profile_synthesis_h;
     end
     % PSD
     Calc.Profile.PSD_X = PSD_X;
@@ -95,7 +159,7 @@ elseif Calc.Profile.Type == 1
     %Salvar um novo perfil
     %save('Calc.ProfileData06-06.mat','Calc')   
   
-% ---- Profile from a dataset ("fixed" measured baseline) ----
+% ---- Legacy stored synthetic realization (Type 2; no registered R11 rung) --
 elseif Calc.Profile.Type == 2
 
     % AUDIT FIX 2026-07-17 (R4): load ONLY the elevation h and map it onto the

@@ -9,7 +9,81 @@ written matlab_ref_parity.mat into the dataset folder.
 
 PASS = max|MATLAB - Python| == 0 (or < 1e-12 float noise).
 """
-import sys, os
+from __future__ import annotations
+
+import os as _bootstrap_os
+import sys as _bootstrap_sys
+for _unsafe_python_path_variable in ("PYTHONPATH", "PYTHONHOME"):
+    if _unsafe_python_path_variable in _bootstrap_os.environ:
+        raise RuntimeError(
+            f"{_unsafe_python_path_variable} must be absent before scientific "
+            "imports"
+        )
+_bootstrap_source_root = _bootstrap_os.path.abspath(
+    _bootstrap_os.path.dirname(__file__)
+)
+_bootstrap_first_path = _bootstrap_sys.path[0] or _bootstrap_os.getcwd()
+if (
+    _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
+        _bootstrap_first_path
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_first_path
+    ))
+    or _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_first_path
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_source_root
+    ))
+):
+    raise RuntimeError(
+        "reviewed repository root must be the canonical first import path"
+    )
+_bootstrap_guard_dir = _bootstrap_os.path.join(
+    _bootstrap_source_root, "campaign_import_guard"
+)
+_bootstrap_guard_init = _bootstrap_os.path.join(
+    _bootstrap_guard_dir, "__init__.py"
+)
+if (
+    not _bootstrap_os.path.isfile(_bootstrap_guard_init)
+    or _bootstrap_os.path.islink(_bootstrap_guard_init)
+    or _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
+        _bootstrap_guard_dir
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_guard_dir
+    ))
+    or any(
+        entry.casefold().startswith("__init__.")
+        and entry != "__init__.py"
+        for entry in _bootstrap_os.listdir(_bootstrap_guard_dir)
+    )
+):
+    raise RuntimeError(
+        "reviewed campaign import guard package is absent or ambiguous"
+    )
+_bootstrap_loaded_guard = _bootstrap_sys.modules.get("campaign_import_guard")
+if _bootstrap_loaded_guard is not None and (
+    _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        getattr(_bootstrap_loaded_guard, "__file__", "")
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_guard_init
+    ))
+    or getattr(_bootstrap_loaded_guard, "_BOUNDARY_ENFORCED", False) is not True
+):
+    raise RuntimeError(
+        "preloaded campaign import guard is not the reviewed enforced module"
+    )
+from campaign_import_guard import (  # noqa: E402
+    enforce_import_boundary as _enforce_import_boundary,
+)
+_enforce_import_boundary()
+
+import os
+import sys
 import numpy as np
 import scipy.io as sio
 

@@ -12,7 +12,7 @@ def b25_wheel_profiles(Calc, Veh, Damage=None):
 
     Optional Damage argument may carry per-passage WHEEL damage descriptors
     (Stage 3 EOVs; NOT labels) — exact mirror of scour_MATLAB/B25_WheelProfiles.m,
-    literature-anchored (docs/stage3_alldamage_spec.md):
+    with status and evidence scope in docs/damage_model_reference.md:
         Damage.oor_flats  : rows [veh(1-based), wheel(1-based), flat_length_m,
                                   depth_m, phase_rad] -> periodic haversine dip,
                             period 2*pi*R. Depth PRE-COMPUTED by the caller

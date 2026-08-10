@@ -1,4 +1,4 @@
-"""Single Python source of truth for the ten scientific campaign rungs.
+"""Single Python source of truth for the four Paper-1 campaign blocks.
 
 The MATLAB generator records its complete, hash-input configuration as JSON.
 Python validates that record against this module before a protocol hash, cache,
@@ -15,10 +15,15 @@ import math
 from typing import Any
 
 
-EXPECTED_GEN_SCHEMA = "audit-2026-07-27-r11"
-EXPECTED_GENERATION_BEHAVIOR_VERSION = "generation-rules-v6"
-EXPECTED_PROTOCOL_SCHEMA_TAG = "gs8a20260727r11"
-CAMPAIGN_CONTRACT_SCHEMA = "ttbi-campaign-stage-contract-v1"
+EXPECTED_GEN_SCHEMA = "audit-2026-08-09-r12"
+EXPECTED_GENERATION_BEHAVIOR_VERSION = "generation-rules-v8"
+EXPECTED_PROTOCOL_SCHEMA_TAG = "gs10a20260809r12"
+EXPECTED_CHANNEL_SCHEMA_ID = "physical8_v1"
+EXPECTED_RAIL_END_CLEARANCE_M = 6.0
+EXPECTED_RAIL_END_CLEARANCE_DECISION_ID = (
+    "paper1-rail-domain-clearance-c06-v1"
+)
+CAMPAIGN_CONTRACT_SCHEMA = "ttbi-campaign-stage-contract-v2"
 BLOCK_REFERENCE_MANIFEST_FIELDS = frozenset({
     "champion_arch",
     "selected_at_stage",
@@ -44,18 +49,7 @@ BLOCK_REFERENCE_MANIFEST_FIELDS = frozenset({
     "frozen_selection_sha256",
 })
 _LOWER_HEX = frozenset("0123456789abcdef")
-STAGE_ORDER = (
-    "s0_scour",
-    "s11_bear",
-    "s12_crack",
-    "s13_bearcrack",
-    "s14_prof",
-    "s15_track",
-    "s16_all",
-    "s21_scour4",
-    "s22_bearcrack4",
-    "s23_all4",
-)
+STAGE_ORDER = ("F40-S", "F40-M", "L99-S", "L99-M")
 
 
 # Every scalar/list generator knob that is common to the production campaign.
@@ -64,10 +58,10 @@ STAGE_ORDER = (
 _COMMON_GENERATION_CONFIG = {
     "schema": EXPECTED_GEN_SCHEMA,
     "generation_behavior_version": EXPECTED_GENERATION_BEHAVIOR_VERSION,
+    "channel_schema_id": EXPECTED_CHANNEL_SCHEMA_ID,
     "damage_mode": "multi_scour",
     "Npass": 50,
-    "state_identity_version": "semantic-state-v1",
-    "joint_lhs_design": "master-scour-plus-two-bearing-v1",
+    "state_identity_version": "semantic-state-v2",
     "n_latent_bearing_dims": 2,
     "random_stream_schedule_version": "uid-named-substreams-v2",
     "state_stream_names": [
@@ -84,15 +78,7 @@ _COMMON_GENERATION_CONFIG = {
     "max_parfor_workers": 4,
     "dano_max": 0.60,
     "include_anchors": True,
-    "n_anchor_levels": 5,
     "damage_seed": 1,
-    # Controlled-family sizes are chosen so the registered 60/20/20 grouped
-    # split yields at least ten independent outer-test states per aggregate
-    # diagnostic family.  Five replicas per anchor severity additionally allow
-    # every (family, target, level) cell to land 3/1/1 in train/val/test.
-    "n_healthy_states": 50,
-    "n_anchor_reps": 5,
-    "n_nuisance_states": 50,
     "Bearing_Intensity": 0.0,
     "bearing_fixity_max": 0.95,
     "crack_draw": "per_state",
@@ -106,6 +92,11 @@ _COMMON_GENERATION_CONFIG = {
     "profile_jitter_sd_mm": 0.0,
     "profile_int_range": [0.5, 2.0],
     "profile_fra_classes": 4,
+    "profile_fixed_phase_seed": 20260728,
+    "profile_spectrum_contract": "fra-v2-class4-cycles-per-m-v1",
+    "rail_end_clearance_m": EXPECTED_RAIL_END_CLEARANCE_M,
+    "rail_end_clearance_decision_id":
+        EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
     "track_draw": "per_state",
     "track_L_app": 30.0,
     "track_L_after": 30.0,
@@ -124,6 +115,7 @@ _COMMON_GENERATION_CONFIG = {
     "ballast_eta_k_wet": [0.7, 0.9],
     "ballast_eta_c_wet": [1.5, 4.0],
     "pad_p_fail": 0.02,
+    "pad_failure_rule": "independent-bernoulli-sleeper-lattice-v1",
     "pad_chi_range": [1.0, 3.5],
     "pad_weibull": [1.8, 2.2],
     "pad_beta_range": [0.8, 1.2],
@@ -153,44 +145,68 @@ _COMMON_GENERATION_CONFIG = {
 
 
 _STAGE_INPUTS = {
-    "s0_scour":       (60.0, 3, (2, 3),    "off",    False, "fixed",   False, False),
-    "s11_bear":       (60.0, 3, (2, 3),    "target", False, "fixed",   False, False),
-    "s12_crack":      (60.0, 3, (2, 3),    "off",    True,  "fixed",   False, False),
-    "s13_bearcrack":  (60.0, 3, (2, 3),    "target", True,  "fixed",   False, False),
-    "s14_prof":       (60.0, 3, (2, 3),    "target", True,  "psd_fra", False, False),
-    "s15_track":      (60.0, 3, (2, 3),    "target", True,  "psd_fra", True,  False),
-    "s16_all":        (60.0, 3, (2, 3),    "target", True,  "psd_fra", True,  True),
-    "s21_scour4":     (99.6, 4, (2, 3, 4), "off",    False, "fixed",   False, False),
-    "s22_bearcrack4": (99.6, 4, (2, 3, 4), "target", True,  "fixed",   False, False),
-    "s23_all4":       (99.6, 4, (2, 3, 4), "target", True,  "psd_fra", True,  True),
+    "F40-S": {
+        "length": 40.0,
+        "spans": 2,
+        "scour_supports": (2,),
+        "state_design_kind": "dense-scour-61x5-v1",
+        "joint_lhs_design": "not-applicable-dense-scour",
+        "bearing_mode": "off",
+        "crack": False,
+        "counts": (0, 5, 60, 5, 0),
+        "family_counts": (5, 300, 0, 0, 0),
+    },
+    "F40-M": {
+        "length": 40.0,
+        "spans": 2,
+        "scour_supports": (2,),
+        "state_design_kind": "five-family-multidamage-v2",
+        "joint_lhs_design": "master-scour-plus-two-bearing-v2",
+        "bearing_mode": "target",
+        "crack": True,
+        "counts": (250, 50, 5, 5, 50),
+        "family_counts": (50, 25, 50, 50, 250),
+    },
+    "L99-S": {
+        "length": 99.6,
+        "spans": 4,
+        "scour_supports": (2, 3, 4),
+        "state_design_kind": "five-family-multidamage-v2",
+        "joint_lhs_design": "master-scour-plus-two-bearing-v2",
+        "bearing_mode": "off",
+        "crack": False,
+        "counts": (250, 50, 5, 5, 50),
+        "family_counts": (50, 75, 50, 50, 250),
+    },
+    "L99-M": {
+        "length": 99.6,
+        "spans": 4,
+        "scour_supports": (2, 3, 4),
+        "state_design_kind": "five-family-multidamage-v2",
+        "joint_lhs_design": "master-scour-plus-two-bearing-v2",
+        "bearing_mode": "target",
+        "crack": True,
+        "counts": (250, 50, 5, 5, 50),
+        "family_counts": (50, 75, 50, 50, 250),
+    },
 }
 
 
 def _build_stage_contract(stage: str) -> dict[str, Any]:
-    (
-        length,
-        spans,
-        scour_supports,
-        bearing_mode,
-        crack,
-        profile_mode,
-        track,
-        oor,
-    ) = _STAGE_INPUTS[stage]
-    n_scour_only = 25 * len(scour_supports)
-    # The complete latent design inventory is present at every rung of a
-    # geometry block.  Scenario toggles activate bearing/crack physics without
-    # adding rows, so paired edges cannot be confounded by a different sample
-    # size or family composition.
-    n_bearing_only = 50
-    n_nuisance_only = 50
-    family_counts = {
-        "target_healthy": 50,
-        "scour_only": n_scour_only,
-        "bearing_only": n_bearing_only,
-        "nuisance_only": n_nuisance_only,
-        "joint": 250,
-    }
+    spec = _STAGE_INPUTS[stage]
+    length = spec["length"]
+    spans = spec["spans"]
+    scour_supports = spec["scour_supports"]
+    bearing_mode = spec["bearing_mode"]
+    crack = spec["crack"]
+    family_names = (
+        "target_healthy",
+        "scour_only",
+        "bearing_only",
+        "nuisance_only",
+        "joint",
+    )
+    family_counts = dict(zip(family_names, spec["family_counts"], strict=True))
     n_states = sum(family_counts.values())
     length_tag = f"{length:g}"
     dataset = f"{stage}_L{length_tag}_st{n_states}"
@@ -208,9 +224,12 @@ def _build_stage_contract(stage: str) -> dict[str, Any]:
             "damage_mode": "multi_scour",
             "bearing_mode": bearing_mode,
             "use_crack_eov": crack,
-            "profile_mode": profile_mode,
-            "use_track_eov": track,
-            "use_oor_eov": oor,
+            "profile_mode": "fixed",
+            "rail_end_clearance_m": EXPECTED_RAIL_END_CLEARANCE_M,
+            "rail_end_clearance_decision_id":
+                EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
+            "use_track_eov": False,
+            "use_oor_eov": False,
             "oor_flats_enabled": False,
             "use_signal_noise": False,
         },
@@ -218,13 +237,23 @@ def _build_stage_contract(stage: str) -> dict[str, Any]:
             "n_states": n_states,
             "passages_per_state": 50,
             "scour_dano_max_frac": 0.60,
+            "state_design_kind": spec["state_design_kind"],
+            "driver_count_tuple": list(spec["counts"]),
             "family_counts": family_counts,
         },
         "paired_design": {
-            "inventory_policy": "fixed_within_geometry",
-            "state_uid_version": "semantic-state-v1",
-            "joint_master_states": 250,
-            "primary_cross_rung_family": "joint",
+            "inventory_policy": (
+                "matched-controlled-subset"
+                if stage.startswith("F40")
+                else "complete-within-L99-geometry"
+            ),
+            "state_uid_version": "semantic-state-v2",
+            "joint_master_states": spec["counts"][0],
+            "matched_state_count": 30 if stage.startswith("F40") else 475,
+            "matched_f40_scour_percentages": (
+                [0, 12, 24, 36, 48, 60]
+                if stage.startswith("F40") else None
+            ),
             "bearing_only_is_dormant": bearing_mode != "target",
             "nuisance_only_is_dormant": not crack,
         },
@@ -232,6 +261,9 @@ def _build_stage_contract(stage: str) -> dict[str, Any]:
             "target_supports": list(scour_supports),
             "bearing_targets": (
                 ["left", "right"] if bearing_mode == "target" else None
+            ),
+            "f40_classification_subset_percent": (
+                [0, 5, 10, 20] if stage == "F40-S" else None
             ),
         },
     }
@@ -266,6 +298,12 @@ def generation_config_expectations(stage: str) -> dict[str, Any]:
         "num_spans": geometry["num_spans"],
         "scour_supports": geometry["scour_supports"],
         "n_states": sampling["n_states"],
+        "state_design_kind": sampling["state_design_kind"],
+        "joint_lhs_design": _STAGE_INPUTS[stage]["joint_lhs_design"],
+        "n_anchor_levels": sampling["driver_count_tuple"][2],
+        "n_healthy_states": sampling["driver_count_tuple"][1],
+        "n_anchor_reps": sampling["driver_count_tuple"][3],
+        "n_nuisance_states": sampling["driver_count_tuple"][4],
         "bearing_mode": scenario["bearing_mode"],
         "use_crack_eov": scenario["use_crack_eov"],
         "profile_mode": scenario["profile_mode"],
@@ -488,16 +526,10 @@ def _validate_definitions() -> None:
     if tuple(CAMPAIGN_STAGE_CONTRACTS) != STAGE_ORDER:
         raise RuntimeError("campaign stage definitions are missing or reordered")
     expected_datasets = {
-        "s0_scour": "s0_scour_L60_st450",
-        "s11_bear": "s11_bear_L60_st450",
-        "s12_crack": "s12_crack_L60_st450",
-        "s13_bearcrack": "s13_bearcrack_L60_st450",
-        "s14_prof": "s14_prof_L60_st450",
-        "s15_track": "s15_track_L60_st450",
-        "s16_all": "s16_all_L60_st450",
-        "s21_scour4": "s21_scour4_L99.6_st475",
-        "s22_bearcrack4": "s22_bearcrack4_L99.6_st475",
-        "s23_all4": "s23_all4_L99.6_st475",
+        "F40-S": "F40-S_L40_st305",
+        "F40-M": "F40-M_L40_st425",
+        "L99-S": "L99-S_L99.6_st475",
+        "L99-M": "L99-M_L99.6_st475",
     }
     actual = {
         stage: contract["dataset"]

@@ -20,14 +20,16 @@ def _per_support(Damage, name, n):
 def b02_boundary_conditions(Beam, Damage):
     """
     Definition of DOF with boundary conditions — generalised to any number of
-    supports, with per-support scour (vertical) and bearing (rotational) damage.
+    supports, with per-support scour (vertical) and nominal abutment
+    rotational-fixity interventions.
 
-    Damage interface (all optional, default = healthy):
+    Damage interface (all optional; zero is the free-rotation baseline):
       Damage.scour_rates       per-support fraction in [0,1]; retained vertical
                                stiffness = (1 - rate) * DOF_Original_value.
       Damage.bearing_rot_stiff per-support rotational stiffness [Nm/rad]; only
                                used where Beam.BC.rot_stiff > 0 (abutments).
-                               0 = free rotation (healthy bearing).
+                               0 = free-rotation baseline, not a physical
+                               healthy-bearing condition rating.
     Legacy fallback: if scour_rates is absent, Damage.DOF_ChangeRate_value is
     applied to the middle support only (reproduces the original 3-support model).
 
@@ -59,7 +61,7 @@ def b02_boundary_conditions(Beam, Damage):
 
     DOF_Original_value = 344e6
 
-    # ---- Per-support damage specifications ----
+    # ---- Per-support scour and nominal-fixity specifications ----
     scour_rates, scour_given = _per_support(Damage, 'scour_rates', n)
     if not scour_given:
         # Legacy single-foundation behaviour: scour on the middle support only.

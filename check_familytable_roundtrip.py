@@ -1,4 +1,4 @@
-"""Authenticate the real MATLAB serialization of the R11 state table.
+"""Authenticate the real MATLAB serialization of the current state table.
 
 Run after ``smoke_familytable``.  This check uses the production reader, then
 independently derives every UID-root and named-substream SHA-256 seed.  It also
@@ -35,21 +35,21 @@ EXPECTED_FAMILY = (
     + ["joint"] * 2
 )
 EXPECTED_UID = [
-    "ttbi-state-v1|Lmm=060000|spans=3|scour=0203|"
+    "ttbi-state-v2|Lmm=060000|spans=3|scour=0203|"
     "family=target_healthy|target=00|level=0000|rep=001",
-    "ttbi-state-v1|Lmm=060000|spans=3|scour=0203|"
+    "ttbi-state-v2|Lmm=060000|spans=3|scour=0203|"
     "family=target_healthy|target=00|level=0000|rep=002",
-    "ttbi-state-v1|Lmm=060000|spans=3|scour=0203|"
+    "ttbi-state-v2|Lmm=060000|spans=3|scour=0203|"
     "family=scour_only|target=02|level=0001|rep=001",
-    "ttbi-state-v1|Lmm=060000|spans=3|scour=0203|"
+    "ttbi-state-v2|Lmm=060000|spans=3|scour=0203|"
     "family=scour_only|target=03|level=0002|rep=001",
-    "ttbi-state-v1|Lmm=060000|spans=3|scour=0203|"
+    "ttbi-state-v2|Lmm=060000|spans=3|scour=0203|"
     "family=bearing_only|target=01|level=0001|rep=001",
-    "ttbi-state-v1|Lmm=060000|spans=3|scour=0203|"
+    "ttbi-state-v2|Lmm=060000|spans=3|scour=0203|"
     "family=nuisance_only|target=00|level=0000|rep=001",
-    "ttbi-state-v1|Lmm=060000|spans=3|scour=0203|"
+    "ttbi-state-v2|Lmm=060000|spans=3|scour=0203|"
     "family=joint|target=00|level=0001|rep=001",
-    "ttbi-state-v1|Lmm=060000|spans=3|scour=0203|"
+    "ttbi-state-v2|Lmm=060000|spans=3|scour=0203|"
     "family=joint|target=00|level=0002|rep=001",
 ]
 
@@ -95,6 +95,7 @@ if not os.path.exists(damage_path):
     sys.exit(2)
 
 table = read_state_table(SMOKE_DIR)
+raw_table = sio.loadmat(damage_path)
 check(
     "real MATLAB cellstr family parses",
     table["family"] == EXPECTED_FAMILY,
@@ -124,6 +125,18 @@ check(
     and np.array_equal(
         table["bearing_fixity"], table["latent_bearing_fixity"]
     ),
+)
+raw_bearing_states = np.asarray(raw_table["BearingStates"], dtype=float)
+raw_k_ref_bear = float(np.ravel(raw_table["k_ref_bear"])[0])
+expected_bearing_states = (
+    raw_k_ref_bear
+    * table["bearing_fixity"]
+    / (1.0 - table["bearing_fixity"])
+)
+check(
+    "serialized bearing stiffness is exactly the nominal-fixity transform",
+    raw_k_ref_bear == 2.31e9
+    and np.array_equal(raw_bearing_states, expected_bearing_states),
 )
 
 expected_roots = np.asarray(
@@ -199,7 +212,7 @@ expected_keys = [
     "joint|latentcrack0|scoursev0",
 ]
 check(
-    "R11 strata use latentcrack{0,1} nomenclature and latent status",
+    "current strata use latentcrack{0,1} nomenclature and latent status",
     keys == expected_keys,
     repr(keys),
 )

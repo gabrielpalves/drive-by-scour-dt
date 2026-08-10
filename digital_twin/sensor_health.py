@@ -14,9 +14,12 @@ assumed). Three pieces (see memory: sensor-health-model):
                                    (loose connection, EMI, debris);
      * degraded                 : the WHOLE signal is noisier (aging / drift);
      * dead                     : registers nothing -> the channel is zeros.
-   Fault probability and noise scale by mounting exposure: car body (sprung,
-   enclosed) < bogie < wheel/axle-box (unsprung, exposed). Transient faults are
-   a per-passage Bernoulli; permanent failure is a slow per-step aging hazard.
+   Fault probability and noise scale by mounting exposure for physical vehicle
+   sensors. Legacy channels 3/4 are not wheel/axle-box sensors: they are virtual
+   moving-coordinate rail FE responses. Applying the historical ``wheel`` bucket
+   to them is therefore only an abstract channel-corruption stress, not a
+   field-sensor reliability model. Transient faults are a per-passage Bernoulli;
+   permanent failure is a slow per-step aging hazard.
 
 2. How the twin copes (`HealthAwareClassifier`):
      * both sensors alive  -> the 2-sensor champion + its confusion matrix;
@@ -56,8 +59,9 @@ def sensor_location(dof: int) -> str:
     """Mounting location of a DOF — drives the fault/noise scaling.
 
     car body (sprung, enclosed, protected) -> lowest fault prob + noise;
-    bogie intermediate; wheel/axle-box (unsprung, direct wheel-rail impacts,
-    exposed) -> highest.
+    bogie intermediate. ``Wheel1_Vert``/``Wheel2_Vert`` are legacy identifiers
+    for virtual rail-field channels; returning ``wheel`` for them preserves old
+    parameter dictionaries but does not establish a physical mounting location.
     """
     name = IDX_TO_DOF_NAME[dof].lower()
     if "carbody" in name:
@@ -78,8 +82,9 @@ def _is_gyro(dof: int) -> bool:
 class SensorHealthParams:
     """Tunable sensor-health knobs (PLACEHOLDERS — replace with real data).
 
-    Per-location dicts scale by mounting exposure (carbody < bogie < wheel).
-    Illustrative defaults; the whole struct is meant to be swept / overridden.
+    Per-location dicts scale physical mounting exposure. The ``wheel`` key is
+    also the frozen compatibility bucket used for virtual channels 3/4; those
+    values are not scientifically interpretable as axle-box reliability.
     """
     # Per-PASSAGE transient (intermittent) fault probability.
     p_transient: dict = field(default_factory=lambda:

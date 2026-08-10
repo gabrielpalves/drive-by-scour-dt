@@ -3,7 +3,7 @@
 The experimental *allocation policy* in :data:`EXECUTION_BLOCK_POLICY` is
 hash-carried by ``core.protocol``.  The machine/GPU observed at run time is
 deliberately not part of the shared protocol hash: it is recorded separately
-and enforced through one atomic receipt per pre-registered contrast block.
+and enforced through one atomic receipt per prospectively specified contrast block.
 
 This distinction lets studies in one scientific block share a protocol while
 still preventing a study or downstream rung from moving silently to another
@@ -25,53 +25,44 @@ from typing import Any
 
 
 EXECUTION_BLOCK_POLICY = {
-    "schema": "ttbi-execution-block-policy-v1",
-    "same_physical_host_and_gpu_within_block": True,
+    "schema": "ttbi-execution-block-policy-v2",
+    "same_gpu_model_and_numeric_stack_within_block": True,
+    "host_and_device_uuid_may_differ_within_block": True,
     "blocks": {
-        "l60": {
-            "anchor_stage": "s0_scour",
-            "stages": [
-                "s0_scour",
-                "s11_bear",
-                "s12_crack",
-                "s13_bearcrack",
-                "s14_prof",
-                "s15_track",
-                "s16_all",
-            ],
-        },
-        "l99": {
-            "anchor_stage": "s21_scour4",
-            "stages": [
-                "s21_scour4",
-                "s22_bearcrack4",
-                "s23_all4",
-            ],
-        },
+        "f40s": {"anchor_stage": "F40-S", "stages": ["F40-S"]},
+        "f40m": {"anchor_stage": "F40-M", "stages": ["F40-M"]},
+        "l99s": {"anchor_stage": "L99-S", "stages": ["L99-S"]},
+        "l99m": {"anchor_stage": "L99-M", "stages": ["L99-M"]},
     },
     "cross_block_inference": {
-        "s0_scour_to_s21_scour4": {
+        key: {
             "status": "descriptive_nonconfirmatory",
             "confirmatory": False,
             "rationale": (
-                "bridge-length and support-count changes are bundled with a "
-                "new execution block, so this cross-block contrast is reported "
-                "descriptively and is not a confirmatory hardware-controlled "
-                "effect"
+                "each scientific block has independent HPO and may use a "
+                "different matched-GPU compatibility block; cross-block "
+                "performance is reported descriptively, not as a paired "
+                "hardware-controlled treatment effect"
             ),
-        },
+        }
+        for key in (
+            "F40-S_to_F40-M",
+            "F40-S_to_L99-S",
+            "F40-S_to_L99-M",
+        )
     },
     "receipt_contract": {
-        "schema": "ttbi-execution-block-receipt-v1",
+        "schema": "ttbi-execution-block-receipt-v2",
         "anchor_creates": True,
         "non_anchor_requires_existing_exact_receipt": True,
-        "identity_match": "exact_canonical_execution_environment_sha256",
+        "identity_match": "exact_execution_compatibility_sha256",
     },
 }
 
 _DESCRIPTOR_SCHEMA = "ttbi-execution-environment-v1"
-_BINDING_SCHEMA = "ttbi-execution-runtime-binding-v1"
-_RECEIPT_SCHEMA = "ttbi-execution-block-receipt-v1"
+_BINDING_SCHEMA = "ttbi-execution-runtime-binding-v2"
+_RECEIPT_SCHEMA = "ttbi-execution-block-receipt-v2"
+_COMPATIBILITY_SCHEMA = "ttbi-execution-compatibility-v1"
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -113,7 +104,8 @@ def canonical_execution_block_policy(policy: dict) -> dict:
     canonical = json.loads(_canonical_json_bytes(policy).decode("ascii"))
     required = {
         "schema",
-        "same_physical_host_and_gpu_within_block",
+        "same_gpu_model_and_numeric_stack_within_block",
+        "host_and_device_uuid_may_differ_within_block",
         "blocks",
         "cross_block_inference",
         "receipt_contract",
@@ -122,33 +114,23 @@ def canonical_execution_block_policy(policy: dict) -> dict:
         raise RuntimeError(
             "execution-block policy fields differ from the registered contract"
         )
-    if canonical["schema"] != "ttbi-execution-block-policy-v1":
+    if canonical["schema"] != "ttbi-execution-block-policy-v2":
         raise RuntimeError("unsupported execution-block policy schema")
-    if canonical["same_physical_host_and_gpu_within_block"] is not True:
+    if canonical["same_gpu_model_and_numeric_stack_within_block"] is not True:
         raise RuntimeError(
-            "campaign policy must require one physical host/GPU per block"
+            "campaign policy must match the GPU model/stack within each block"
         )
+    if canonical["host_and_device_uuid_may_differ_within_block"] is not True:
+        raise RuntimeError("matched GPUs on different hosts must be permitted")
 
     expected_blocks = {
-        "l60": (
-            "s0_scour",
-            (
-                "s0_scour",
-                "s11_bear",
-                "s12_crack",
-                "s13_bearcrack",
-                "s14_prof",
-                "s15_track",
-                "s16_all",
-            ),
-        ),
-        "l99": (
-            "s21_scour4",
-            ("s21_scour4", "s22_bearcrack4", "s23_all4"),
-        ),
+        "f40s": ("F40-S", ("F40-S",)),
+        "f40m": ("F40-M", ("F40-M",)),
+        "l99s": ("L99-S", ("L99-S",)),
+        "l99m": ("L99-M", ("L99-M",)),
     }
     if set(canonical["blocks"]) != set(expected_blocks):
-        raise RuntimeError("execution policy must define exactly l60 and l99")
+        raise RuntimeError("execution policy must define the four Paper-1 blocks")
     seen: set[str] = set()
     for block, (expected_anchor, expected_stages) in expected_blocks.items():
         value = canonical["blocks"].get(block)
@@ -168,29 +150,34 @@ def canonical_execution_block_policy(policy: dict) -> dict:
         seen.update(value["stages"])
 
     cross = canonical["cross_block_inference"]
-    if set(cross) != {"s0_scour_to_s21_scour4"}:
+    expected_cross = {
+        "F40-S_to_F40-M",
+        "F40-S_to_L99-S",
+        "F40-S_to_L99-M",
+    }
+    if set(cross) != expected_cross:
         raise RuntimeError("cross-block inference declaration is incomplete")
-    contrast = cross["s0_scour_to_s21_scour4"]
-    if (
-        not isinstance(contrast, dict)
-        or set(contrast) != {"status", "confirmatory", "rationale"}
-        or contrast["status"] != "descriptive_nonconfirmatory"
-        or contrast["confirmatory"] is not False
-        or not isinstance(contrast["rationale"], str)
-        or not contrast["rationale"].strip()
-    ):
-        raise RuntimeError(
-            "s0->s21 must be explicitly descriptive and non-confirmatory"
-        )
+    for name, contrast in cross.items():
+        if (
+            not isinstance(contrast, dict)
+            or set(contrast) != {"status", "confirmatory", "rationale"}
+            or contrast["status"] != "descriptive_nonconfirmatory"
+            or contrast["confirmatory"] is not False
+            or not isinstance(contrast["rationale"], str)
+            or not contrast["rationale"].strip()
+        ):
+            raise RuntimeError(
+                f"{name} must be explicitly descriptive/non-confirmatory"
+            )
 
     receipt = canonical["receipt_contract"]
     if receipt != {
         "schema": _RECEIPT_SCHEMA,
         "anchor_creates": True,
         "non_anchor_requires_existing_exact_receipt": True,
-        "identity_match": "exact_canonical_execution_environment_sha256",
+        "identity_match": "exact_execution_compatibility_sha256",
     }:
-        raise RuntimeError("execution receipt contract differs from v1")
+        raise RuntimeError("execution receipt contract differs from v2")
     return canonical
 
 
@@ -472,6 +459,37 @@ def execution_environment_sha256(descriptor: dict) -> str:
     return _sha256_json(validate_execution_environment(descriptor))
 
 
+def execution_compatibility_descriptor(descriptor: dict) -> dict:
+    """Return the within-block hardware/numeric equivalence class.
+
+    Hostname, OS build text, CUDA device index, and physical UUID are retained
+    in each run's exact environment attestation but excluded here.  The fields
+    that can change model execution or capacity remain exact, allowing the two
+    matched RTX 5060 Ti hosts to share F40-S without admitting the RTX 2060.
+    """
+
+    environment = validate_execution_environment(descriptor)
+    host = environment["host"]
+    accelerator = environment["accelerator"]
+    compatible_accelerator = {
+        key: value
+        for key, value in accelerator.items()
+        if key not in {"device_index", "uuid"}
+    }
+    value = {
+        "schema": _COMPATIBILITY_SCHEMA,
+        "host_machine": host["machine"],
+        "host_system": host["system"],
+        "accelerator": compatible_accelerator,
+        "numeric_stack": environment["numeric_stack"],
+    }
+    return json.loads(_canonical_json_bytes(value).decode("ascii"))
+
+
+def execution_compatibility_sha256(descriptor: dict) -> str:
+    return _sha256_json(execution_compatibility_descriptor(descriptor))
+
+
 def validate_execution_runtime(runtime: dict) -> dict:
     """Validate a study/config/metadata execution binding."""
 
@@ -484,14 +502,17 @@ def validate_execution_runtime(runtime: dict) -> dict:
         "anchor_stage",
         "execution_environment_sha256",
         "execution_environment_descriptor",
+        "execution_compatibility_sha256",
+        "execution_compatibility_descriptor",
     }
     if set(value) != expected or value["schema"] != _BINDING_SCHEMA:
         raise RuntimeError("malformed execution runtime binding")
-    if value["execution_block"] not in {"l60", "l99"}:
+    blocks = canonical_execution_block_policy(
+        EXECUTION_BLOCK_POLICY
+    )["blocks"]
+    if value["execution_block"] not in blocks:
         raise RuntimeError("invalid execution block")
-    expected_anchor = (
-        "s0_scour" if value["execution_block"] == "l60" else "s21_scour4"
-    )
+    expected_anchor = blocks[value["execution_block"]]["anchor_stage"]
     if value["anchor_stage"] != expected_anchor:
         raise RuntimeError("execution binding carries the wrong block anchor")
     if not _is_sha256(value["execution_environment_sha256"]):
@@ -503,7 +524,53 @@ def validate_execution_runtime(runtime: dict) -> dict:
         raise RuntimeError(
             "execution descriptor does not reproduce its recorded SHA-256"
         )
+    expected_compatibility = execution_compatibility_descriptor(
+        value["execution_environment_descriptor"]
+    )
+    if (
+        value["execution_compatibility_descriptor"] != expected_compatibility
+        or not _is_sha256(value["execution_compatibility_sha256"])
+        or value["execution_compatibility_sha256"]
+        != _sha256_json(expected_compatibility)
+    ):
+        raise RuntimeError(
+            "execution compatibility descriptor/hash does not match the "
+            "exact execution environment"
+        )
     return value
+
+
+def current_execution_runtime_for_stage(
+    stage: str,
+    policy: dict = EXECUTION_BLOCK_POLICY,
+    descriptor: dict | None = None,
+) -> dict:
+    """Bind the live physical/numerical runtime to one registered stage.
+
+    Callers must establish their registered numeric mode before calling this
+    helper.  Keeping that initialization explicit avoids importing training
+    policy into the execution-environment layer while giving qualification,
+    benchmark, and production entry points one canonical runtime constructor.
+    """
+
+    block, anchor = execution_block_for_stage(stage, policy)
+    environment = validate_execution_environment(
+        current_execution_environment() if descriptor is None else descriptor
+    )
+    compatibility = execution_compatibility_descriptor(environment)
+    return validate_execution_runtime({
+        "schema": _BINDING_SCHEMA,
+        "execution_block": block,
+        "anchor_stage": anchor,
+        "execution_environment_sha256": (
+            execution_environment_sha256(environment)
+        ),
+        "execution_environment_descriptor": environment,
+        "execution_compatibility_sha256": (
+            execution_compatibility_sha256(environment)
+        ),
+        "execution_compatibility_descriptor": compatibility,
+    })
 
 
 def validate_block_reference_execution(
@@ -515,12 +582,7 @@ def validate_block_reference_execution(
     current_stage: str,
     policy: dict = EXECUTION_BLOCK_POLICY,
 ) -> str:
-    """Require a reference selection and follower to share one exact block.
-
-    L60 is anchored by ``s0_scour`` and L99.6 by ``s21_scour4``.  A reference
-    manifest is never portable across these blocks: cross-geometry reporting
-    may still be descriptive, but it cannot select or authenticate a follower.
-    """
+    """Require selection/follower to share one matched execution block."""
 
     block, anchor = execution_block_for_stage(current_stage, policy)
     selected = validate_execution_runtime(selection_runtime)
@@ -557,16 +619,17 @@ def validate_block_reference_execution(
             "the registered block"
         )
     if (
-        selected != current
-        or selection_environment_sha256
-        != current["execution_environment_sha256"]
+        selected["execution_compatibility_sha256"]
+        != current["execution_compatibility_sha256"]
+        or selected["execution_compatibility_descriptor"]
+        != current["execution_compatibility_descriptor"]
         or selection_receipt_sha256 != current_receipt_sha
     ):
         raise RuntimeError(
-            f"{current_stage}: reference selection execution identity differs "
-            f"from the current {block} block receipt"
+            f"{current_stage}: reference selection execution compatibility "
+            f"differs from the current {block} block receipt"
         )
-    return "same_block_exact"
+    return "same_block_compatible_hardware_exact_stack"
 
 
 def _receipt_path(
@@ -685,33 +748,27 @@ def enforce_execution_block(
     receipt_dir: str | os.PathLike[str],
     descriptor: dict | None = None,
 ) -> dict:
-    """Create/validate this block's receipt and return its runtime attestation.
-
-    Only the block anchor may create a missing receipt.  Every other stage
-    requires the already-published canonical receipt to match exactly.
-    """
+    """Create/validate the block compatibility receipt and attest this host."""
 
     if not isinstance(run_tag, str):
         raise RuntimeError("run_tag must be text")
-    block, anchor = execution_block_for_stage(stage, policy)
-    environment = validate_execution_environment(
-        current_execution_environment() if descriptor is None else descriptor
+    runtime = current_execution_runtime_for_stage(
+        stage,
+        policy=policy,
+        descriptor=descriptor,
     )
-    environment_sha = execution_environment_sha256(environment)
-    runtime = validate_execution_runtime({
-        "schema": _BINDING_SCHEMA,
-        "execution_block": block,
-        "anchor_stage": anchor,
-        "execution_environment_sha256": environment_sha,
-        "execution_environment_descriptor": environment,
-    })
+    block = runtime["execution_block"]
+    anchor = runtime["anchor_stage"]
+    compatibility_sha = runtime["execution_compatibility_sha256"]
+    compatibility = runtime["execution_compatibility_descriptor"]
     receipt = {
         "schema": _RECEIPT_SCHEMA,
         "execution_block": block,
         "anchor_stage": anchor,
         "protocol_core_hash": protocol_core_hash,
         "run_tag": run_tag,
-        "execution_runtime": runtime,
+        "execution_compatibility_sha256": compatibility_sha,
+        "execution_compatibility_descriptor": compatibility,
     }
     receipt_payload = _canonical_json_bytes(receipt) + b"\n"
     path = _receipt_path(
@@ -746,7 +803,7 @@ def enforce_execution_block(
         if existing != receipt:
             raise RuntimeError(
                 f"{stage}: execution receipt mismatch for block {block!r}; "
-                "refusing to move a contrast block to another host/GPU or "
+                "refusing to move a contrast block to another GPU class or "
                 "numeric execution state"
             )
 

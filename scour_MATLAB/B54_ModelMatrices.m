@@ -4,8 +4,8 @@ function [Model] = B54_ModelMatrices(Beam,Track,Calc,Damage)
 %
 % Optional 4th argument Damage may carry per-passage TRACK-LAYER damage
 % descriptors in Damage.track (ballast patches, hanging-sleeper groups,
-% rail-pad aging/failures) — see B54_TrackVectors.m and
-% docs/stage3_alldamage_spec.md. Without it (or with Damage.track absent)
+% rail-pad service condition/failures) — see B54_TrackVectors.m and
+% docs/damage_model_reference.md. Without it (or with Damage.track absent)
 % the assembled matrices are numerically identical to the legacy path.
 if nargin < 4, Damage = struct(); end
 
@@ -33,18 +33,27 @@ if nargin < 4, Damage = struct(); end
 % ---- Counting ----
 % Total
 Track.Sleeper.Tnum = round(Calc.Profile.L/Track.Sleeper.spacing) + 1;
-% Approach
+% Approach. A rail-domain clearance arm translates the deck and wheel path
+% together while extending both finite rail ends (B43). The default 6 m arm
+% has zero translation and reduces to the legacy formulas below.
+rail_domain_translation_m = 0;
+if isfield(Calc.Profile,'rail_domain_translation_m')
+    rail_domain_translation_m = Calc.Profile.rail_domain_translation_m;
+end
 Track.Sleeper.num_app = round((Calc.Profile.max_TL*Calc.Options.redux_factor+ ...
-    Calc.Profile.L_Approach)/Track.Sleeper.spacing);
+    Calc.Profile.L_Approach+rail_domain_translation_m* ...
+    Calc.Options.redux_factor)/Track.Sleeper.spacing);
 if Calc.Profile.extra_L < Calc.Cte.tol
     Track.Sleeper.num_onbeam = round(Beam.Prop.L/Track.Sleeper.spacing) + 1;
     Track.Sleeper.num_aft = round((Calc.Profile.L - ...
         (Calc.Profile.max_TL*Calc.Options.redux_factor+Calc.Profile.L_Approach+ ...
+        rail_domain_translation_m*Calc.Options.redux_factor+ ...
         Beam.Prop.L+Calc.Profile.extra_L))/Track.Sleeper.spacing);
 else
     Track.Sleeper.num_onbeam = floor(Beam.Prop.L/Track.Sleeper.spacing) + 1;
     Track.Sleeper.num_aft = round((Calc.Profile.L - ...
         (Calc.Profile.max_TL*Calc.Options.redux_factor+Calc.Profile.L_Approach+...
+        rail_domain_translation_m*Calc.Options.redux_factor+...
         Beam.Prop.L+Calc.Profile.extra_L))/Track.Sleeper.spacing) + 1;
 end % if Calc.Profile.extra_L < Calc.Cte.tol
 
@@ -84,11 +93,13 @@ Model.Mesh.XLoc.sleepers = ...
 Model.Mesh.XLoc.ballast_app = ...
     (0:length(Model.Mesh.DOF.ballast_app)-1)*Track.Sleeper.spacing;
 Model.Mesh.XLoc.beam_vert = Beam.Mesh.Nodes.acum + Calc.Profile.L_Approach + ...
-    Calc.Profile.max_TL*Calc.Options.redux_factor;
+    Calc.Profile.max_TL*Calc.Options.redux_factor + ...
+    rail_domain_translation_m*Calc.Options.redux_factor;
 Model.Mesh.XLoc.ballast_aft = ...
     ((0:length(Model.Mesh.DOF.ballast_aft)-1)+1)*Track.Sleeper.spacing + ...
     Calc.Profile.L_Approach + Beam.Prop.L + ...
-    Calc.Profile.max_TL*Calc.Options.redux_factor + Calc.Profile.extra_L;
+    Calc.Profile.max_TL*Calc.Options.redux_factor + Calc.Profile.extra_L + ...
+    rail_domain_translation_m*Calc.Options.redux_factor;
 
 % % Graphical check
 % figure; hold on; box on;
@@ -194,10 +205,19 @@ Model.Mesh.Mg = funAdd1(Model.Mesh.Mg,Model.Mesh.DOF.ballast_app,...
     funDiag(Track.Sleeper.num_app,Track.Ballast.Prop.m));
 
 % Ballast on bridge
-% Note: The mass of ballast on bridge is distributed to all the Beam's 
-%       vertical DOF, rather than only to the ones under a sleeper.
-Model.Mesh.Mg = funAdd1(Model.Mesh.Mg,Model.Mesh.DOF.beam_vert,...
-    funDiag(Beam.Mesh.Nodes.Tnum,Track.BallastOnBeam.Prop.m/Beam.Mesh.Ele.num_per_spacing));
+% Zhai et al. (2004), Eq. (5) and Table 1, support a 531.4 kg discrete mass
+% per rail support point, but their model retains independent ballast motion
+% and adjacent-mass Kw/Cw shear coupling.  This inherited TTB-2D bridge
+% topology instead has no on-bridge ballast DOF: it condenses one retained Mb
+% value directly onto each deck DOF under an on-bridge sleeper and omits the
+% shear branch.  Thus the source informs the per-seat inventory unit/value,
+% not this condensation, the shear omission, or endpoint ownership.  Full
+% lumps at both bridge endpoints are an explicit inherited domain-partition
+% convention.  The assignment below makes that declared inventory invariant
+% when the bridge mesh is refined; it does not validate the physical topology.
+Model.Mesh.Mg = funAdd1(Model.Mesh.Mg,...
+    Model.Mesh.DOF.beam_vert_under_sleeper,...
+    funDiag(Track.Sleeper.num_onbeam,Track.BallastOnBeam.Prop.m));
 
 % Ballast after approach
 Model.Mesh.Mg = funAdd1(Model.Mesh.Mg,Model.Mesh.DOF.ballast_aft,...

@@ -1,7 +1,7 @@
 # Paper 1 — Related work: the Fernandes line (verified against the PDFs)
 
 > **NON-AUTHORITATIVE HISTORICAL DRAFT.** The primary-source summaries below
-> remain useful, but every “this work”, architecture, novelty, sensor-economy
+> remain useful, but every “this work”, architecture, novelty, response-budget
 > and result claim predates R11 and is superseded. Rebuild those sections from
 > the executed R11 protocol and results. The current block is
 > `MultiRatePooling1D` (N-HiTS-inspired), not N-HiTS, and no current `2 ≈ 8`
@@ -72,7 +72,7 @@ Classification in Deep Foundations of a Railway Bridge Using Optimized CNN.* LAT
 | Fernandes 2025 (IJSSD) | classify crack+bearing+scour (multi-damage) | Min–Max + PAA + CNN | Bayesian-opt CNN; 2 fixed sensors | confusion matrices, boxplots, EOV sensitivity | high acc.; car body sensitive to mech.-property EOV |
 | Fernandes 2026a (ASCE) | classify scour levels | CNN (+ speed channel) | Bayesian-opt CNN; car body + front bogie | confusion matrices, boxplots | speed → ~100% on car body |
 | Fernandes 2026b (LATAM) | classify scour depths (real Canelas bridge) | CNN–LSTM | Bayesian-opt **per sensor config** | multi-run stats | consistent acc. across sensors |
-| **This work** | **fine ordinal scour quantification (61 cls @1%, MSE)** | **PAA/CWT × modular {Space2Vec, LSTM, N-HiTS}** | **component-level architecture ablation + full sensor-economy ablation (single→LOO→pair→sweep, 8 DOFs)** | **30-seed UCB95 + collapse-rate** | **2 sensors ≈ 8; physics-matched N-HiTS pooling** |
+| **This work** | **continuous multi-output scour regression** | **RAW/PAA × modular {Time2Vec-style position encoding, LSTM, fixed-width multi-rate pooling}** | **architecture-family comparison + response-channel-budget screen** | **grouped development adjudication, then separate post-freeze sealed-test stability** | **two-channel input compared with full eight-channel input; simulated-response scope** |
 
 ---
 
@@ -84,21 +84,28 @@ Classification in Deep Foundations of a Railway Bridge Using Optimized CNN.* LAT
 > and EOV-suppression step, and (iii) supervised CNN (and CNN–LSTM) models, tuned by
 > Bayesian optimization and assessed over repeated runs, classify scour reliably under
 > environmental and operational variability, including on a field-calibrated bridge. These
-> works settle *feasibility*. They do not, however, resolve two design questions a network
-> operator faces before deployment: **which architecture** is right for this signal and
-> **why**, and **how few on-board sensors** — and which — are actually needed. Prior models
+> works settle *feasibility*. They do not, however, resolve which architecture
+> is right for this signal or how performance changes with the **modeled
+> response-channel budget**. This simulation does not determine how few
+> on-board sensors are needed: two candidate rows are virtual
+> moving-coordinate rail samples. Prior models
 > fix an architecture (chosen as a black box by Bayesian optimization) and compare a small
 > set of sensor positions (typically the car body and front bogie of the leading vehicle).
 > This paper instead (a) runs a **component-level architecture ablation** that isolates the
-> contribution of each block — spatial embedding (Space2Vec), recurrence (LSTM), and
+> contribution of each block — Time2Vec-style spatial-coordinate encoding,
+> recurrence (LSTM), and
 > **N-HiTS multi-rate pooling** — and argues the last as a *physics-matched inductive bias*
-> mirroring the two-timescale drive-by signal (high-frequency wheel–rail transients vs. the
-> low-frequency modal sag of stiffness loss); (b) conducts a **systematic sensor-economy
-> ablation** over all eight vehicle DOFs — single-DOF importance, leave-one-out, best pairs,
-> and a forward sweep — showing a **two-sensor configuration matches the full eight-DOF
-> array**; and (c) ranks every candidate by a **30-seed upper-confidence bound plus a
-> collapse-rate**, rewarding models that are *reliably* good and exposing single-sensor
-> configurations that a point estimate would wrongly endorse. Finally, we frame the problem
+> mirroring the two-timescale drive-by signal (high-frequency
+> rail/contact-path response vs. the low-frequency modal sag of stiffness
+> loss); (b) conducts a systematic **response-channel-budget ablation** over
+> all eight channels—three vehicle vertical accelerations, two virtual
+> Eulerian rail-field samples, and three vehicle pitch rates—using
+> single-channel importance, leave-one-out, best pairs, and a forward sweep,
+> and compares a **two-channel input with the full eight-channel array**; and
+> (c) adjudicates candidates using prospectively seeded repeated grouped folds
+> on development states, freezes the selected vector, and reserves a distinct
+> predeclared multi-seed refit set on the sealed outer test for report-only
+> stability. Finally, we frame the problem
 > as **fine ordinal quantification** of scour severity (1% steps, MSE preserving the damage
 > ordering) rather than coarse discrete classification, giving the downstream digital twin a
 > continuous state to track.
@@ -110,11 +117,12 @@ Classification in Deep Foundations of a Railway Bridge Using Optimized CNN.* LAT
 - **Do NOT claim** Fernandes lacks robustness testing, EOV handling, PAA, or sensor
   comparison — they have all of these (boxplots, confusion matrices, EOV sensitivity,
   track-profile variation, car-body-vs-bogie). Our delta is the **systematic** character:
-  component-level ablation + full sensor-economy + physics framing + ordinal metric +
+  component-level ablation + full response-channel-budget study + physics framing + ordinal metric +
   collapse-rate — not "we do X and they don't."
-- The genuinely novel elements are: **N-HiTS pooling (and its physics rationale)**, the
-  **Space2Vec block**, the **2 ≈ 8 sensor-economy result**, and the **collapse-rate/UCB95
-  selection**. Lead with those.
+- Candidate methodological elements are the N-HiTS-inspired pooling arm, the
+  Space2Vec-style block, the full-versus-two-channel response-budget comparison,
+  and collapse-rate/UCB95 selection. Treat none as a successful finding or
+  hardware-economy result until authenticated R11 outputs exist.
 - 2025's EOV set already includes **track profile** — so do not present "profile as an EOV"
   as our novelty (that belongs to Paper 2's *degradation-as-EOV*, which is different).
 - Verify the exact scour-class definitions and passage counts if you cite specific numbers;
@@ -122,7 +130,7 @@ Classification in Deep Foundations of a Railway Bridge Using Optimized CNN.* LAT
 
 ---
 
-## Roughness, suspension filtering, and sensor fusion (v2 strand — grounds §4.4/§5.5/§6)
+## Roughness, suspension filtering, and response-channel fusion (v2 strand — grounds §4.4/§5.5/§6)
 
 From the deep-research report `papers/Drive-By Scour ML Literature Design.{md,docx}` (NotebookLM/
 Gemini synthesis; treat per-number claims with the usual verify-before-cite discipline — the
@@ -145,22 +153,24 @@ roughness/fusion result; fold the confirmed items into §3 and cite the primary 
   that legal claim depends on track class and service category. Classes 5–6
   represent progressively tighter geometry. State the benchmark choice and its
   limitation rather than inferring a route's legal/empirical class.
-- **Suspension filtering vs unsprung tracing (why sprung channels collapse under roughness).**
-  Sprung masses (car body ~1–3 Hz, bogie) are low-pass isolated from the rail; strong per-pass
-  roughness drives them into their own inertial resonance and masks the quasi-static scour
-  deflection. The **axle-box / unsprung mass**, in direct wheel–rail contact, traces
-  profile+deflection directly (axle-box-acceleration monitoring literature). Continuous scour
-  **regression** from sprung channels under per-pass roughness is essentially undocumented ⇒ our
-  sprung-collapse / unsprung-survival inversion is expected, not a bug.
-- **Two-axle / TSD residual fusion.** OBrien, Keenahan et al. cancel the (shared) track profile by
-  differencing axle responses; conceptually a TSD. ⇒ supports our **mixed unsprung+sprung pair**
-  beating wheel+wheel: the wheel supplies the profile reference, the sprung channel the inertial
-  bridge response. Frame our mixed-pair result as a learned instance of this residual logic.
+- **Suspension filtering versus the implemented moving-rail channel.** Sprung
+  masses (car body ~1–3 Hz, bogie) are low-pass isolated from the rail. However,
+  channels 3/4 are not unsprung or axle-box accelerations: they are
+  (N(x_w)^T A_{rail}), the Eulerian rail FE acceleration sampled at moving
+  wheel coordinates. Axle-box monitoring literature therefore cannot directly
+  explain their behavior. Any robustness contrast must be reported empirically
+  as vehicle-channel versus virtual moving-rail-channel behavior.
+- **Two-axle / TSD residual fusion.** OBrien, Keenahan et al. provide relevant
+  background for actual axle responses, but they do not validate the implemented
+  `[1,3]` comparator. A profile-reference interpretation for front-bogie
+  acceleration plus the virtual moving-rail sample must be demonstrated from
+  these equations/results, not inferred from axle-box or TSD precedent.
 - **Scour drive-by with roughness.** Prendergast/Fitzgerald/Malekjafarian wavelet-ODS scour work
   averages over repeated passes on the *same* profile to pull the signature out; most drive-by
   scour work is **classification**, not continuous regression ⇒ reinforces the regression-under-
   roughness difficulty we report.
 
-*Guardrail:* do not over-claim novelty on "roughness matters" (well known); our specific
-contributions are the **systematic sprung-vs-unsprung inversion under a controlled per-state EOV**
-and the **learned mixed-pair fusion** result, both inside the staged design.
+*Guardrail:* do not over-claim novelty on "roughness matters" (well known),
+and do not call the observed ranking a sprung-versus-unsprung sensor inversion.
+The defensible contrast is between modeled vehicle responses and virtual
+moving-coordinate rail-field samples within the staged design.

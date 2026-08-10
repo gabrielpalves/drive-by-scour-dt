@@ -9,7 +9,7 @@ policy, the reviewed Python source root, and the exact probe implementation.
 
 This is a *capacity* qualification, not a performance benchmark.  It prevents
 dispatching a multi-day study to a GPU which cannot accommodate the declared
-batch/input/model envelope with a pre-registered memory headroom.
+batch/input/model envelope with a prospectively source-locked memory headroom.
 """
 
 from __future__ import annotations
@@ -28,12 +28,13 @@ from core.hyperparameter_policy import (
     canonical_json_bytes,
     canonical_json_sha256,
 )
+from core.paper1_training_contract import FACTORIAL_CELLS
 from core.source_provenance import python_runtime_source_root
 
 
-CAPACITY_POLICY_SCHEMA = "ttbi-cuda-capacity-policy-v1"
-CAPACITY_RECEIPT_SCHEMA = "ttbi-cuda-capacity-receipt-v1"
-CAPACITY_ENVELOPE_SCHEMA = "ttbi-cuda-capacity-receipt-envelope-v1"
+CAPACITY_POLICY_SCHEMA = "ttbi-cuda-capacity-policy-v2"
+CAPACITY_RECEIPT_SCHEMA = "ttbi-cuda-capacity-receipt-v2"
+CAPACITY_ENVELOPE_SCHEMA = "ttbi-cuda-capacity-receipt-envelope-v2"
 CAPACITY_RECEIPT_DIR_ENV = "TTBI_EXECUTION_RECEIPT_DIR"
 
 CAPACITY_PREFLIGHT_POLICY = {
@@ -42,7 +43,20 @@ CAPACITY_PREFLIGHT_POLICY = {
     "architectures": list(ARCHITECTURES),
     "search_point": "maximum registered structural dimensions",
     "batch_size": 32,
-    "input_shape": [32, 8, 512],
+    # The longest production representation is the L99.6 RAW bridge crop:
+    # 9,960 bridge samples plus the source-locked 1,831-sample post window.
+    # PAA is checked separately because it exercises the same model cells with
+    # its actual 512-segment preprocessing contract.
+    "representation_input_shapes": {
+        "RAW": [32, 8, 11_791],
+        "PAA": [32, 8, 512],
+    },
+    "largest_raw_case": {
+        "stage": "L99-M",
+        "bridge_length_m": 99.6,
+        "bridge_samples": 9_960,
+        "post_window_samples": 1_831,
+    },
     "output_heads": 5,
     "output_semantics": {
         "scour_heads": 3,
@@ -86,6 +100,8 @@ _RECEIPT_KEYS = {
 _ENVELOPE_KEYS = {"schema", "receipt", "receipt_sha256"}
 _MEASUREMENT_KEYS = {
     "architecture",
+    "representation",
+    "input_shape",
     "params",
     "params_sha256",
     "peak_memory_allocated_bytes",
@@ -137,31 +153,46 @@ def _implementation_source_sha256() -> str:
 
 
 def _architecture_config(architecture: str) -> dict:
-    flags = {
-        "PAA_NHiTS": (False, False, True),
-        "PAA_S2V_NHiTS": (True, False, True),
-        "PAA_LSTM_NHiTS": (False, True, True),
-        "PAA_CNN": (False, False, False),
-    }
-    if architecture not in flags:
+    cells = {cell.cell_id: cell for cell in FACTORIAL_CELLS}
+    if architecture not in cells:
         raise CapacityPreflightError(
             f"unregistered capacity architecture {architecture!r}"
         )
-    use_space2vec, use_lstm, use_nhits = flags[architecture]
+    cell = cells[architecture]
+    input_shape = CAPACITY_PREFLIGHT_POLICY[
+        "representation_input_shapes"
+    ][cell.representation]
     return {
         "name": f"capacity_{architecture}",
         "name_short": architecture,
-        "method": "PAA",
+        "method": cell.representation,
         "model_type": "1D_MODULAR",
-        "use_space2vec": use_space2vec,
-        "use_lstm": use_lstm,
-        "use_nhits": use_nhits,
+        "use_space2vec": cell.position_encoding,
+        "use_lstm": cell.lstm,
+        "use_nhits": cell.multi_rate_pooling,
         "task": "regression",
         "target_supports": [2, 3, 4],
         "bearing_targets": ["left", "right"],
         "dofs": list(range(8)),
-        "n_segments": 512,
+        "n_segments": input_shape[2],
     }
+
+
+def _capacity_input_shape(config: dict) -> tuple[int, int, int]:
+    try:
+        shape = CAPACITY_PREFLIGHT_POLICY[
+            "representation_input_shapes"
+        ][config["method"]]
+    except KeyError as exc:
+        raise CapacityPreflightError(
+            "capacity configuration has an unregistered representation"
+        ) from exc
+    if config.get("n_segments") != shape[2]:
+        raise CapacityPreflightError(
+            "capacity configuration sequence length differs from its "
+            "registered representation"
+        )
+    return tuple(shape)
 
 
 def _maximum_registered_params(config: dict, search_space: dict) -> dict:
@@ -240,7 +271,7 @@ class _ExactTrial:
 
 
 def registered_capacity_cases() -> list[tuple[str, dict, dict]]:
-    """Return all four validated architecture/config/worst-parameter cases."""
+    """Return all 16 validated architecture/config/worst-parameter cases."""
 
     # Lazy import prevents a pipeline -> capacity -> trainer import cycle.
     from training.trainer import SEARCH_SPACE, TRAIN_PROTOCOL, _suggest_params
@@ -299,6 +330,7 @@ def _run_cuda_probe(
             "current CUDA total memory differs from the execution attestation"
         )
     device = torch.device(f"cuda:{device_index}")
+    input_shape = _capacity_input_shape(config)
     model = optimizer = features = target = output = loss = None
     try:
         gc.collect()
@@ -309,7 +341,7 @@ def _run_cuda_probe(
         model, n_outputs = build_model(
             config,
             params,
-            tuple(CAPACITY_PREFLIGHT_POLICY["input_shape"]),
+            input_shape,
             device,
         )
         if n_outputs != CAPACITY_PREFLIGHT_POLICY["output_heads"]:
@@ -323,7 +355,7 @@ def _run_cuda_probe(
             config, TRAIN_PROTOCOL["loss"]
         ).to(device)
         features = torch.randn(
-            tuple(CAPACITY_PREFLIGHT_POLICY["input_shape"]),
+            input_shape,
             device=device,
             dtype=torch.float32,
         )
@@ -504,6 +536,10 @@ def validate_capacity_receipt(
         architecture: json.loads(canonical_json_bytes(params))
         for architecture, _config, params in registered_capacity_cases()
     }
+    expected_configs = {
+        architecture: config
+        for architecture, config, _params in registered_capacity_cases()
+    }
     peak_allocated_values = []
     peak_reserved_values = []
     headroom_values = []
@@ -515,6 +551,16 @@ def validate_capacity_receipt(
                 "capacity measurement fields differ from the contract"
             )
         params = measurement["params"]
+        config = expected_configs[measurement["architecture"]]
+        expected_shape = list(_capacity_input_shape(config))
+        if (
+            measurement["representation"] != config["method"]
+            or measurement["input_shape"] != expected_shape
+        ):
+            raise CapacityPreflightError(
+                "capacity measurement representation/input shape differs "
+                "from the live registered case"
+            )
         if not isinstance(params, dict) or not params:
             raise CapacityPreflightError(
                 "capacity measurement lacks its search-space point"
@@ -649,6 +695,8 @@ def run_capacity_preflight(
         headroom = measurement_total - reserved
         measurements.append({
             "architecture": architecture,
+            "representation": config["method"],
+            "input_shape": list(_capacity_input_shape(config)),
             "params": params,
             "params_sha256": canonical_json_sha256(params),
             "peak_memory_allocated_bytes": allocated,
@@ -771,8 +819,17 @@ def write_capacity_receipt(
     expected_source_root_sha256: str | None = None,
     expected_source_file_count: int | None = None,
     expected_implementation_source_sha256: str | None = None,
+    require_absent: bool = False,
 ) -> str:
-    """Atomically publish canonical receipt bytes without replacing evidence."""
+    """Atomically publish canonical receipt bytes without replacing evidence.
+
+    ``require_absent=True`` is the qualification-publication mode: a target
+    created by another process, even with identical bytes, is refused rather
+    than being mistaken for this invocation's fresh evidence.
+    """
+
+    if not isinstance(require_absent, bool):
+        raise CapacityPreflightError("require_absent must be boolean")
 
     value = validate_capacity_receipt(
         envelope,
@@ -807,6 +864,11 @@ def write_capacity_receipt(
             # overwrite a concurrently created qualification.
             os.link(temporary, destination)
         except FileExistsError:
+            if require_absent:
+                raise CapacityPreflightError(
+                    "fresh capacity publication target already exists: "
+                    f"{destination}"
+                )
             if (
                 not destination.is_file()
                 or destination.is_symlink()

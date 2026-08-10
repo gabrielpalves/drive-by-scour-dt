@@ -1,0 +1,113 @@
+% =====================================================================
+% Paper 1 --- Common-random-number ablation of architectures and vehicle
+% response channels for multi-pier railway-bridge scour monitoring
+%
+% Venue: TBD (structure follows Fernandes et al. 2025, IJSSD).
+% Status: PRE-RESULTS DRAFT. The four-block Paper-1 campaign has not run;
+% every result placeholder is marked \pending{...}. Do NOT import pilot,
+% retired-rung, or pre-freeze numbers.
+% Controlling source: docs/paper1_campaign_plan.md, together with the
+% authorized source commit and authenticated campaign artifacts.
+% =====================================================================
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{authblk}
+\usepackage{setspace}
+\usepackage[margin=1.25in]{geometry}
+\usepackage{graphicx}
+\graphicspath{{./figures/}}
+\usepackage{subcaption}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+\usepackage{lineno}
+\usepackage[hidelinks]{hyperref}
+\linenumbers
+
+% ---------------------------------------------------------------------
+% Draft-status macros (remove before submission)
+% \pending{...} : value/claim that exists only after the authenticated
+%                 four-block campaign; never replace with a pilot value.
+% \verifyref{...}: citation whose bibliographic data still needs a
+%                 primary-source check.
+% ---------------------------------------------------------------------
+\newcommand{\pending}[1]{\textcolor{red!70!black}{[\textbf{PENDING RESULTS:} #1]}}
+\newcommand{\verifyref}[1]{\textcolor{blue!60!black}{[verify: #1]}}
+
+%%%%%% Bibliography %%%%%%
+\usepackage[backend=biber,style=numeric-comp,sorting=none,maxbibnames=8]{biblatex}
+\addbibresource{references.bib}
+% Allow DOIs/URLs to break in the bibliography
+\setcounter{biburlnumpenalty}{100}
+\setcounter{biburlucpenalty}{100}
+\setcounter{biburllcpenalty}{100}
+
+%%%%%% Title %%%%%%
+\title{Common-Random-Number Ablation of Architectures and Vehicle Response
+Channels for Multi-Pier Railway-Bridge Scour Monitoring}
+% Alternative title (adopt only if authenticated results justify it):
+% Drive-by estimation of multi-pier support-stiffness loss under competing
+% bridge damage mechanisms
+
+%%%%%% Authors %%%%%%
+\author[1,2*]{Gabriel Padilha Alves}
+% \author[2]{Co-author TBD}
+\affil[1]{Department of Civil Engineering, Federal University of Santa
+Catarina, Florian\'opolis, Brazil}
+\affil[2]{Department of Structural Engineering, University of California
+San Diego, La Jolla, CA, USA}
+\affil[*]{Address correspondence to: gpadilhaalves@gmail.com}
+
+\date{\today}
+
+\onehalfspacing
+
+\begin{document}
+
+\maketitle
+
+%%%%%% Abstract %%%%%%
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+\noindent\textbf{Keywords:} drive-by monitoring; bridge scour; train--track--bridge
+interaction; deep learning; ablation study; common random numbers; railway bridges
+
+\input{sections/introduction}
+\input{sections/framework}
+\input{sections/numerical_simulation}
+\input{sections/data_processing}
+\input{sections/results}
+\input{sections/limitations}
+\input{sections/conclusion}
+
+\section*{Acknowledgments}
+% TBD: advisors (UFSC / UCSD), computing resources, discussion partners.
+
+\subsection*{Author Contributions}
+% TBD.
+
+\subsection*{Funding}
+% TBD (e.g., CAPES/CNPq sandwich scholarship --- fill in the grant program and number).
+
+\subsection*{Conflicts of Interest}
+The author(s) declare(s) that there is no conflict of interest regarding the
+publication of this article.
+
+\subsection*{Data Availability}
+% Registered plan: release the campaign manifests (protocol descriptors, split
+% manifests, HPO/champion manifests, execution receipts) and the analysis
+% tables alongside the code repository; raw MATLAB time histories available on
+% request due to size. Fill in the archive DOI at submission.
+\pending{data archive DOI and released-artifact list}
+
+\printbibliography
+
+\end{document}

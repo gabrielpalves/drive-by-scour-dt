@@ -148,6 +148,7 @@ celerybeat.pid
 .env
 .envrc
 .venv
+.venv-campaign-py313/
 env/
 venv/
 ENV/
@@ -237,6 +238,10 @@ presentation/
 # MATLAB autosave + generated output
 *.asv
 scour_MATLAB/Results/
+scour_MATLAB/Results_sensitivity/
+scour_MATLAB/Results_sensitivity_smoke_contract/
+scour_MATLAB/micro_A00_smoke.m
+scour_MATLAB/micro_A00_qualification_*.m
 
 # Heavy run outputs copied from the Lab PC (6 GB each) — summaries are
 # force-added selectively; never commit the raw data/caches/databases
@@ -262,3 +267,30 @@ multidamage_*.zip
 
 # Isolated mutation-guard sandboxes (check_*_mutation_guards.py)
 .audit_tmp/
+
+# F25 target-host data, receipts, manifests, caches, and results. Preserve with
+# external run evidence; never commit or include these generated artefacts.
+/f25_artifacts/
+
+# Local audit extracts, rendered PDF pages, and upstream comparison clones
+/tmp/
+
+# Paper 1 LaTeX build products (sources under paper1/ remain trackable)
+/paper1/*.aux
+/paper1/*.bbl
+/paper1/*.bcf
+/paper1/*.blg
+/paper1/*.fdb_latexmk
+/paper1/*.fls
+/paper1/*.lof
+/paper1/*.log
+/paper1/*.lot
+/paper1/*.out
+/paper1/*.pdf
+/paper1/*.run.xml
+/paper1/*.synctex.gz
+/paper1/*.toc
+
+# Local manuscript scratch/export artefacts (unused by paper1/main.tex)
+/paper1/out.txt
+/paper1/sample.bib

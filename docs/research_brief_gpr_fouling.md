@@ -1,5 +1,14 @@
 # Deep-research brief: GPR ballast-fouling extent ("FI>30 on 10–20% of route length")
 
+> **DIRECT-SOURCE CORRECTION (2026-07-31; supersedes the “resolved” inference
+> below).** The reports summarized here use different denominators, thresholds,
+> line contexts, and evidence classes; they do not estimate the implemented
+> Poisson count law. Consequently `ballast_rate_100m = 1.2` is an author-chosen
+> design rate, not a population estimate or a generically conservative inferred
+> prior. Published zone lengths can contextualize the 5–20 m bounds, but do not
+> fit the exact `U(5,20)` distribution. The proposed sensitivity sweep remains
+> unimplemented, and several cited items still lack complete local traceability.
+
 **Why (2026-07-19):** the ballast-patch rate in our generator (`A00_Run.m`:
 `ballast_rate_100m = 1.2` fouled patches per 100 m = 15% of route length ÷ 12.5 m
 mean patch) is derived from ONE pivotal anchor — "GPR surveys put highly fouled
@@ -99,11 +108,19 @@ Findings (per question):
    end-of-ballast-life limit (Chrismer & Hyslip 2018, AREMA — industry).
    **Paper wording**: patches = ballast at/beyond the FI≈30 drainage-loss
    limit (between Selig "fouled" and "highly fouled").
-3. **Patch length U(5,20) m: SUPPORTED** — FRA empirical fouled-section
-   lengths 1.5–33.5 m (DOT/FRA/ORD-22/01 §5.1.2, pp. 31/34); 2.4 m GPR
-   minimum feature (Guo et al. 2023, Int. J. Rail Transp. 11(2), DOI
+3. **Patch length U(5,20) m: ~~SUPPORTED~~ — superseded by the 2026-07/08
+   direct-PDF audits (verdict now NOT_SUPPORTED; see
+   `paper1/MISSING_PRIMARY_SOURCES.md`).** FRA reports degraded locations
+   from 5 ft or less up to 110 ft (≈≤1.5–33.5 m, open-ended), among sites
+   crossing the class-5 profile limit (DOT/FRA/ORD-22/01 §4.3, Fig. 22,
+   printed p. 34; the p. 31 analogue is the class-4 limit, 5 ft or less up
+   to 80 ft);
+   Guo et al. average their GPR indicator over 2.4 m windows to suppress
+   5 cm channel fluctuation — a smoothing choice, not a minimum resolvable
+   feature (Guo et al. 2023, Int. J. Rail Transp. 11(2), DOI
    10.1080/23248378.2022.2064346 — this is the "Tandfonline GPR fouling"
-   paper the old brief hoped for).
+   paper the old brief hoped for). Neither source fits U(5,20) m; the law is
+   author-chosen with source context only.
 4. **Secondary lines: SUPPORTED** — ballast design life 25 yr main vs up to
    50 yr secondary rural (Musgrave 2024, Network Rail perspective, DOI
    10.17265/2328-2142/2024.05.004 — practitioner journal, cite as practice

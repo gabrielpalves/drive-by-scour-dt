@@ -108,9 +108,9 @@ class DTConfig:
     sim_years:             int   = 60
     monitoring_interval:   float = 1.0
     repair_threshold_label: int  = 6
-    # Enable the Kamariotis shock (flood) term in the scour evolution. Off by
-    # default to preserve gradual-only behaviour; turn on for the flood-decision
-    # study. See ScourModel.
+    # Enable the project flood scenario, which uses the generic Compound-Poisson
+    # family in Kamariotis et al. (2023) but author-chosen rate/jump values. Off
+    # by default; this is not a calibrated hydraulic scour process. See ScourModel.
     enable_shock:          bool  = False
 
     # ── Derived (computed in __post_init__; do not pass at construction) ──────

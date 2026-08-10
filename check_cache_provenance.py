@@ -25,6 +25,7 @@ import scipy.io as sio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.dataset import (                                           # noqa: E402
+    _EXPECTED_CHANNEL_SCHEMA_ID,
     _EXPECTED_GENERATION_BEHAVIOR_VERSION,
     _EXPECTED_GEN_SCHEMA,
     _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
@@ -32,12 +33,21 @@ from core.dataset import (                                           # noqa: E40
     _EXPECTED_MATLAB_RELEASE,
     get_or_create_cache,
 )
+from core.campaign_contract import (                                 # noqa: E402
+    EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
+    EXPECTED_RAIL_END_CLEARANCE_M,
+)
 from core.protocol import read_dataset_provenance  # noqa: E402
 from core.source_provenance import generator_source_root              # noqa: E402
 
-# Keep the integration fixture at the campaign's 512 PAA segments.  PAA is a
-# reduction and now correctly rejects n_segments > raw length.
-NST, NP, L = 4, 4, 512
+# Keep the integration fixture at the campaign's 512 PAA segments and use one
+# physically coherent 60 m / 70 km/h RAW passage.  The 3600 time samples map to
+# 7000 spatial samples; the registered [1001, 7000] crop therefore contains the
+# complete 6000-sample bridge and remains large enough for 512-segment PAA.
+NST, NP, L = 4, 4, 3600
+BRIDGE_LENGTH_M = 60.0
+DIM_SPACE = 7000
+SPEED_MPS = 70.0 / 3.6
 CFG = {'method': 'PAA', 'dofs': [0], 'task': 'regression', 'target_supports': [2, 3]}
 fails = 0
 _GENERATOR = generator_source_root(Path(__file__).resolve().parent)
@@ -59,6 +69,8 @@ def _generation_config_json(
     return json.dumps(
         {
             "schema": _EXPECTED_GEN_SCHEMA,
+            "channel_schema_id": _EXPECTED_CHANNEL_SCHEMA_ID,
+            "state_design_kind": "five-family-multidamage-v2",
             "generation_behavior_version":
                 _EXPECTED_GENERATION_BEHAVIOR_VERSION,
             "campaign_matlab_release": _EXPECTED_MATLAB_RELEASE,
@@ -70,6 +82,9 @@ def _generation_config_json(
             "n_states": NST,
             "Npass": NP,
             "damage_seed": DAMAGE_SEED,
+            "rail_end_clearance_m": EXPECTED_RAIL_END_CLEARANCE_M,
+            "rail_end_clearance_decision_id":
+                EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -124,6 +139,7 @@ def _generation_metadata(*, qualification=False,
                          qualification_source="PRODUCTION",
                          generator_attestation=None):
     metadata = {
+        'channel_schema_id': _EXPECTED_CHANNEL_SCHEMA_ID,
         'generation_behavior_version':
             _EXPECTED_GENERATION_BEHAVIOR_VERSION,
         'matlab_release': _EXPECTED_MATLAB_RELEASE,
@@ -177,9 +193,45 @@ def _cellrow(nrows):
 
 
 def _raw_meta():
-    return {'DimSpace': np.full((1, NP), float(L)), 'DimAcel': np.full((1, NP), float(L)),
-            'crop_start': np.ones((1, NP)), 'crop_end': np.full((1, NP), float(L)),
-            'bridge_samp': np.full((1, NP), float(L)), 'L_bridge_eff': np.full((1, NP), 60.0)}
+    return {
+        'DimSpace': np.full((1, NP), float(DIM_SPACE)),
+        'DimAcel': np.full((1, NP), float(L)),
+        'crop_start': np.full((1, NP), 1001.0),
+        'crop_end': np.full((1, NP), float(DIM_SPACE)),
+        'bridge_samp': np.full((1, NP), 100.0 * BRIDGE_LENGTH_M),
+        'L_bridge_eff': np.full((1, NP), BRIDGE_LENGTH_M),
+        'Velocidade': np.full((1, NP), SPEED_MPS),
+    }
+
+
+def _empty_log_column():
+    """Return one MATLAB-cell-like Npass x 1 column of empty log entries."""
+    values = np.empty((NP, 1), dtype=object)
+    for passage in range(NP):
+        values[passage, 0] = np.empty((0, 0), dtype=np.float64)
+    return values
+
+
+def _complete_payload_defaults(contact_log):
+    """Production-shaped physical fields in the closed state contract."""
+    return {
+        'AcelPrimVag': _cellrow(3),
+        'AcelRodaPrimVag': _cellrow(4),
+        'AcelWheelsetPrimVag': _cellrow(4),
+        'PitchPrimVag': _cellrow(3),
+        'Dano': np.float64(0.2),
+        'Temperatura': np.full((1, NP), 20.0, dtype=np.float64),
+        'VehiclesProps': np.zeros((5, 3, NP), dtype=np.float64),
+        'beam_f1_Hz': np.float64(4.0),
+        'bearing_vector': np.zeros((1, 2), dtype=np.float64),
+        'crack_log': np.zeros((NP, 3), dtype=np.float64),
+        'profile_mode': 'fixed',
+        'profile_log': np.ones((NP, 1), dtype=np.float64),
+        'track_log': _empty_log_column(),
+        'oor_log': _empty_log_column(),
+        'contact_log': np.asarray(contact_log, dtype=np.float64),
+        **_raw_meta(),
+    }
 
 
 def _finalize(data_dir, *, fingerprint=None):
@@ -234,7 +286,8 @@ def _foreign_generator_attestation():
 
 def _build_dataset(data_dir, *, qualification=False,
                    qualification_source="PRODUCTION",
-                   generator_attestation=None):
+                   generator_attestation=None,
+                   metadata_overrides=None, metadata_drop=()):
     shutil.rmtree(data_dir, ignore_errors=True)
     os.makedirs(data_dir)
     generation = _generation_metadata(
@@ -250,16 +303,20 @@ def _build_dataset(data_dir, *, qualification=False,
     fingerprint = hashlib.sha256(
         generation_config_json.encode("utf-8")
     ).hexdigest()
-    sio.savemat(os.path.join(data_dir, 'case_info.mat'), {'case_info': {
+    case_info = {
         'n_states': NST,
         'passages_per_state': NP,
         'gen_schema': _EXPECTED_GEN_SCHEMA,
         'gen_fingerprint': fingerprint,
         'generation_config_json': generation_config_json,
+        'state_design_kind': 'five-family-multidamage-v2',
         'case_name': '_cacheprov_ds',
         'stage': 'fixture_stage',
         'damage_mode': 'multi_scour',
-        'L_bridge_m': 60.0,
+        'rail_end_clearance_m': EXPECTED_RAIL_END_CLEARANCE_M,
+        'rail_end_clearance_decision_id':
+            EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
+        'L_bridge_m': BRIDGE_LENGTH_M,
         'num_spans': 3,
         'num_supports': 4,
         'scour_supports': '[2 3]',
@@ -286,8 +343,15 @@ def _build_dataset(data_dir, *, qualification=False,
         'use_vehicle_variability': True,
         'use_speed_variability': True,
         'use_temp_variability': True,
-        **generation}},
-        long_field_names=True)
+        **generation}
+    case_info.update(metadata_overrides or {})
+    for field in metadata_drop:
+        case_info.pop(field, None)
+    sio.savemat(
+        os.path.join(data_dir, 'case_info.mat'),
+        {'case_info': case_info},
+        long_field_names=True,
+    )
     identities = [_state_identity(index) for index in range(1, NST + 1)]
     state_named = np.vstack([
         identity["state_named_stream_seed_id"] for identity in identities
@@ -323,7 +387,9 @@ def _build_dataset(data_dir, *, qualification=False,
             PASSAGE_STREAM_NAMES, dtype=object
         ).reshape(1, -1),
         'DamageStates': np.tile([0.0, 0.1, 0.2, 0.0], (NST, 1)),
+        'BearingStates': np.zeros((NST, 2)),
         'BearingFixity': np.zeros((NST, 2)),
+        'k_ref_bear': 1.0,
         'scour_supports': np.array([[2, 3]], dtype=np.uint32),
     })
     clog = np.column_stack([np.zeros(NP)] * 3 + [-1e5 * np.ones(NP)])
@@ -332,8 +398,7 @@ def _build_dataset(data_dir, *, qualification=False,
              'gen_fingerprint': fingerprint, 'state_family': 'joint',
              **_state_identity(i),
              **generation,
-             'AcelPrimVag': _cellrow(3), 'AcelRodaPrimVag': _cellrow(4),
-             'PitchPrimVag': _cellrow(3), 'contact_log': clog, **_raw_meta()}
+             **_complete_payload_defaults(clog)}
         # generation_behavior_version belongs to case_info/fingerprint, not
         # the per-state payload written by A00.
         d.pop('generation_behavior_version')
@@ -399,7 +464,11 @@ def main():
               and prov['source'].get('generator_source_file_count')
                   == _GENERATOR.file_count
               and prov['source'].get('qualification_source_sha256')
-                  == "PRODUCTION")
+                  == "PRODUCTION"
+              and prov['source'].get('channel_schema_id')
+                  == _EXPECTED_CHANNEL_SCHEMA_ID
+              and prov['source'].get('state_design_kind')
+                  == 'five-family-multidamage-v2')
         check("no leftover .tmp / .lock", not any(f.endswith(('.tmp', '.lock'))
                                                   for f in os.listdir(cache_dir)))
         del X, y, g
@@ -544,6 +613,8 @@ def main():
              "generator_source_root_sha256", "1" * 64),
             ("generation behaviour drift rejected on cache fast path",
              "generation_behavior_version", "generation-rules-v3"),
+            ("channel schema drift rejected on cache fast path",
+             "channel_schema_id", "legacy_virtual8"),
         )
         for label, field, bad_value in manifest_mutations:
             ci_path = os.path.join(data_dir, "case_info.mat")
@@ -560,6 +631,35 @@ def main():
             except RuntimeError:
                 check(label, True)
             _build_dataset(data_dir)
+
+        clearance_mutations = (
+            (
+                "missing clearance rejected on cache fast path",
+                {"metadata_drop": ("rail_end_clearance_m",)},
+            ),
+            (
+                "wrong clearance rejected on cache fast path",
+                {"metadata_overrides": {"rail_end_clearance_m": 15.0}},
+            ),
+            (
+                "missing clearance decision ID rejected on cache fast path",
+                {"metadata_drop": ("rail_end_clearance_decision_id",)},
+            ),
+            (
+                "wrong clearance decision ID rejected on cache fast path",
+                {"metadata_overrides": {
+                    "rail_end_clearance_decision_id":
+                        "paper1-rail-domain-clearance-c15-v1"
+                }},
+            ),
+        )
+        for label, mutation_kwargs in clearance_mutations:
+            _build_dataset(data_dir, **mutation_kwargs)
+            try:
+                get_or_create_cache(CFG, ds, cache_dir)
+                check(label, False)
+            except RuntimeError:
+                check(label, True)
 
         # 13. Scalar-struct grammar also protects an already valid cache. A
         # duplicated case_info struct cannot be silently reduced with [0, 0].

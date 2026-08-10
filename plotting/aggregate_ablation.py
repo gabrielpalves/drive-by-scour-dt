@@ -73,8 +73,9 @@ FIG_DIR = OUT_DIR / "figures"
 # predictions. Healthy models sit at 0.6-0.7 accuracy; chance is 1/61 ~ 0.016.
 COLLAPSE_ACC = 0.10
 
-# DOF index -> name (mirrors core/utils.py DOF_NAMES; kept inline so this
-# script has no heavy project imports).
+# DOF index -> frozen schema name (mirrors core/utils.py DOF_NAMES; kept inline
+# so this script has no heavy project imports). Wheel1_Vert/Wheel2_Vert remain
+# frozen result keys; physical8_v1 maps them to idealized wheelset proxies.
 DOF_NAMES = [
     "CarBody_Vert",      # 0
     "FrontBogie_Vert",   # 1
@@ -84,6 +85,16 @@ DOF_NAMES = [
     "CarBody_Pitch",     # 5
     "FrontBogie_Pitch",  # 6
     "RearBogie_Pitch",   # 7
+]
+DOF_DISPLAY_NAMES = [
+    "CarBody_Vert",
+    "FrontBogie_Vert",
+    "RearBogie_Vert",
+    "Wheelset accel proxy 1 (Wheel1_Vert)",
+    "Wheelset accel proxy 2 (Wheel2_Vert)",
+    "CarBody_Pitch",
+    "FrontBogie_Pitch",
+    "RearBogie_Pitch",
 ]
 ALL_DOFS = set(range(len(DOF_NAMES)))
 
@@ -98,7 +109,7 @@ ARCH_LABEL = {
 
 PHASE_LABEL = {
     "CompA": "Single-DOF",
-    "CompB": "Full 8-DOF",
+    "CompB": "Full 8-channel",
     "CompC": "Leave-one-out",
     "CompD": "DOF pair",
 }
@@ -119,7 +130,7 @@ PALETTE = {
 # --------------------------------------------------------------------------- #
 def dof_list_label(dofs: list[int]) -> str:
     """Compact human label for a DOF subset."""
-    return " + ".join(DOF_NAMES[d] for d in dofs)
+    return " + ".join(DOF_DISPLAY_NAMES[d] for d in dofs)
 
 
 def load_runs() -> pd.DataFrame:
@@ -165,7 +176,8 @@ def load_runs() -> pd.DataFrame:
                             dof_set=m.group("dofs"),
                             n_dofs=len(dofs),
                             dof_label=dof_list_label(dofs),
-                            dropped_dof=DOF_NAMES[dropped[0]] if dropped else "",
+                            dropped_dof=(DOF_DISPLAY_NAMES[dropped[0]]
+                                         if dropped else ""),
                             seed=seed,
                             eval_idx=i,
                             accuracy=a,
@@ -225,7 +237,7 @@ def fig1_architecture(summary: pd.DataFrame) -> str:
     bars[bi].set_edgecolor("black")
     bars[bi].set_linewidth(2)
     axm.set_ylabel("median MSE  (scour-class units)  -  lower is better")
-    axm.set_title("Architecture comparison - Full 8-DOF input")
+    axm.set_title("Architecture comparison - Full 8-channel input")
     for xi, v, q, cr in zip(x, sub.mse_median, sub.mse_q75, sub.collapse_rate):
         tag = f"{v:.3f}" + (f"\ncollapse {cr:.1%}" if cr > 0 else "")
         axm.text(xi, q, tag, ha="center", va="bottom", fontsize=8)
@@ -328,7 +340,7 @@ def fig4_best_pairs(summary: pd.DataFrame, best_arch: str, top_n: int = 14) -> N
                    label=f"best single-DOF ({best_single:.3f})")
     if full8 is not None:
         ax.axvline(full8, color="black", ls=":", lw=1.2,
-                   label=f"full 8-DOF ({full8:.3f})")
+                   label=f"full 8-channel ({full8:.3f})")
     ax.set_xlabel("median MSE  (scour-class units)  -  lower is better")
     ax.set_title(f"Best 2-sensor combinations - {ARCH_LABEL[best_arch]}")
     ax.legend(fontsize=8, loc="lower right")
@@ -343,7 +355,7 @@ def fig4_best_pairs(summary: pd.DataFrame, best_arch: str, top_n: int = 14) -> N
 # --------------------------------------------------------------------------- #
 def print_ranking(summary: pd.DataFrame) -> None:
     print("\n" + "=" * 78)
-    print("ARCHITECTURE RANKING  -  Full 8-DOF (CompB), pooled over seeds (robust)")
+    print("ARCHITECTURE RANKING  -  Full 8-channel (CompB), pooled over seeds (robust)")
     print("=" * 78)
     sub = (summary[summary.phase == "CompB"]
            .sort_values("mse_median"))

@@ -3,7 +3,7 @@
 %   1. HEALTHY PARITY: one full passage with Damage.track=[] / Damage.oor=[]
 %      must produce signals IDENTICAL to the legacy path (norm diff == 0),
 %      and show NO wheel-rail tension anywhere on the track.
-%   2. DAMAGED: ballast patch + hanging sleepers + pad aging/failure +
+%   2. DAMAGED: ballast patch + hanging sleepers + pad condition/failure +
 %      polygonized wheel must run, stay finite, change the signal, land the
 %      defects ON/AROUND THE REAL DECK (audit fix 2026-07-17: descriptors are
 %      bridge-local; B54 anchors them to the deck at L_Aw ~ 123 m, not 30 m),

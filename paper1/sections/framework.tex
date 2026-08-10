@@ -1,0 +1,147 @@
+\section{Proposed framework}
+\label{sec:framework}
+
+The study is organized as a prospectively specified, source-locked simulation
+experiment: the bridge-state catalogues, active-mechanism scope, model-selection
+policy, statistical analyses, and claim boundaries were fixed in versioned,
+hash-identified source before production generation. In this paper,
+``registered'' means fixed in that repository source; it does not imply deposit
+in an external registry. This section gives an overview, while
+Sections~\ref{sec:simulation} and~\ref{sec:data_processing} provide the
+implementation details.
+
+Three principles govern the experiment.
+
+\paragraph{Explicit scientific blocks and common random numbers.}
+The campaign contains four blocks: a two-span scour benchmark (F40-S), its
+multi-damage counterpart (F40-M), a four-span multi-pier scour block (L99-S),
+and its multi-damage counterpart (L99-M). Named random substreams keyed to
+semantic state identifiers make all intended comparisons invariant to row
+order and parallel scheduling. F40-S and F40-M share an explicit 30-state
+controlled subset; their remaining states are not claimed to be paired.
+L99-S and L99-M share the complete 475-state latent design. All four blocks use
+one fixed rail-profile realization and vary only the registered operational
+conditions between passages. Thus any paired contrast uses only states whose
+semantic identities and operational draws are genuinely shared.
+
+\paragraph{Block-local calibration.}
+The architecture factorial is calibrated on F40-S using the prospectively
+chosen front-bogie vertical-acceleration anchor. Frozen hyperparameters then
+support the complete F40-S single- and two-channel screen. After the physical
+channel pair is selected, the retained pipelines are re-optimized on that pair
+in F40-S and independently in F40-M, L99-S, and L99-M. No block inherits
+another block's hyperparameters for its primary result. The earlier
+transport/rescue trigger is withdrawn; a separate frozen-F40-S transfer
+analysis is retained only as a secondary descriptive analysis.
+
+\paragraph{A selection/report firewall.}
+States, never passages, are assigned to train, inner-validation, and sealed
+outer-test partitions. Hyperparameter search, the Option-C grouped-development
+out-of-fold adjudication, and the response-channel screen use development data
+only. The outer test remains unopened until the architecture vectors, selected
+pair, block-local hyperparameters, checkpoint policy, and comparator set are
+frozen. Post-freeze variability is then estimated with a disjoint,
+prospectively listed set of initialization seeds and is report-only.
+
+\subsection{Scientific blocks and estimands}
+\label{sec:estimands}
+
+Table~\ref{tab:stages} and Figure~\ref{fig:stage_graph} summarize the campaign.
+F40-S is the gating method-development block. Its dense 0--60\% grid supports
+continuous regression, while the predeclared \{0, 5, 10, 20\%\} subset gives a
+limited classification comparability check with Fernandes et
+al.~\cite{fernandes2025early}. F40-M activates nominal bearing fixity and a
+local flexural-rigidity-loss surrogate in addition to scour. L99-S estimates
+three internal supports on a longer four-span bridge, and L99-M activates the
+same multi-damage task there.
+
+The design supports four distinct estimand classes:
+
+\begin{enumerate}
+  \item \textbf{F40-S method and channel selection.} Grouped-development
+  evidence selects one RAW and one PAA factorial cell, and a prospectively
+  specified screen over eight singles and 28 pairs selects one physical
+  two-channel input. Singles are descriptive and non-selectable.
+  \item \textbf{Block-local primary performance.} The retained RAW/PAA winners
+  and their RAW/PAA CNN--GAP baselines receive independent selected-pair HPO in
+  every block. Performance on the sealed outer test therefore estimates each
+  pipeline under block-local calibration, not hyperparameter transport.
+  \item \textbf{Paired damage/task comparisons.} F40-S versus F40-M is
+  interpreted only on their 30 shared controlled states; L99-S versus L99-M
+  uses the complete shared 475-state inventory. Each comparison jointly
+  changes the expressed bearing/crack physics and, where applicable, the
+  additional bearing regression heads. It is not an isolated causal effect of
+  either mechanism.
+  \item \textbf{Scale and transfer observations.} Comparisons between F40 and
+  L99 are descriptive geometry/scale observations. The secondary frozen-F40-S
+  transfer analysis measures performance under deliberately transported
+  settings and cannot replace any block's independently tuned primary result.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{0.88\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=12mm and 26mm,
+  block/.style={draw, rounded corners=2pt, minimum height=11mm,
+    minimum width=30mm, align=center, font=\small\ttfamily},
+  arr/.style={-{Stealth[length=2.4mm]}, thick},
+  lbl/.style={font=\footnotesize, align=center}
+]
+\node[block] (f40s) {F40-S\\305 states};
+\node[block, right=of f40s] (f40m) {F40-M\\425 states};
+\draw[arr] (f40s) -- node[above,lbl] {30-state matched\\controlled subset} (f40m);
+\node[block, below=of f40s] (l99s) {L99-S\\475 states};
+\node[block, right=of l99s] (l99m) {L99-M\\475 states};
+\draw[arr] (l99s) -- node[above,lbl] {complete 475-state\\pairing} (l99m);
+\node[lbl, left=5mm of f40s] {two spans\\one scour target};
+\node[lbl, left=5mm of l99s] {four spans\\three scour targets};
+\node[lbl, right=5mm of f40m] {+ bearing fixity\\+ local $EI$ loss};
+\node[lbl, right=5mm of l99m] {+ bearing fixity\\+ local $EI$ loss};
+\end{tikzpicture}%
+}
+\caption{Four-block Paper-1 design. Arrows denote only authenticated semantic
+state pairing; no causal or transport arrow connects the two geometries.}
+\label{fig:stage_graph}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{Registered Paper-1 scientific blocks. Every state has 50 passages.
+The profile is one fixed FRA-class-4 realization in all four blocks; speed,
+temperature, and vehicle properties vary operationally.}
+\label{tab:stages}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrlp{5.8cm}}
+\toprule
+Block & Geometry & States & Targets & Expressed bridge mechanisms \\
+\midrule
+\texttt{F40-S} & $2\times20$ m & 305 & support 2 & scour only; dense 61-severity $\times$ 5-replica grid \\
+\texttt{F40-M} & $2\times20$ m & 425 & support 2 & scour + nominal bearing fixity + local $EI$ loss \\
+\texttt{L99-S} & $4\times24.9$ m & 475 & supports 2--4 & multi-pier scour only \\
+\texttt{L99-M} & $4\times24.9$ m & 475 & supports 2--4 & scour + nominal bearing fixity + local $EI$ loss \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Track-layer damage, wheel polygonization, and suspension damage remain present
+in the single qualified source tree but are disabled by the four stage
+configurations; no stripped scientific solver branch is used. Alternative
+profile phases are also disabled. Their later
+evaluation belongs to a separate track/train-damage study cut from the frozen
+source revision; code availability is not evidence that those mechanisms were
+active in Paper~1.
+
+\subsection{Execution blocks and provenance}
+\label{sec:blocks}
+
+Each scientific block has its own authenticated generation contract,
+hyperparameter studies, result manifests, and execution receipts. Within a
+block, compared training arms use the same GPU model and pinned numerical
+stack; physical host identity may differ only where the compatibility contract
+permits it. Data generation may be distributed across independently qualified
+hosts. Every reported row is bound to the generating source revision, channel
+schema, protocol hashes, split identity, and artifact digests, so that a
+result without a complete authenticated lineage fails closed rather than being
+silently admitted.

@@ -4,8 +4,9 @@ digital_twin/physics.py
 Thin Python wrapper around the TTBI_2D physics engine.
 
 The single public function, run_single_passage, executes one full
-vehicle-bridge interaction simulation and returns the eight sensor
-signals in the canonical DOF order used throughout the project.
+vehicle-bridge interaction simulation and returns eight response channels in
+the canonical legacy-index order used throughout the project. Six are vehicle
+responses; two are virtual moving-coordinate rail-field samples.
 
 All variability sources (speed, temperature, vehicle properties,
 signal noise) are explicit arguments so the caller — PhysicalAsset
@@ -48,7 +49,7 @@ class EmptyObj:
 # Physics engine
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Canonical DOF order shared with core/utils.DOF_NAMES.
+# Canonical channel order shared with the legacy core/utils.DOF_NAMES schema.
 # Documented here so the stacking logic below is self-explanatory.
 #
 #   Index  Name               Source field        Row
@@ -56,13 +57,18 @@ class EmptyObj:
 #     0    CarBody_Vert       AcelPrimVag          0
 #     1    FrontBogie_Vert    AcelPrimVag          1
 #     2    RearBogie_Vert     AcelPrimVag          2
-#     3    Wheel1_Vert        AcelRodaPrimVag      0
-#     4    Wheel2_Vert        AcelRodaPrimVag      1
+#     3    Wheel1_Vert*       AcelRodaPrimVag      0
+#     4    Wheel2_Vert*       AcelRodaPrimVag      1
 #     5    CarBody_Pitch      PitchPrimVag         0
 #     6    FrontBogie_Pitch   PitchPrimVag         1
 #     7    RearBogie_Pitch    PitchPrimVag         2
 
-_N_DOFS = 8
+_N_CHANNELS = 8
+
+# * Legacy identifiers only. These rows are N(x_w)'*A_rail: Eulerian rail FE
+#   vertical acceleration sampled at the instantaneous wheel coordinates.
+#   They are not wheelset/axle-box acceleration and omit the convective terms
+#   needed for total acceleration along the moving contact path.
 
 
 def run_single_passage(
@@ -81,7 +87,7 @@ def run_single_passage(
     profile_type:     int | None        = None,
 ) -> np.ndarray:
     """
-    Run one TTBI vehicle-bridge passage and return all eight DOF signals.
+    Run one TTBI vehicle-bridge passage and return all eight response channels.
 
     Pipeline
     --------
@@ -90,7 +96,7 @@ def run_single_passage(
     3. Apply temperature degradation to Young's modulus (0.3 % per °C above 15 °C).
     4. Run the numerical integration (b00_calculations).
     5. Spatial-interpolate the raw solver output (d01_data_processing).
-    6. Extract and stack the eight DOF rows in canonical order.
+    6. Extract and stack the eight response rows in canonical order.
 
     Temperature model
     -----------------
@@ -100,11 +106,13 @@ def run_single_passage(
     contains the temperature-adjusted stiffness before the solver runs.
 
     Args:
-        damage_percent (float):     Scour damage as a percentage of the
-                                    reference stiffness, in [0.0, 100.0].
-                                    Passed directly to the Damage struct;
-                                    the TTBI_2D functions interpret it as
-                                    a stiffness reduction rate.
+        damage_percent (float):     Legacy-misnamed, dimensionless support-
+                                    stiffness-loss fraction ``d`` in
+                                    ``k_v=(1-d)k_v0``. Thus 0.30 means 30
+                                    percentage points of modeled stiffness
+                                    loss. The campaign domain is [0, 0.60];
+                                    the interface rejects values outside
+                                    the mathematical range [0, 1].
         speed_kmh (float):          Vehicle crossing speed in km/h.
                                     Converted to m/s internally.
         temp_celsius (float):       Ambient temperature in °C.
@@ -123,7 +131,7 @@ def run_single_passage(
 
     Returns:
         np.ndarray: float32, shape (8, sequence_length).
-                    Rows follow the canonical DOF order defined above.
+                    Rows follow the canonical channel order defined above.
                     sequence_length is determined by the solver and depends
                     on speed and bridge discretisation.
 
@@ -139,9 +147,15 @@ def run_single_passage(
     # scour scenario built from damage_percent. The noise toggle is always
     # honoured here so callers don't have to manage it.
     if damage is None:
+        scour_rate = float(damage_percent)
+        if not np.isfinite(scour_rate) or not 0.0 <= scour_rate <= 1.0:
+            raise ValueError(
+                "damage_percent is a legacy-misnamed TTBI stiffness-loss "
+                "fraction and must be finite in [0, 1]; use 0.30 for 30%."
+            )
         damage = EmptyObj()
         damage.DOFStiff_ROT_value   = 0
-        damage.DOF_ChangeRate_value = damage_percent
+        damage.DOF_ChangeRate_value = scour_rate
     damage.desvio = noise_std if add_signal_noise else 0.0
 
     beam            = EmptyObj()
@@ -181,17 +195,17 @@ def run_single_passage(
     data = EmptyObj()
     data = d01_data_processing(0, 0, sol, train, calc, damage, data)
 
-    # ── 6. Extract DOFs ───────────────────────────────────────────────────────
+    # ── 6. Extract response channels ──────────────────────────────────────────
     acel_bogie  = data.AcelPrimVag[0, 0]      # (3, L): CarBody, FrontBogie, RearBogie vert
-    acel_wheel  = data.AcelRodaPrimVag[0, 0]  # (4, L): Wheels 1–4 vert
+    rail_eulerian_acc_at_wheels = data.AcelRodaPrimVag[0, 0]  # legacy key
     pitch_bogie = data.PitchPrimVag[0, 0]     # (3, L): CarBody, FrontBogie, RearBogie pitch
 
     signal = np.vstack((
         acel_bogie[0, :],   # 0: CarBody_Vert
         acel_bogie[1, :],   # 1: FrontBogie_Vert
         acel_bogie[2, :],   # 2: RearBogie_Vert
-        acel_wheel[0, :],   # 3: Wheel1_Vert
-        acel_wheel[1, :],   # 4: Wheel2_Vert
+        rail_eulerian_acc_at_wheels[0, :],  # 3: legacy Wheel1_Vert
+        rail_eulerian_acc_at_wheels[1, :],  # 4: legacy Wheel2_Vert
         pitch_bogie[0, :],  # 5: CarBody_Pitch
         pitch_bogie[1, :],  # 6: FrontBogie_Pitch
         pitch_bogie[2, :],  # 7: RearBogie_Pitch

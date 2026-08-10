@@ -309,6 +309,11 @@ def read_dataset_provenance(
         "scour_dano_max_frac": _read_dano_max(dataset_dir),
         "generation_behavior_version":
             generation["generation_behavior_version"],
+        "channel_schema_id": generation["channel_schema_id"],
+        "state_design_kind": generation["state_design_kind"],
+        "rail_end_clearance_m": generation["rail_end_clearance_m"],
+        "rail_end_clearance_decision_id":
+            generation["rail_end_clearance_decision_id"],
         "matlab_release": generation["matlab_release"],
         "campaign_matlab_release":
             generation["campaign_matlab_release"],
@@ -379,7 +384,7 @@ def build_protocol_descriptors(
     # supplied as data by the driver and therefore moves the core hash.
     statistical_inference: dict | None = None,
     # Audit r3 (2026-07-22): non-selectable sensor-budget controls (the full
-    # 8-DOF array) reported as comparators at every rung. Default keeps older
+    # 8-channel array) reported as comparators at every rung. Default keeps older
     # callers/tests valid.
     control_sets:         list = (),
 ) -> tuple[dict, dict]:
@@ -395,7 +400,12 @@ def build_protocol_descriptors(
     driver's globals, so the check script can exercise this function with
     fixture values and so the reviewer can see, in one signature, the complete
     list of what the hash covers."""
-    from core.dataset import split_protocol, PREPROC_PROTOCOL, _EXPECTED_GEN_SCHEMA
+    from core.dataset import (
+        split_protocol,
+        PREPROC_PROTOCOL,
+        _EXPECTED_GEN_SCHEMA,
+        _EXPECTED_CHANNEL_SCHEMA_ID,
+    )
     from core.dataset import CACHE_SCHEMA_TAG
     from core.execution_environment import (
         canonical_execution_block_policy,
@@ -410,6 +420,8 @@ def build_protocol_descriptors(
         stage, execution_policy
     )
     core = {
+        # v7: v6 plus an explicit physical channel-schema code contract.
+        #
         # v6: v5 plus the executable anchor-HPO/frozen-singleton policy and
         # fail-closed CUDA capacity preflight.  Candidate-specific tuning and
         # recoverable OOMs are therefore impossible without moving the hash.
@@ -422,13 +434,14 @@ def build_protocol_descriptors(
         # content-addressed boundary over the executing Python/environment
         # files. It cannot be confused with descriptors that relied only on
         # manually maintained schema tags.
-        "protocol_version": 6,
+        "protocol_version": 7,
         "code": {
             # Code-version markers: the driver/loader schema tag, the generator
             # schema the loader requires, and the cache contract tag. Bumping any
             # of them (r7 -> r8) changes every downstream name, as intended.
             "schema_tag":          schema_tag,
             "expected_gen_schema": _EXPECTED_GEN_SCHEMA,
+            "expected_channel_schema_id": _EXPECTED_CHANNEL_SCHEMA_ID,
             "cache_schema_tag":    CACHE_SCHEMA_TAG,
             "python_runtime_source_root_sha256": runtime_source.sha256,
             "python_runtime_source_file_count": runtime_source.file_count,

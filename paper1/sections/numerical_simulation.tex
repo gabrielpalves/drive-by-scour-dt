@@ -1,0 +1,354 @@
+\section{Numerical simulation}
+\label{sec:simulation}
+
+\subsection{Train--track--bridge interaction model}
+\label{sec:ttbi}
+
+Vehicle responses are generated with a two-dimensional, vertically coupled
+train--track--bridge interaction (TTBI) model implemented in MATLAB and derived
+from the TTB-2D/VEqMon2D framework of Cantero
+\cite{cantero_ttb2d, cantero2022veqmon}. The model couples (i) an
+Euler--Bernoulli multi-span deck on vertical support springs and abutment
+rotational springs; (ii) a discrete layered track containing rail, pads,
+sleepers, ballast, and sub-ballast; and (iii) five identical planar vehicles
+with car-body and two-bogie vertical/pitch degrees of freedom and four
+constrained unsprung wheelset masses. Vehicle properties follow the
+implemented intercity-train calibration attributed to O'Brien et
+al.~\cite{obrien2018vehicle}. Wheel--rail interaction is linear and bilateral.
+The directly coupled equations are integrated by average-acceleration
+Newmark-$\beta$ ($\gamma=1/2$, $\beta=1/4$) at 1~ms.
+
+\paragraph{Implementation provenance.}
+The generator is a modified derivative of the published TTB-2D v1 code line,
+based on archived upstream commit \texttt{28d35528} and redistributed under
+GPL-3.0. The damage mechanisms, campaign catalogues, serialization, and
+qualification gates described here are repository-local additions and must not
+be attributed to the upstream author. Likewise, the track-property file cites
+Zhai et al.~\cite{zhai2004track} and the vehicle file cites O'Brien et
+al.~\cite{obrien2018vehicle}; those citations establish the source files'
+provenance, not independent validation of every transferred value or topology.
+
+Two bridge geometries are used (Figure~\ref{fig:model}). \textbf{F40} has two
+20~m spans and one scour target at the internal support. \textbf{L99} has four
+24.9~m spans (99.6~m total) and targets at the three internal supports. The
+adopted $E$, $I$, mass per unit length, and 3\% bridge-damping target originate
+from the Fernandes two-span example; their use for L99 is an idealized
+geometry/scale stress, not calibration of a 99.6~m field bridge. Every state
+must pass the registered broad frequency gate and healthy states must reproduce
+the nominal healthy first frequency (approximately 4.13~Hz for F40 and
+2.75~Hz for L99) within the authorized acceptance bands.
+
+\begin{figure}[htbp]
+\centering
+\framebox[0.95\linewidth]{\rule{0pt}{4.2cm}\parbox{0.9\linewidth}{\centering
+\footnotesize Figure placeholder --- F40 and L99 decks on vertical support
+springs, simplified layered track, five-vehicle train, and eight
+\texttt{physical8\_v1} channels on the leading vehicle. Redraw from the
+authorized implementation.}}
+\caption{Two-dimensional TTBI model, bridge geometries, and candidate modeled
+response channels.}
+\label{fig:model}
+\end{figure}
+
+\subsubsection{Geometry-specific support-aligned meshes}
+\label{sec:mesh}
+
+The production meshes are not universally 0.30~m. F40 uses a 0.20~m deck mesh
+(three elements per 0.60~m sleeper bay) and a 0.30~m rail mesh (two per bay), so
+the internal support is exactly a deck node at 20.0~m. This is a
+support-alignment correction to the Fernandes-derived 0.30~m benchmark density:
+0.30~m does not divide 20 or 40~m. L99 uses 0.30~m for both deck and rail,
+which places all 24.9~m-spaced supports on nodes. Positive support springs are
+required to coincide with nodes to roundoff tolerance; they are never snapped
+to a nearby grid location.
+
+Production Rayleigh coefficients are recomputed from the first two elastic
+modes of each realized bridge state. Mesh-refinement studies independently
+recompute the modal references and coefficients on every grid and save the
+resulting $\alpha$, $\beta$, and reference modes. A fixed-coefficient arm using
+the healthy reference is a sensitivity, not the production closure. Because
+the rail-damping matrix uses the corresponding bridge frequencies as its
+references, a structural-stiffness intervention in production changes both the
+assembled $K$ and Rayleigh-dependent $C$ matrices; it is not evidence that
+physical damage itself changes damping.
+
+\subsubsection{Finite rail-domain selection}
+\label{sec:rail_clearance}
+
+The finite rail domain was selected by the source-locked 18-case matrix recorded
+in \nolinkurl{docs/evidence/paper1_model_form_freeze_20260809.json}. The
+production decision identifier is
+\nolinkurl{paper1-rail-domain-clearance-c06-v1}.
+For each of F40 and L99, the matrix crossed three operating points
+$(70~\mathrm{km/h},3\,^{\circ}\mathrm{C})$,
+$(80~\mathrm{km/h},18\,^{\circ}\mathrm{C})$, and
+$(90~\mathrm{km/h},33\,^{\circ}\mathrm{C})$ with 6, 15, and 30~m clearances.
+All 18 cases completed. Both registered comparison tiers --- C06 versus C30
+and C15 versus C30 --- passed, so the rule selected 6~m for production. The
+verdict is bound to generator source-root SHA-256
+\nolinkurl{aa187204cb3f89e24cb8bc894034044bad38b0358f5e0cd586338f84a8418efb}.
+Its authorized claim is strictly finite-rail-domain selection for this
+source-locked case matrix; it is not general mesh/time-step convergence,
+damage-model validation, or physical/field validation.
+
+\subsubsection{Track-property and topology boundary}
+\label{sec:track_boundary}
+
+The implemented nominal track is an inherited hybrid planar convention, not a
+blanket sum of all Zhai quantities into two rails. Zhai et
+al.~\cite{zhai2004track} report their Table~1 quantities per rail seat at
+0.545~m spacing. The implementation doubles rail inertia and rail mass and uses
+a full sleeper mass, but retains the tabulated pad, ballast, and sub-ballast
+terms at one-seat values. It then places those values on a 0.600~m sleeper
+lattice without re-evaluating the spacing-dependent $M_b$, $K_b$, and $K_f$
+expressions. The production baseline is therefore neither a demonstrated
+one-seat line model nor a consistently doubled two-rail equivalent.
+
+The topology is also simplified relative to Zhai: adjacent-ballast shear
+couplings $K_w,C_w$ are omitted, and the complete retained ballast mass is
+condensed onto the support-aligned deck degree of freedom at every on-bridge
+sleeper. This is an explicit inherited model-form choice. The topology arm was
+dropped because it would require new solver structure and is not examined in
+this paper.
+
+Three parameter-level sensitivity families are prospectively fixed against the
+hybrid baseline: (i) consistent one-seat and consistent two-rail scaling;
+(ii) recomputation of $M_b$, $K_b$, and $K_f$ at 0.600~m from Zhai's equations;
+and (iii) 0.050\% and 0.200\% rail-damping targets around the inherited 0.100\%
+target. The 0.100\% target is author-chosen and is not reported by Zhai.
+Sensitivity outcomes qualify interpretation but do not silently redefine the
+production model after its source freeze.
+
+\begin{table}[htbp]
+\centering
+\caption{Nominal physical and numerical parameters read from the implemented
+baseline. Track entries preserve the hybrid scaling and topology described in
+Section~\ref{sec:track_boundary}; they must not be labeled uniformly
+``two-rail Zhai values''.}
+\label{tab:parameters}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llll}
+\toprule
+Subsystem & Parameter & Value & Units \\
+\midrule
+\multirow{8}{*}{Bridge}
+ & spans (F40 / L99) & $2\times20$ / $4\times24.9$ & m \\
+ & Young's modulus $E$ at 15\,$^{\circ}$C & $35\times10^{9}$ & N/m$^2$ \\
+ & second moment of area $I$ & 0.33 & m$^4$ \\
+ & mass per unit length & 9600 & kg/m \\
+ & Rayleigh target, first two elastic modes & 3 & \% \\
+ & healthy vertical support stiffness $k_{v,0}$ & $3.44\times10^{8}$ & N/m \\
+ & free-rotation abutment baseline & 0 & N$\cdot$m/rad \\
+ & healthy first frequency (F40 / L99) & $\approx4.13$ / $\approx2.75$ & Hz \\
+\midrule
+\multirow{8}{*}{Track}
+ & rail bending stiffness $EI$ & $1.325\times10^{7}$ & N$\cdot$m$^2$ \\
+ & rail mass (doubled-rail entry) & 121.28 & kg/m \\
+ & rail Rayleigh target (inherited) & 0.100 & \% \\
+ & pad stiffness / damping (one-seat entry) & $6.5\times10^{7}$ / $7.5\times10^{4}$ & N/m, N$\cdot$s/m \\
+ & sleeper spacing / full mass & 0.600 / 251 & m, kg \\
+ & ballast mass / stiffness / damping (one-seat entries) & 531.4 / $1.3775\times10^{8}$ / $5.88\times10^{4}$ & kg, N/m, N$\cdot$s/m \\
+ & sub-ballast stiffness / damping (one-seat entries) & $7.75\times10^{7}$ / $3.115\times10^{4}$ & N/m, N$\cdot$s/m \\
+ & finite rail clearance beyond deck & 6 & m \\
+\midrule
+\multirow{7}{*}{Vehicle ($\times5$)}
+ & car-body mass / pitch inertia & 36852 / 560342 & kg, kg$\cdot$m$^2$ \\
+ & bogie mass / pitch inertia & 3910 / 10024 & kg, kg$\cdot$m$^2$ \\
+ & wheelset mass & 1407 & kg \\
+ & primary suspension stiffness / damping per axle & $5.558\times10^{6}$ / $5.88\times10^{4}$ & N/m, N$\cdot$s/m \\
+ & secondary suspension stiffness / damping per bogie & $2.0\times10^{6}$ / $1.2\times10^{5}$ & N/m, N$\cdot$s/m \\
+ & bogie-centre / axle spacing & 16 / 2.3 & m \\
+ & vehicle length / wheel radius & 22 / 0.46 & m \\
+\midrule
+\multirow{4}{*}{Solver}
+ & integration & Newmark-$\beta$ ($\gamma=1/2$, $\beta=1/4$) & --- \\
+ & time step / stored rate & $10^{-3}$ / 1000 & s, Hz \\
+ & deck element (F40 / L99) & 0.20 / 0.30 & m \\
+ & rail element (F40 / L99) & 0.30 / 0.30 & m \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\subsection{Response-channel schema}
+\label{sec:response_channels}
+
+The leading vehicle supplies the eight candidates in
+Table~\ref{tab:channels}, identified collectively as
+\texttt{physical8\_v1}. Six are direct responses of modeled car-body/bogie
+degrees of freedom. The other two are the total vertical accelerations implied
+by the constrained motion of the first two wheelsets,
+\begin{equation}
+  \ddot z_w = u_{,tt} + 2v\,u_{,xt} + v^2 u_{,xx} + \ddot h_w,
+  \label{eq:wheelset_proxy}
+\end{equation}
+where $u$ is the rail displacement field evaluated along the moving contact
+coordinate, $v$ is passage speed, and $h_w$ is the prescribed profile/wheel
+path. These two rows are idealized, model-predicted
+\emph{constrained-wheelset acceleration proxies}. They are not independent
+wheelset degrees of freedom, not the Eulerian rail-field acceleration
+$u_{,tt}$ alone, and not validated measurements from axle-box sensors.
+The separate stored \texttt{acc\_under} rows remain virtual rail-field
+diagnostics and never enter the eight-channel screen.
+
+\begin{table}[htbp]
+\centering
+\caption{Candidate \texttt{physical8\_v1} responses of the leading vehicle.}
+\label{tab:channels}
+\small
+\begin{tabular}{cll}
+\toprule
+Index & Response channel & Observation status \\
+\midrule
+0 & car-body vertical acceleration & modeled secondary-suspended DOF \\
+1 & front-bogie vertical acceleration & modeled primary-suspended DOF \\
+2 & rear-bogie vertical acceleration & modeled primary-suspended DOF \\
+3 & wheelset-1 constrained vertical acceleration & idealized total-motion proxy \\
+4 & wheelset-2 constrained vertical acceleration & idealized total-motion proxy \\
+5 & car-body pitch angular velocity & modeled secondary-suspended DOF \\
+6 & front-bogie pitch angular velocity & modeled primary-suspended DOF \\
+7 & rear-bogie pitch angular velocity & modeled primary-suspended DOF \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The proxy label is deliberate. Equation~\eqref{eq:wheelset_proxy} omits a
+hardware observation chain, local axle-box mounting dynamics, sensor bandwidth
+and filtering, and contact nonlinearity. Accordingly, the channel screen ranks
+modeled responses and does not determine a transducer count or procurement
+choice.
+
+\subsubsection{Contact-model scope and qualification}
+\label{sec:contact}
+
+The bilateral linear contact model does not simulate separation and re-contact.
+Wheel flats and polygonization are disabled in all four Paper-1 blocks. Every
+retained passage nevertheless carries finite/contact diagnostics and fails
+generation if it violates the registered admissibility contract. Before
+dispatch, the contact-closure study evaluates all 420 passages of the four
+marked qualification datasets at 1.0, 0.5, and 0.25~ms, applies the registered
+0/12/24~kN tension gates and 0.002 path-fraction gate, and checks waveform and
+quantity-of-interest convergence. This is an engineering consistency gate for
+the finite design, not validation of bilateral contact physics.
+
+\subsection{Active bridge mechanisms}
+\label{sec:mechanisms}
+
+\subsubsection{Scour as support-stiffness loss}
+\label{sec:scour_mech}
+
+At each target support, scour is represented as
+\begin{equation}
+  k_v(d)=(1-d)k_{v,0}, \qquad 0\le d\le0.60,
+  \label{eq:scour}
+\end{equation}
+with $k_{v,0}=3.44\times10^8$~N/m. The regression label is $100d$,
+modeled support-stiffness loss in percentage points. This follows the
+drive-by-scour convention~\cite{fernandes2024driveby,
+fernandes2025early, prendergast2013investigation}, but is not scour depth,
+embedment loss, or eroded volume.
+
+\subsubsection{Nominal bearing fixity}
+\label{sec:bearing_mech}
+
+F40-M and L99-M activate a rotational spring at each abutment. The sampled
+geometry-normalized coordinate is
+\begin{equation}
+ \varphi=\frac{k_r}{k_r+4E_{15}I/L_{\mathrm{end}}}
+ \quad\Longleftrightarrow\quad
+ k_r=\frac{\varphi}{1-\varphi}\frac{4E_{15}I}{L_{\mathrm{end}}},
+ \qquad \varphi\in[0,0.95].
+ \label{eq:fixity}
+\end{equation}
+The stiffness is computed once using the fixed 15\,$^{\circ}$C modulus and
+remains constant while the deck modulus varies between passages. The two
+fixity coordinates are additional M-block regression targets. They are nominal
+free-to-near-fixed design variables, not calibrated bearing-damage percentages
+or physical seizure thresholds.
+
+\subsubsection{Local flexural-rigidity-loss surrogate}
+\label{sec:crack_mech}
+
+F40-M and L99-M reduce $EI$ uniformly over the single production finite element
+containing the sampled damage location, with author-chosen severity
+$\mathcal{U}(0.05,0.30)$. Locations use an author-chosen 4:1 design weighting
+toward hogging regions inside the registered support-zone and bridge-length
+bounds. No fitting dataset supports those occurrence or severity laws. The
+damaged length is consequently one mesh-locked element --- 0.20~m on F40 and
+0.30~m on L99 --- rather than a common physical crack length. This is a local
+damaged-element benchmark, not the tapered crack-depth model of Sinha et
+al.~\cite{sinha2002simplified}; its severity is never interpreted as crack
+depth. Crack status is logged but not predicted.
+
+\subsection{Fixed profile, operational variability, and deferred mechanisms}
+\label{sec:opvar}
+
+Every state and passage in all four blocks uses one generated realization of
+the implemented FRA-class-4 vertical-profile spectrum (registered phase seed
+20260728). No measured profile, per-state phase variation, or per-passage
+profile jitter is used. The fixed choice enables exact paired comparisons but
+removes profile variability from the production EOV distribution.
+
+Operational conditions do vary. Each state's 50 passages use a Latin
+hypercube over speed 70--90~km/h and temperature 3--33~$^{\circ}$C, rounded to
+integer values. Temperature changes the deck modulus through the registered
+author-chosen law
+\[
+ E(T)=E_{15}\,[1-0.003(T-15)].
+\]
+For each passage and vehicle, car-body mass has a 10\% Gaussian coefficient of
+variation and primary/secondary suspension stiffnesses each have 5\%. These
+envelopes and laws were not fitted to a route, climate, or fleet population.
+
+Track-layer damage (ballast patches, hanging sleepers, and pad failure), wheel
+polygonization, suspension damage, and alternative rail-profile phases are
+disabled by all four stage contracts. The corresponding code remains in the
+single source tree for future work; it contributes no expressed physics or
+random variability to Paper~1.
+
+\subsection{State catalogues and common random numbers}
+\label{sec:states}
+
+Table~\ref{tab:families} gives the exact state inventories. F40-S is a dense
+61-severity grid (0--60\% in one-percentage-point increments) with five
+semantic replicas per severity. F40-M uses five controlled families. Its five
+healthy replicas and five replicas at each of 12, 24, 36, 48, and 60\% scour
+form the exact 30-state subset shared with F40-S. L99-S and L99-M share their
+complete five-family, 475-state latent design; bearing/crack coordinates are
+dormant in L99-S rather than being removed or redrawn.
+
+\begin{table}[htbp]
+\centering
+\caption{Registered state families. Every state has 50 operational passages.}
+\label{tab:families}
+\small
+\begin{tabular}{lrrrp{5.0cm}}
+\toprule
+Family & F40-S & F40-M & L99-S/M & Role \\
+\midrule
+\texttt{target\_healthy} & 5 & 50 & 50 & zero-scour diagnostic \\
+\texttt{scour\_only} & 300 & 25 & 75 & controlled support/severity anchors \\
+\texttt{bearing\_only} & 0 & 50 & 50 & bearing/leakage anchors; dormant in L99-S \\
+\texttt{nuisance\_only} & 0 & 50 & 50 & local-$EI$ anchors; dormant in L99-S \\
+\texttt{joint} & 0 & 250 & 250 & multivariate latent design \\
+\midrule
+Total & 305 & 425 & 475 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Each state has a collision-checked semantic \texttt{StateUID}. Named substreams
+derive operational, crack, profile, track, and passage identities from that UID
+rather than a mutable row number or parallel-execution order. Only streams for
+expressed Paper-1 mechanisms influence the solve; disabled track/wheel
+namespaces remain inert. States are the split and resampling clusters, and
+their 50 passages are correlated repeated observations, not independent field
+samples.
+
+The generator stores raw noise-free histories, semantic identities, latent
+design coordinates, operational draws, profile and model-form identifiers,
+modal/Rayleigh records, contact diagnostics, crop metadata, and source-bound
+fingerprints. Observation noise is added only by the authenticated learning
+pipeline (Section~\ref{sec:preprocessing}).

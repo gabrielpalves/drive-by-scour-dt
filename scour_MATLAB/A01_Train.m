@@ -1,8 +1,9 @@
 function Train = A01_Train(velocidade, x)
 % Definitions for Train
 
-% Not a function.
-% Defines the content of the variable Train.
+% A FUNCTION (converted from the upstream TTB-2D script): returns the fully
+% populated Train struct for one passage. Takes the passage speed and the
+% per-vehicle property draw so the caller, not this file, owns the sampling.
 
 % *************************************************************************
 % *** Script part of TTB-2D tool for Matlab environment.                ***

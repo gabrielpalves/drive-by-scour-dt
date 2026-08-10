@@ -4,6 +4,13 @@
 > branched/blockwise design in `README_CAMPAIGN.md` and
 > `docs/framework_rationale.md`. Rates, Monte Carlo claims, “all damage” wording
 > and per-passage semantics below are historical and are not citable evidence.
+> Concretely, production has no GRF track field, samples persistent track
+> conditions per state, uses independent pad failures with `p=0.02` and no run
+> cap, represents the pad multiplier as a state-global service-condition stress
+> scalar (not temporal aging), and disables wheel flats because the bilateral contact solver cannot
+> represent separation/re-contact. The pad Weibull and polygonization triplet
+> are author-chosen priors. Also, a 1 kHz solve cannot resolve the 800–1200 Hz
+> pinned-pinned resonance or support the historical 300–3000 Hz claim below.
 
 Decided 2026-07-09 (user). Purpose: a CURIOSITY/ROBUSTNESS arm for the ablation paper —
 train the champion with the most complete damage/EOV set the TTB-2D formulation supports
@@ -28,7 +35,8 @@ Stage 3 is kept in the ablation paper only if the results earn it.
   3. **hanging sleepers** — linearized (ballast k → ~0 under affected sleepers); groups
      of Discrete-Uniform 1–5 consecutive sleepers, 1–3 groups/100 m, location density
      SPIKED within 15 m of bridge transitions (cited) → interacts with bearing heads;
-  4. **rail pads** — aging χ_pad∈[1.0,3.5] Weibull(1.8,2.2), β_pad∈[0.8,1.2], failures
+  4. **rail pads** — historically specified service-condition scalar χ_pad∈[1.0,3.5]
+     Weibull(1.8,2.2), β_pad∈[0.8,1.2], failures
      P=0.005/pad (≈1-yr snapshot assumption), max 3 consecutive. **Designed NEGATIVE
      CONTROL**: pad content is 300–3000 Hz — above the sprung-channel cutoff (~30 Hz)
      AND above the PAA-512 Nyquist (~85–110 Hz @ 70–90 km/h) → predicted effect ≈ 0;
@@ -57,7 +65,7 @@ Stage 3 is kept in the ablation paper only if the results earn it.
 - **Logging:** per-passage draws → `track_log` (per-damage params) + `oor_log`, saved in
   each NNNN.mat like crack_log/profile_log. Nuisances, NOT labels.
 
-## PAA band analysis + pre-registered contingency
+## PAA band analysis + prospectively source-locked contingency
 PAA-512 spatial segments: Stage-0/1 window 58.31 m → 0.114 m/seg → Nyquist ≈4.4 cyc/m
 ≈ 85–110 Hz temporal (70–90 km/h). Scour/bearing (1–15 Hz), confounder band (0.5–30 Hz),
 wheel-flat fundamental (~7.7 Hz), sleeper-dip wavelengths (0.6–3 m) ALL survive; only
@@ -96,14 +104,16 @@ flat-carrying wheel 272×, its bogie 5×, sprung champion channels CarBody_V 2.9
 RearBog_V 17.9% / CarBody_P 1.0% (in-band, attenuated). NOTE: the solver reported
 momentary wheel–rail CONTACT LOSS on the flat — physical for flat impacts (B66
 handles it), but monitor for large flats; cap flat length if solves get noisy.
-MATLAB twin `scour_MATLAB/smoke_stage3.m` pending a run on the user's local MATLAB
-(expected: same parity + pattern).
+The MATLAB twin `scour_MATLAB/smoke_stage3.m` subsequently passed on the local
+R2025b installation. That historical run is implementation evidence, not
+commit-A qualification; the smoke must be rerun on the converged source before
+dispatch.
 
 ## Build order (each step smoke-tested + MATLAB↔Python parity-checked)
 1. Per-sleeper track-property vectors (pad k/c, ballast k/c) threaded through
    B51_RailVariables + B54_ModelMatrices (MATLAB) — THE main cost; currently scalars.
 2. Python mirrors (b51/b54) + parity smoke (healthy: byte-identical to scalar path).
-3. Sampling layer in A00 (patches/GRF, sleeper groups w/ transition spike, pad aging/
+3. Sampling layer in A00 (patches/GRF, sleeper groups w/ transition spike, pad condition/
    failures) + numeric knobs in the preset; logging.
 4. Wheel flat in B25 (MATLAB) + b25 (Python) + parity smoke.
 5. `stage3_alldamage` preset (A00) + ablation STAGE entry (dataset name per case_name

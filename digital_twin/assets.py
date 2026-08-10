@@ -3,14 +3,13 @@ digital_twin/assets.py
 ======================
 The three asset classes that make up the digital twin framework:
 
-    ScourModel    — stochastic degradation model for the physical bridge.
-                    Implements the Kamariotis et al. (2024) gradual scour law.
+    ScourModel    — stochastic support-stiffness-loss scenario model.
 
     PhysicalAsset — wrapper around ScourModel that drives the physics engine
                     and tracks the true continuous damage state.
 
     DigitalAsset  — loads the offline-trained classifier and performs the
-                    full online inference pipeline: DOF selection →
+                    full online inference pipeline: channel selection →
                     preprocessing → scaling → prediction.
 
 Bug fixes relative to the original drive_by_DT.py
@@ -28,9 +27,10 @@ Bug fixes relative to the original drive_by_DT.py
    CWT) consistently with the ablation training pipeline.
 
 4. DigitalAsset received raw_signal of shape (8, L) but passed it to the
-   scaler as a flat 1-D vector, which breaks for multi-DOF models.
-   Fixed: the active DOFs are selected first, then transform() is called
-   with the correct (1, n_dofs, L) shape.
+   scaler as a flat 1-D vector, which breaks for multi-channel models.
+   Fixed: the active channel indices (legacy metadata key ``active_dofs``) are
+   selected first, then transform() is called with the correct
+   (1, n_channels, L) shape.
 
 Imported by:
     drive_by_DT.py — all three classes
@@ -42,7 +42,7 @@ import torch
 from core.artifact_provenance import verify_standalone_dt_package
 from core.models        import build_model
 from core.preprocessing import TTBIPreprocessor
-from core.utils         import IDX_TO_DOF_NAME
+from core.utils         import dof_label
 from digital_twin.physics import run_single_passage
 
 
@@ -60,33 +60,39 @@ _DEFAULT_MONITORING_INTERVAL = 1.0
 
 class ScourModel:
     """
-    Gradual scour degradation following Kamariotis et al. (2024).
+    Gradual support-stiffness-loss scenario with an optional flood shock.
 
     State variable X(t) evolves as a power-law process with log-normal
     amplitude A and normally-distributed exponent B, both sampled fresh
     after each repair.  A multiplicative noise term omega_k is drawn at
     every time step to capture inter-annual variability.
 
-    The continuous state X(t) is mapped to the [0, 60] damage-% scale
-    used by the classifier via get_current_damage_case().
+    The continuous state X(t) is mapped to the [0, 60] percentage-point design
+    scale used by the estimator via get_current_damage_case(). It is a modeled
+    loss of vertical foundation-support stiffness, not scour depth. The flood
+    rate and jump parameters below are author-chosen placeholders pending
+    primary-source or site-specific calibration; this class must not be
+    described as a validated deterioration law.
 
     The model is intentionally self-contained: it carries no reference to
     the classifier, the DBN, or any plotting utility.
     """
 
-    DAMAGE_MAX: float = 60.0   # physical cap on scour damage (%)
+    DAMAGE_MAX: float = 60.0   # campaign design ceiling, not a physical limit
 
-    # ── Stochastic parameter distributions (Kamariotis et al. 2024) ──────────
-    # GRADUAL part (Eq. 17, first term): power-law rate A·t^B with process noise.
+    # Generic structural-deterioration prior from Kamariotis et al. (2023),
+    # Table 1. These A/B/omega values reproduce that paper's illustrative
+    # prior; they were not fitted to hydraulic scour or support-stiffness loss.
+    # The central-difference update below follows its Eqs. (17) and (19).
     _A_MEAN: float = 1.94e-4;  _A_COV: float  = 0.40
     _B_MEAN: float = 2.0;      _B_COV: float  = 0.10
     _OMEGA_MEAN: float = -0.005; _OMEGA_COV: float = 0.10
 
-    # SHOCK part (Eq. 17, second term): homogeneous Compound Poisson Process —
-    # flood arrivals ~ Poisson(rate λ); each flood adds an i.i.d. lognormal scour
-    # jump [%]. These are environmental (site/river) properties, NOT resampled on
-    # repair. NOTE: defaults are reasonable placeholders — set to Kamariotis 2024
-    # Table 1 once read off the paper (the table did not OCR cleanly here).
+    # SHOCK family: homogeneous Compound Poisson Process, as in Kamariotis
+    # Eq. (17). The numerical values below are deliberately project placeholders,
+    # not that paper's Table 1 values (lambda=0.04/year, jump mean=3.75,
+    # jump COV=0.25) and not a fitted flood/scour model. They are environmental
+    # scenario properties and are therefore not resampled on repair.
     _LAMBDA_FLOOD: float = 0.10   # flood occurrence rate [events/year]
     _JUMP_MEAN:    float = 5.0    # mean scour increment per flood [%]
     _JUMP_COV:     float = 0.60   # COV of the jump magnitude
@@ -115,7 +121,7 @@ class ScourModel:
         Returns:
             float: Current damage in [0, DAMAGE_MAX] %.
         """
-        # ── Gradual deterioration (Kamariotis Eq. 17, first term) ──────────────
+        # ── Generic gradual-process discretization (Kamariotis Eqs. 17, 19) ──
         t_mid          = self.time + delta_t / 2.0
         gradual_rate   = self._A * self._B * (t_mid ** (self._B - 1.0))
 
@@ -226,8 +232,8 @@ class PhysicalAsset:
 
     def get_observation_signal(self) -> np.ndarray:
         """
-        Run a single TTBI passage at the current damage state and return
-        all eight DOF signals.
+        Run a single TTBI passage at the current damage state and return all
+        eight response channels (six vehicle, two virtual moving-rail).
 
         Variability sources (speed, temperature, vehicle properties) are
         sampled fresh on every call to reflect real-world measurement noise.
@@ -235,7 +241,9 @@ class PhysicalAsset:
         Returns:
             np.ndarray: float32, shape (8, sequence_length).
         """
-        damage_decimal  = self.state_continuous / 100.0
+        # state_continuous is stored in percentage points. TTBI consumes the
+        # dimensionless loss fraction d in k_v=(1-d)k_v0, so convert exactly once.
+        scour_rate      = self.state_continuous / 100.0
         temp            = np.random.uniform(3.0, 33.0)
         speed           = np.random.uniform(70.0, 90.0)
         veh_props       = np.random.randn(self.config.n_veh, self.config.n_prop)
@@ -246,7 +254,7 @@ class PhysicalAsset:
         )
 
         return run_single_passage(
-            damage_percent=damage_decimal,
+            damage_percent=scour_rate,
             speed_kmh=speed,
             temp_celsius=temp,
             add_signal_noise=True,
@@ -370,21 +378,22 @@ class DigitalAsset:
 
         print(
             f"DigitalAsset ready | method={method} | "
-            f"DOFs={[IDX_TO_DOF_NAME[d] for d in self.active_dofs]}"
+            f"channels={[dof_label(d) for d in self.active_dofs]}"
         )
 
     # ── Public interface ──────────────────────────────────────────────────────
 
     def estimate_state(self, raw_signal: np.ndarray) -> int:
         """
-        Preprocess a raw 8-DOF sensor observation and return a predicted
+        Preprocess a raw eight-channel simulated response and return a predicted
         damage class label.
 
         Args:
             raw_signal (np.ndarray): float32, shape (8, sequence_length).
-                                     All eight DOFs as returned by
-                                     run_single_passage; DOF selection is
-                                     applied internally.
+                                     All eight response channels returned by
+                                     run_single_passage; channel selection is
+                                     applied internally. Channels 3/4 are
+                                     virtual moving-rail samples, not sensors.
 
         Returns:
             int: Predicted damage label in [0, n_classes − 1].

@@ -1,0 +1,39 @@
+function validate_state_metadata(data, state_index, file_name, context)
+%VALIDATE_STATE_METADATA Authenticate EOV logs, operations, and deck frequency.
+
+expected = ttbi.expected_state_metadata(state_index, context);
+metadata_fields = { ...
+    'Dano', 'Temperatura', 'Velocidade', 'VehiclesProps', ...
+    'crack_log', 'profile_mode', 'profile_log', 'track_log', 'oor_log'};
+for field_index = 1:numel(metadata_fields)
+    field_name = metadata_fields{field_index};
+    if ~isequaln(data.(field_name), expected.(field_name))
+        error('ttbi:ResumePayloadMetadata', ...
+            ['A00 RESUME ABORTED: state %d file "%s" field %s does not ' ...
+             'reproduce its semantic state and named RNG streams.'], ...
+            state_index, file_name, field_name);
+    end
+end
+
+beam_f1 = data.beam_f1_Hz;
+if ~isa(beam_f1, 'double') || ~isreal(beam_f1) || ~isscalar(beam_f1) || ...
+        ~isfinite(beam_f1) || beam_f1 < 0.2 || beam_f1 > 15
+    error('ttbi:ResumePayloadFrequency', ...
+        ['A00 RESUME ABORTED: state %d file "%s" has an invalid first ' ...
+         'deck frequency.'], state_index, file_name);
+end
+if strcmp(context.state.StateFamily{state_index}, 'target_healthy')
+    if context.model.L_bridge < 80
+        healthy_bounds = [3, 6];
+    else
+        healthy_bounds = [2, 4];
+    end
+    if beam_f1 < healthy_bounds(1) || beam_f1 > healthy_bounds(2)
+        error('ttbi:ResumePayloadHealthyFrequency', ...
+            ['A00 RESUME ABORTED: healthy state %d file "%s" has deck ' ...
+             'f1 %.6g Hz outside [%g,%g] Hz.'], ...
+            state_index, file_name, beam_f1, ...
+            healthy_bounds(1), healthy_bounds(2));
+    end
+end
+end

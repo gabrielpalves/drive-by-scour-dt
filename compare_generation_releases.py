@@ -4,10 +4,23 @@ This program authenticates two deliberately reduced MATLAB runs against the
 *current repository policy* and then compares their canonical scientific
 payloads.  The policy is never inferred from either input directory.
 
-Each input must also carry a self-authenticating qualification-only host
-diagnostic receipt. Equal MATLAB-environment digests are allowed only when the
-receipts name independently identified hosts; host/CPU identity never enters
-the production generation schema and hardware equality is not required.
+Each input must also carry a qualification-only host diagnostic receipt whose
+fields are bound by a SHA-256 over their own canonical descriptor. Equal
+MATLAB-environment digests are allowed only when the receipts DECLARE distinct
+host IDs; host/CPU identity never enters the production generation schema and
+hardware equality is not required.
+
+Host-evidence threat model. Those receipts are SELF-ATTESTED: a run reports its
+own hostname, CPU string and thread diagnostics, and the digest covers only that
+self-report. No pre-registered signing key, hardware attestation, or independent
+witness exists, so declaring distinct host IDs is a consistency requirement, not
+evidence that two independent physical machines ran MATLAB. What this program
+does establish is that both retained datasets are complete, internally
+consistent, carry the reviewed source identity, currently satisfy the complete
+retained-artifact contract, and are semantically equal (or equal within the
+reviewed tolerance). It does not prove execution origin or a historical
+creation event.
+Everything about physical origin rests on a trusted operator.
 
 ``SEMANTICALLY-BIT-IDENTICAL`` means that every compared canonical value is
 exactly equal after excluding only the explicitly named executable-environment
@@ -29,16 +42,90 @@ Exit status
 """
 from __future__ import annotations
 
+import os as _bootstrap_os
+import sys as _bootstrap_sys
+for _unsafe_python_path_variable in ("PYTHONPATH", "PYTHONHOME"):
+    if _unsafe_python_path_variable in _bootstrap_os.environ:
+        raise RuntimeError(
+            f"{_unsafe_python_path_variable} must be absent before evidence "
+            "imports"
+        )
+_bootstrap_source_root = _bootstrap_os.path.abspath(
+    _bootstrap_os.path.dirname(__file__)
+)
+_bootstrap_first_path = _bootstrap_sys.path[0] or _bootstrap_os.getcwd()
+if (
+    _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
+        _bootstrap_first_path
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_first_path
+    ))
+    or _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_first_path
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_source_root
+    ))
+):
+    raise RuntimeError(
+        "reviewed repository root must be the canonical first import path"
+    )
+_bootstrap_guard_dir = _bootstrap_os.path.join(
+    _bootstrap_source_root, "campaign_import_guard"
+)
+_bootstrap_guard_init = _bootstrap_os.path.join(
+    _bootstrap_guard_dir, "__init__.py"
+)
+if (
+    not _bootstrap_os.path.isfile(_bootstrap_guard_init)
+    or _bootstrap_os.path.islink(_bootstrap_guard_init)
+    or _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
+        _bootstrap_guard_dir
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_guard_dir
+    ))
+    or any(
+        entry.casefold().startswith("__init__.")
+        and entry != "__init__.py"
+        for entry in _bootstrap_os.listdir(_bootstrap_guard_dir)
+    )
+):
+    raise RuntimeError(
+        "reviewed campaign import guard package is absent or ambiguous"
+    )
+_bootstrap_loaded_guard = _bootstrap_sys.modules.get("campaign_import_guard")
+if _bootstrap_loaded_guard is not None and (
+    _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        getattr(_bootstrap_loaded_guard, "__file__", "")
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_guard_init
+    ))
+    or getattr(_bootstrap_loaded_guard, "_BOUNDARY_ENFORCED", False) is not True
+):
+    raise RuntimeError(
+        "preloaded campaign import guard is not the reviewed enforced module"
+    )
+from campaign_import_guard import (  # noqa: E402
+    enforce_import_boundary as _enforce_import_boundary,
+)
+_enforce_import_boundary()
+
 import argparse
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
+import io
 import json
 import math
+import os
 from pathlib import Path
 import platform
 import re
 import sys
+import stat
 from typing import Any
 
 import numpy as np
@@ -46,6 +133,7 @@ import scipy
 from scipy.io import loadmat
 
 from core.campaign_contract import (
+    EXPECTED_CHANNEL_SCHEMA_ID,
     EXPECTED_GENERATION_BEHAVIOR_VERSION,
     EXPECTED_GEN_SCHEMA,
     STAGE_ORDER,
@@ -53,12 +141,22 @@ from core.campaign_contract import (
     generation_config_expectations,
 )
 from core.environment import (
-    load_environment_lock,
+    load_environment_lock_bytes,
     matlab_environment_descriptor,
 )
+from core.generation_state_contract import (
+    STATE_DATA_FIELDS,
+    STATE_TOP_LEVEL_FIELDS,
+    require_canonical_state_names,
+    require_damage_table_shapes,
+    require_exact_fields,
+    validate_bearing_fixity,
+    validate_contact_log,
+    validate_raw_metadata,
+)
 from core.source_provenance import (
-    generator_source_root,
-    python_runtime_source_root,
+    RepositorySourceSnapshot,
+    repository_source_snapshot,
 )
 
 
@@ -78,26 +176,31 @@ _STATE_STREAM_NAMES = (
     "profile-phase",
 )
 _PASSAGE_STREAM_NAMES = ("profile-passage", "oor-passage")
-_QUALIFICATION_HOST_FIELDS = frozenset(
-    {
-        "schema",
-        "declared_host_id",
-        "hostname",
-        "cpu_identifier",
-        "logical_processors",
-        "matlab_max_threads",
-        "computer_arch",
-        "actual_matlab_environment_sha256",
-        "qualification_source_sha256",
-        "qualification_executed_file_sha256",
-        "canonical_descriptor",
-        "host_diagnostic_sha256",
-    }
+_QUALIFICATION_HOST_FIELD_ORDER = (
+    "schema",
+    "declared_host_id",
+    "hostname",
+    "cpu_identifier",
+    "logical_processors",
+    "matlab_max_threads",
+    "computer_arch",
+    "actual_matlab_environment_sha256",
+    "qualification_source_sha256",
+    "qualification_executed_file_sha256",
+    "canonical_descriptor",
+    "host_diagnostic_sha256",
 )
-_REQUIRED_SIGNALS = ("AcelPrimVag", "AcelRodaPrimVag", "PitchPrimVag")
+_QUALIFICATION_HOST_FIELDS = frozenset(_QUALIFICATION_HOST_FIELD_ORDER)
+_REQUIRED_SIGNALS = (
+    "AcelPrimVag",
+    "AcelRodaPrimVag",
+    "AcelWheelsetPrimVag",
+    "PitchPrimVag",
+)
 _SIGNAL_ROWS = {
     "AcelPrimVag": 3,
     "AcelRodaPrimVag": 4,
+    "AcelWheelsetPrimVag": 4,
     "PitchPrimVag": 3,
 }
 _REQUIRED_MANIFEST_FIELDS = frozenset(
@@ -107,6 +210,8 @@ _REQUIRED_MANIFEST_FIELDS = frozenset(
         "gen_fingerprint",
         "generation_config_json",
         "generation_behavior_version",
+        "channel_schema_id",
+        "state_design_kind",
         "matlab_release",
         "campaign_matlab_release",
         "actual_matlab_environment_descriptor",
@@ -141,76 +246,17 @@ _REQUIRED_MANIFEST_FIELDS = frozenset(
         "n_joint",
     }
 )
-_REQUIRED_DATA_FIELDS = frozenset(
-    {
-        *_REQUIRED_SIGNALS,
-        "DimAcel",
-        "DimSpace",
-        "crop_start",
-        "crop_end",
-        "bridge_samp",
-        "L_bridge_eff",
-        "scour_vector",
-        "scour_supports",
-        "Dano",
-        "state_family",
-        "state_uid",
-        "state_seed_id",
-        "latent_bearing_fixity",
-        "latent_crack_on",
-        "crack_on",
-        "beam_f1_Hz",
-        "bearing_vector",
-        "bearing_fixity",
-        "crack_log",
-        "profile_mode",
-        "profile_log",
-        "track_log",
-        "oor_log",
-        "contact_log",
-        "Temperatura",
-        "Velocidade",
-        "VehiclesProps",
-        "gen_schema",
-        "gen_fingerprint",
-        "matlab_release",
-        "campaign_matlab_release",
-        "actual_matlab_environment_descriptor",
-        "actual_matlab_environment_sha256",
-        "campaign_matlab_environment_descriptor",
-        "campaign_matlab_environment_sha256",
-        "generator_source_root_sha256",
-        "generator_source_digest_lines",
-        "generator_source_file_count",
-        "qualification_source_sha256",
-        "release_qualification_run",
-        "random_stream_schedule_version",
-        "state_named_stream_seed_id",
-    }
-)
-_REQUIRED_TOP_LEVEL_FIELDS = frozenset(
-    {
-        "data",
-        "file_gen_schema",
-        "file_gen_fingerprint",
-        "file_matlab_release",
-        "file_campaign_matlab_release",
-        "file_release_qualification_run",
-        "file_state_uid",
-        "file_state_seed_id",
-        "file_random_stream_schedule_version",
-        "file_actual_matlab_environment_sha256",
-        "file_campaign_matlab_environment_sha256",
-        "file_generator_source_root_sha256",
-        "file_qualification_source_sha256",
-    }
-)
+_REQUIRED_DATA_FIELDS = STATE_DATA_FIELDS
+_REQUIRED_TOP_LEVEL_FIELDS = STATE_TOP_LEVEL_FIELDS
 _DEFAULT_RTOL = 1e-10
 _DEFAULT_ATOL = 1e-12
 _STATE_FAMILIES = frozenset(
     {"target_healthy", "scour_only", "bearing_only", "nuisance_only", "joint"}
 )
-_MECHANISM_COVERAGE_STAGES = frozenset({"s16_all", "s23_all4"})
+# Track/OOR mechanisms are present in source but disabled in all four Paper-1
+# blocks. Qualification compares the active bridge/vehicle/profile solver; it
+# must not fabricate witnesses for deferred mechanisms.
+_MECHANISM_COVERAGE_STAGES = frozenset()
 _FAMILY_MANIFEST_FIELDS = {
     "target_healthy": "n_target_healthy",
     "scour_only": "n_scour_only",
@@ -312,10 +358,14 @@ class CurrentPolicy:
     generator_source_digest_lines: str
     generator_source_file_count: int
     gen_schema: str
+    channel_schema_id: str
     generation_behavior_version: str
     max_parfor_workers: int
     contact_force_tolerance_N: float
     contact_fraction_tolerance: float
+    source_snapshot: RepositorySourceSnapshot = field(
+        compare=False, repr=False
+    )
 
 
 @dataclass(frozen=True)
@@ -341,6 +391,8 @@ class DatasetEvidence:
     campaign_matlab_environment_descriptor: str
     campaign_matlab_environment_sha256: str
     gen_schema: str
+    channel_schema_id: str
+    state_design_kind: str
     generation_behavior_version: str
     gen_fingerprint: str
     generator_source_root_sha256: str
@@ -441,71 +493,263 @@ class _CoverageAccumulator:
         self.witnesses.setdefault(mechanism, location)
 
 
-def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+class _AuthenticatedStatePayloads(dict[str, dict[str, Any]]):
+    """Parsed states plus the exact digest-table identities they came from."""
+
+    def __init__(self, digests: dict[str, str]) -> None:
+        super().__init__()
+        self.authenticated_digests = dict(digests)
+
+
+@dataclass(frozen=True)
+class _StateSeedStorage:
+    """MATLAB storage identities lost by SciPy's scalar simplification."""
+
+    top_dtype: np.dtype[Any]
+    top_shape: tuple[int, ...]
+    nested_dtype: np.dtype[Any]
+    nested_shape: tuple[int, ...]
+
+
+class _ParsedMat(dict[str, Any]):
+    """Public MAT payload with authenticated representation metadata."""
+
+    def __init__(
+        self,
+        values: dict[str, Any],
+        *,
+        state_seed_storage: _StateSeedStorage | None = None,
+    ) -> None:
+        super().__init__(values)
+        self.state_seed_storage = state_seed_storage
+
+
+def _require_uint32_state_seed_storage(
+    loaded: dict[str, Any], owner: str
+) -> None:
+    """Require both redundant state seeds to be MATLAB uint32 scalars."""
+    storage = getattr(loaded, "state_seed_storage", None)
+    if (
+        not isinstance(storage, _StateSeedStorage)
+        or storage.top_dtype != np.dtype("uint32")
+        or storage.top_shape != (1, 1)
+    ):
+        raise QualificationInputError(
+            f"{owner}: file_state_seed_id must be stored as one MATLAB "
+            "uint32 scalar"
+        )
+    if (
+        storage.nested_dtype != np.dtype("uint32")
+        or storage.nested_shape != (1, 1)
+    ):
+        raise QualificationInputError(
+            f"{owner}.data.state_seed_id must be stored as one MATLAB "
+            "uint32 scalar"
+        )
+
+
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        int(getattr(info, "st_dev", 0)),
+        int(getattr(info, "st_ino", 0)),
+        int(info.st_size),
+        int(info.st_mtime_ns),
+        int(getattr(info, "st_nlink", 1)),
+    )
+
+
+def _read_single_link_regular_bytes(path: Path, owner: str) -> bytes:
+    """Read one regular file while binding bytes, identity and link count."""
+    try:
+        path_before = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise QualificationInputError(f"{owner}: cannot inspect file") from exc
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(path_before.st_mode)
+        or int(getattr(path_before, "st_nlink", 1)) != 1
+    ):
+        raise QualificationInputError(
+            f"{owner}: must be one single-link regular non-symlink file"
+        )
+    flags = os.O_RDONLY | int(getattr(os, "O_BINARY", 0))
+    flags |= int(getattr(os, "O_CLOEXEC", 0))
+    flags |= int(getattr(os, "O_NOFOLLOW", 0))
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise QualificationInputError(
+            f"{owner}: cannot securely open file"
+        ) from exc
+    try:
+        before = os.fstat(descriptor)
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise QualificationInputError(f"{owner}: cannot read file") from exc
+    finally:
+        os.close(descriptor)
+    try:
+        path_after = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise QualificationInputError(
+            f"{owner}: pathname disappeared while being read"
+        ) from exc
+    raw = b"".join(chunks)
+    identity = _file_identity(before)
+    if (
+        identity != _file_identity(path_before)
+        or identity != _file_identity(after)
+        or identity != _file_identity(path_after)
+        or not stat.S_ISREG(before.st_mode)
+        or identity[-1] != 1
+        or len(raw) != before.st_size
+    ):
+        raise QualificationInputError(
+            f"{owner}: file changed/relinked while being read"
+        )
+    return raw
 
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _single_literal(path: Path, pattern: str, label: str) -> str:
-    found = re.findall(pattern, path.read_text(encoding="utf-8"), flags=re.MULTILINE)
+def _captured_source_text(
+    sources: RepositorySourceSnapshot,
+    name: str,
+) -> str:
+    try:
+        return sources.source_bytes(name).decode("utf-8", errors="strict")
+    except (UnicodeDecodeError, RuntimeError) as exc:
+        raise QualificationInputError(
+            f"cannot decode captured reviewed source {name}: {exc}"
+        ) from exc
+
+
+def _single_literal(
+    sources: RepositorySourceSnapshot,
+    name: str,
+    pattern: str,
+    label: str,
+) -> str:
+    text = _captured_source_text(sources, name)
+    found = re.findall(pattern, text, flags=re.MULTILINE)
     if len(found) != 1:
         raise QualificationInputError(
-            f"cannot resolve exactly one {label} from {path}"
+            f"cannot resolve exactly one {label} from captured source {name}"
         )
     return str(found[0])
 
 
-def _expected_schema() -> str:
+def _expected_schema(sources: RepositorySourceSnapshot) -> str:
     """Require MATLAB and Python to agree on the current generator schema."""
     matlab = _single_literal(
-        _ROOT / "scour_MATLAB" / "A00_Run.m",
+        sources,
+        "scour_MATLAB/+ttbi/build_generation_identity.m",
         r"^\s*gen_schema\s*=\s*'([^']+)';",
         "gen_schema",
     )
-    if matlab != EXPECTED_GEN_SCHEMA:
+    python = _single_literal(
+        sources,
+        "core/campaign_contract.py",
+        r'^EXPECTED_GEN_SCHEMA\s*=\s*"([^"]+)"$',
+        "EXPECTED_GEN_SCHEMA",
+    )
+    if matlab != python or python != EXPECTED_GEN_SCHEMA:
         raise QualificationInputError(
             "repository schema sources disagree: "
-            f"A00={matlab!r}, campaign_contract={EXPECTED_GEN_SCHEMA!r}"
+            f"MATLAB={matlab!r}, captured Python={python!r}, "
+            f"imported Python={EXPECTED_GEN_SCHEMA!r}"
         )
     return matlab
 
 
-def _expected_behavior_version() -> str:
+def _expected_channel_schema(sources: RepositorySourceSnapshot) -> str:
+    """Require MATLAB and Python to agree on the deployed channel schema."""
     matlab = _single_literal(
-        _ROOT / "scour_MATLAB" / "A00_Run.m",
+        sources,
+        "scour_MATLAB/+ttbi/build_generation_identity.m",
+        r"^\s*channel_schema_id\s*=\s*'([^']+)';",
+        "channel_schema_id",
+    )
+    python = _single_literal(
+        sources,
+        "core/campaign_contract.py",
+        r'^EXPECTED_CHANNEL_SCHEMA_ID\s*=\s*"([^"]+)"$',
+        "EXPECTED_CHANNEL_SCHEMA_ID",
+    )
+    if matlab != python or python != EXPECTED_CHANNEL_SCHEMA_ID:
+        raise QualificationInputError(
+            "repository channel-schema sources disagree: "
+            f"MATLAB={matlab!r}, captured Python={python!r}, imported "
+            f"Python={EXPECTED_CHANNEL_SCHEMA_ID!r}"
+        )
+    return matlab
+
+
+def _expected_behavior_version(
+    sources: RepositorySourceSnapshot,
+) -> str:
+    matlab = _single_literal(
+        sources,
+        "scour_MATLAB/+ttbi/build_generation_identity.m",
         r"^\s*generation_behavior_version\s*=\s*'([^']+)';",
         "generation_behavior_version",
     )
-    if matlab != EXPECTED_GENERATION_BEHAVIOR_VERSION:
+    python = _single_literal(
+        sources,
+        "core/campaign_contract.py",
+        r'^EXPECTED_GENERATION_BEHAVIOR_VERSION\s*=\s*"([^"]+)"$',
+        "EXPECTED_GENERATION_BEHAVIOR_VERSION",
+    )
+    if (
+        matlab != python
+        or python != EXPECTED_GENERATION_BEHAVIOR_VERSION
+    ):
         raise QualificationInputError(
             "repository behavior-version sources disagree: "
-            f"A00={matlab!r}, "
-            f"campaign_contract={EXPECTED_GENERATION_BEHAVIOR_VERSION!r}"
+            f"MATLAB={matlab!r}, captured Python={python!r}, imported "
+            f"Python={EXPECTED_GENERATION_BEHAVIOR_VERSION!r}"
         )
     return matlab
 
 
-def _expected_max_parfor_workers() -> int:
+def _expected_max_parfor_workers(
+    sources: RepositorySourceSnapshot,
+) -> int:
     value = _single_literal(
-        _ROOT / "scour_MATLAB" / "A00_Run.m",
+        sources,
+        "scour_MATLAB/+ttbi/campaign_setup.m",
         r"^\s*max_parfor_workers\s*=\s*(\d+);",
         "max_parfor_workers",
     )
-    if int(value) <= 0:
-        raise QualificationInputError("max_parfor_workers must be positive")
+    python_value = _single_literal(
+        sources,
+        "core/campaign_contract.py",
+        r'^\s*"max_parfor_workers"\s*:\s*(\d+),$',
+        "Python max_parfor_workers",
+    )
+    if int(value) <= 0 or int(value) != int(python_value):
+        raise QualificationInputError(
+            "captured MATLAB/Python max_parfor_workers literals disagree or "
+            "are not positive"
+        )
     return int(value)
 
 
-def _source_float(name: str) -> float:
+def _source_float(
+    sources: RepositorySourceSnapshot,
+    name: str,
+) -> float:
     value = _single_literal(
-        _ROOT / "core" / "dataset.py",
+        sources,
+        "core/dataset.py",
         rf"^\s*{re.escape(name)}\s*=\s*([0-9.eE+-]+)",
         name,
     )
@@ -515,17 +759,14 @@ def _source_float(name: str) -> float:
     return number
 
 
-def _current_generator_identity() -> tuple[str, str, int]:
-    try:
-        identity = generator_source_root(_ROOT)
-    except Exception as exc:
-        raise QualificationInputError(
-            f"cannot authenticate current generator source root: {exc}"
-        ) from exc
-    lines = "\n".join(
-        f"{name}:{sha256(_ROOT.joinpath(*name.split('/')))}"
-        for name in identity.files
-    )
+def _current_generator_identity(
+    sources: RepositorySourceSnapshot,
+) -> tuple[str, str, int]:
+    identity = sources.generator
+    # Reuse the digest lines built from the exact source-provenance snapshots;
+    # reopening each pathname here would detach the advertised root from the
+    # bytes that source_provenance already authenticated.
+    lines = identity.digest_lines
     calculated = _sha256_text(lines)
     if calculated != identity.sha256:
         raise QualificationInputError(
@@ -582,21 +823,21 @@ def _validate_parser_environment(
 
 
 def _current_policy() -> CurrentPolicy:
-    if (
-        not _ENVIRONMENT_LOCK.is_file()
-        or _ENVIRONMENT_LOCK.is_symlink()
-    ):
-        raise QualificationInputError(
-            "campaign environment lock must be one regular non-symlink file"
-        )
     try:
-        lock = load_environment_lock(_ENVIRONMENT_LOCK)
+        sources = repository_source_snapshot(_ROOT)
+        lock = load_environment_lock_bytes(
+            sources.source_bytes(
+                "environment/campaign-py313-cu128.json"
+            ),
+            source=_ENVIRONMENT_LOCK,
+        )
         environment = lock["spec"]["matlab_environment"]
         descriptor = matlab_environment_descriptor(environment)
         environment_sha = lock["spec"]["matlab_environment_sha256"]
     except Exception as exc:
         raise QualificationInputError(
-            f"cannot authenticate current MATLAB environment lock: {exc}"
+            "cannot coherently authenticate the current reviewed source "
+            f"policy and MATLAB environment lock: {exc}"
         ) from exc
     release = str(environment.get("release", ""))
     if not _MATLAB_RELEASE_RE.fullmatch(release):
@@ -608,16 +849,11 @@ def _current_policy() -> CurrentPolicy:
             "campaign MATLAB descriptor SHA differs from the lock"
         )
     generator_sha, generator_lines, generator_count = (
-        _current_generator_identity()
+        _current_generator_identity(sources)
     )
-    try:
-        python_identity = python_runtime_source_root(_ROOT)
-    except Exception as exc:
-        raise QualificationInputError(
-            f"cannot authenticate current Python runtime source root: {exc}"
-        ) from exc
+    python_identity = sources.python_runtime
     parser_environment = _validate_parser_environment(lock["spec"])
-    return CurrentPolicy(
+    policy = CurrentPolicy(
         environment_lock_sha256=lock["sha256"],
         parser_environment=parser_environment,
         python_runtime_source_root_sha256=python_identity.sha256,
@@ -628,12 +864,38 @@ def _current_policy() -> CurrentPolicy:
         generator_source_root_sha256=generator_sha,
         generator_source_digest_lines=generator_lines,
         generator_source_file_count=generator_count,
-        gen_schema=_expected_schema(),
-        generation_behavior_version=_expected_behavior_version(),
-        max_parfor_workers=_expected_max_parfor_workers(),
-        contact_force_tolerance_N=_source_float("_CONTACT_F_TOL_N"),
-        contact_fraction_tolerance=_source_float("_CONTACT_FRAC_TOL"),
+        gen_schema=_expected_schema(sources),
+        channel_schema_id=_expected_channel_schema(sources),
+        generation_behavior_version=_expected_behavior_version(sources),
+        max_parfor_workers=_expected_max_parfor_workers(sources),
+        contact_force_tolerance_N=_source_float(
+            sources, "_CONTACT_F_TOL_N"
+        ),
+        contact_fraction_tolerance=_source_float(
+            sources, "_CONTACT_FRAC_TOL"
+        ),
+        source_snapshot=sources,
     )
+    try:
+        sources.assert_unchanged()
+    except Exception as exc:
+        raise QualificationInputError(
+            f"reviewed source tree changed during current-policy capture: {exc}"
+        ) from exc
+    return policy
+
+
+def _assert_policy_sources_unchanged(
+    policy: CurrentPolicy,
+    owner: str,
+) -> None:
+    """Translate retained source-snapshot drift into comparator semantics."""
+    try:
+        policy.source_snapshot.assert_unchanged()
+    except Exception as exc:
+        raise QualificationInputError(
+            f"{owner}: reviewed source policy changed during validation"
+        ) from exc
 
 
 def _strict_json_object(text: str, owner: str) -> dict[str, Any]:
@@ -708,22 +970,20 @@ def _expected_qualification_generation_config(
             "qualification_source_sha256": qualification_sha256,
         }
     )
-    profile_asset = (
-        _ROOT / "scour_MATLAB" / "Calc.ProfileData15_05.mat"
-    )
-    expected["profile_asset_sha256"] = (
-        sha256(profile_asset)
-        if profile_asset.is_file() and not profile_asset.is_symlink()
-        else "ABSENT"
-    )
     return expected
 
 
-def _expected_qualification_source_sha256(stage: str) -> str:
+def _expected_qualification_source_sha256(
+    stage: str,
+    sources: RepositorySourceSnapshot,
+) -> str:
     try:
         from make_micro_smoke import qualification_source_sha256
 
-        digest = qualification_source_sha256(stage)
+        source = _captured_source_text(
+            sources, "scour_MATLAB/A00_Run.m"
+        )
+        digest = qualification_source_sha256(stage, source)
     except Exception as exc:
         raise QualificationInputError(
             "cannot recompute the current deterministic qualification-source "
@@ -737,15 +997,18 @@ def _expected_qualification_source_sha256(stage: str) -> str:
     return digest
 
 
-def _expected_qualification_source_bytes(stage: str) -> bytes:
+def _expected_qualification_source_bytes(
+    stage: str,
+    sources: RepositorySourceSnapshot,
+) -> bytes:
     try:
         from make_micro_smoke import render_micro_a00
 
-        source_path = _ROOT / "scour_MATLAB" / "A00_Run.m"
-        if not source_path.is_file() or source_path.is_symlink():
-            raise RuntimeError("A00_Run.m is not a regular source file")
+        source = _captured_source_text(
+            sources, "scour_MATLAB/A00_Run.m"
+        )
         rendered = render_micro_a00(
-            source_path.read_text(encoding="utf-8"),
+            source,
             qualification=True,
             stage=stage,
         )
@@ -757,22 +1020,276 @@ def _expected_qualification_source_bytes(stage: str) -> bytes:
     return rendered.encode("utf-8")
 
 
-def _public_mat(path: Path) -> dict[str, Any]:
+def _state_seed_storage(raw: bytes, label: str) -> _StateSeedStorage:
+    """Read the two seed scalars without allowing ``simplify_cells`` to
+    erase their MATLAB integer class.
+
+    SciPy deliberately turns a squeezed 1x1 numeric array into a native
+    Python scalar.  After that conversion ``uint32(7)`` and ``uint64(7)`` are
+    indistinguishable.  A narrow second parse of state files preserves the
+    original arrays so the on-disk class and scalar shape remain enforceable.
+    """
     try:
-        loaded = loadmat(path, simplify_cells=True)
-    except Exception as exc:  # scipy exceptions vary by corruption mode
-        raise QualificationInputError(f"cannot read MAT file {path}: {exc}") from exc
-    return {str(k): v for k, v in loaded.items() if not str(k).startswith("__")}
-
-
-def _manifest(path: Path) -> dict[str, Any]:
-    mat = _public_mat(path / "case_info.mat")
-    value = mat.get("case_info")
-    if not isinstance(value, dict):
-        raise QualificationInputError(
-            f"{path}: case_info.mat lacks a scalar case_info struct"
+        raw_view = loadmat(
+            io.BytesIO(raw),
+            variable_names=("file_state_seed_id", "data"),
+            struct_as_record=True,
+            squeeze_me=False,
+            mat_dtype=True,
         )
-    return value
+        top = np.asarray(raw_view["file_state_seed_id"])
+        data = raw_view["data"]
+        if (
+            not isinstance(data, np.ndarray)
+            or data.shape != (1, 1)
+            or data.dtype.names is None
+            or "state_seed_id" not in data.dtype.names
+        ):
+            raise ValueError("data is not one scalar struct with state_seed_id")
+        nested = np.asarray(data["state_seed_id"][0, 0])
+    except Exception as exc:  # scipy exceptions vary by corruption mode
+        raise QualificationInputError(
+            f"{label}: cannot preserve MATLAB uint32 state-seed storage: "
+            f"{exc}"
+        ) from exc
+    return _StateSeedStorage(
+        top_dtype=top.dtype,
+        top_shape=top.shape,
+        nested_dtype=nested.dtype,
+        nested_shape=nested.shape,
+    )
+
+
+def _public_mat_bytes(
+    raw: bytes,
+    label: str,
+    *,
+    capture_state_seed_storage: bool = False,
+) -> dict[str, Any]:
+    """Parse a MAT payload from an in-memory buffer instead of a pathname."""
+    try:
+        loaded = loadmat(
+            io.BytesIO(raw),
+            simplify_cells=True,
+            mat_dtype=True,
+        )
+    except Exception as exc:  # scipy exceptions vary by corruption mode
+        raise QualificationInputError(
+            f"cannot read MAT payload {label}: {exc}"
+        ) from exc
+    public = {
+        str(k): v for k, v in loaded.items() if not str(k).startswith("__")
+    }
+    storage = (
+        _state_seed_storage(raw, label)
+        if capture_state_seed_storage
+        else None
+    )
+    return _ParsedMat(public, state_seed_storage=storage)
+
+
+def _verified_mat(
+    path: Path,
+    name: str,
+    digests: dict[str, str],
+) -> dict[str, Any]:
+    """Parse one digested member FROM THE EXACT BYTES that were hashed.
+
+    Hashing ``path / name`` and then re-opening ``path / name`` to parse it are
+    two different reads of a mutable filesystem: a directory being synchronised,
+    copied, or edited during a long validation can serve different bytes to the
+    second read, and the evidence would then describe content that was never
+    parsed.  This helper reads the member once, hashes that buffer, requires the
+    digest to match the dataset's own table, and parses the same buffer - so the
+    parsed payload and the recorded digest are provably the same bytes.
+
+    Cross-member drift (member A changing after it was parsed but while member B
+    is still being read) is a separate window, closed by
+    :func:`_reassert_endpoint_digests` after the comparison completes.
+    """
+    target = path / name
+    expected = digests.get(name)
+    if expected is None:
+        raise QualificationInputError(
+            f"{path}: {name} is not covered by the dataset digest table"
+        )
+    raw = _read_single_link_regular_bytes(
+        target, f"{path}: digested entry {name}"
+    )
+    actual = hashlib.sha256(raw).hexdigest()
+    if actual != expected:
+        raise QualificationInputError(
+            f"{path}: SHA-256 mismatch for {name} at parse time: "
+            f"{actual} != {expected} (the retained directory changed while it "
+            "was being validated)"
+        )
+    return _public_mat_bytes(
+        raw,
+        f"{path}/{name}",
+        capture_state_seed_storage=bool(_STATE_RE.fullmatch(name)),
+    )
+
+
+def _reassert_endpoint_digests(
+    path: Path,
+    evidence: DatasetEvidence,
+) -> None:
+    """Re-verify the digest table and every member it covers.
+
+    Per-member atomicity (see :func:`_verified_mat`) guarantees each parsed
+    payload matches its recorded digest at the moment it was parsed.  Re-reading
+    the table and every covered member here closes the cross-member window for
+    ``case_info.mat``, ``damage_states.mat`` and every numbered state MAT.
+
+    Authorization sidecars deliberately do not belong to the dataset-content
+    root.  They are checked separately by
+    :func:`_reassert_endpoint_sidecars`; keeping those responsibilities named
+    separately prevents a future reader from mistaking the content root for a
+    hash over the complete retained endpoint directory.
+    """
+    try:
+        per_file, dataset_root = _read_digest_table(path)
+    except QualificationInputError as exc:
+        raise QualificationInputError(
+            f"{path}: endpoint digest table became unreadable during "
+            f"validation: {exc}"
+        ) from exc
+    for name, expected in sorted(per_file.items()):
+        target = path / name
+        raw = _read_single_link_regular_bytes(
+            target, f"{path}: digested entry {name}"
+        )
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != expected:
+            raise QualificationInputError(
+                f"{path}: digested entry {name} changed during validation: "
+                f"{actual} != {expected}"
+            )
+    if dataset_root != evidence.dataset_content_root_sha256:
+        raise QualificationInputError(
+            f"{path}: recomputed dataset content root {dataset_root} differs "
+            f"from the root validated earlier in this run "
+            f"({evidence.dataset_content_root_sha256}); the retained directory "
+            "was modified while it was being used"
+        )
+
+
+def _reassert_endpoint_sidecars(
+    path: Path,
+    evidence: DatasetEvidence,
+    policy: CurrentPolicy,
+) -> None:
+    """Re-verify authorization sidecars outside the dataset digest table.
+
+    The generated qualification executable, self-attested host receipt and
+    completion marker are all consumed while validating an endpoint, but are
+    intentionally outside ``file_digests.mat``.  A final endpoint snapshot must
+    therefore re-read and bind them explicitly; otherwise one of these files
+    could change after parsing while the digested MAT payloads remained stable.
+    """
+    executable_name = "qualification_executed.m"
+    executable_path = path / executable_name
+    try:
+        executable_bytes = _read_single_link_regular_bytes(
+            executable_path, str(executable_path)
+        )
+        expected_bytes = _expected_qualification_source_bytes(
+            evidence.stage, policy.source_snapshot
+        )
+        executable_sha = hashlib.sha256(executable_bytes).hexdigest()
+        if (
+            executable_bytes != expected_bytes
+            or executable_sha
+            != evidence.qualification_executed_file_sha256
+        ):
+            raise QualificationInputError(
+                "bytes no longer match the authenticated qualification "
+                "executable"
+            )
+    except (QualificationInputError, OSError) as exc:
+        raise QualificationInputError(
+            f"{path}: endpoint sidecar {executable_name} changed during "
+            f"validation: {exc}"
+        ) from exc
+
+    host_name = "qualification_host_receipt.json"
+    try:
+        host = _load_qualification_host_receipt(
+            path,
+            actual_environment_sha256=(
+                evidence.actual_matlab_environment_sha256
+            ),
+            qualification_source_sha256=(
+                evidence.qualification_source_sha256
+            ),
+            qualification_executed_file_sha256=(
+                evidence.qualification_executed_file_sha256
+            ),
+        )
+        expected_host_fields = {
+            "declared_host_id": evidence.qualification_host_id,
+            "hostname": evidence.qualification_hostname,
+            "cpu_identifier": evidence.qualification_cpu_identifier,
+            "logical_processors": (
+                evidence.qualification_logical_processors
+            ),
+            "matlab_max_threads": (
+                evidence.qualification_matlab_max_threads
+            ),
+            "computer_arch": evidence.qualification_computer_arch,
+            "canonical_descriptor": (
+                evidence.qualification_host_canonical_descriptor
+            ),
+            "host_diagnostic_sha256": (
+                evidence.qualification_host_diagnostic_sha256
+            ),
+        }
+        differing = sorted(
+            name
+            for name, expected in expected_host_fields.items()
+            if host[name] != expected
+        )
+        if differing:
+            raise QualificationInputError(
+                f"authenticated host fields changed: {differing}"
+            )
+    except (QualificationInputError, OSError) as exc:
+        raise QualificationInputError(
+            f"{path}: endpoint sidecar {host_name} changed during validation: "
+            f"{exc}"
+        ) from exc
+
+    marker_name = "_GENERATION_COMPLETE"
+    marker_path = path / marker_name
+    expected_marker = (
+        f"{evidence.gen_schema}\n"
+        f"{evidence.gen_fingerprint}\n"
+        f"{evidence.dataset_content_root_sha256}\n"
+    )
+    try:
+        marker_bytes = _read_single_link_regular_bytes(
+            marker_path, str(marker_path)
+        )
+        if marker_bytes.decode("utf-8", errors="strict") != expected_marker:
+            raise QualificationInputError(
+                "content no longer binds the authenticated "
+                "schema/fingerprint/dataset root"
+            )
+    except (QualificationInputError, OSError, UnicodeError) as exc:
+        raise QualificationInputError(
+            f"{path}: endpoint sidecar {marker_name} changed during "
+            f"validation: {exc}"
+        ) from exc
+
+
+def _reassert_endpoint_snapshot(
+    path: Path,
+    evidence: DatasetEvidence,
+    policy: CurrentPolicy,
+) -> None:
+    """Reassert both retained-content and authorization-sidecar evidence."""
+    _reassert_endpoint_digests(path, evidence)
+    _reassert_endpoint_sidecars(path, evidence, policy)
 
 
 def _scalar(value: Any, label: str) -> Any:
@@ -836,7 +1353,15 @@ def _required_positive_int(mapping: dict[str, Any], key: str, owner: str) -> int
 def _qualification_host_text(
     mapping: dict[str, Any], key: str, owner: str
 ) -> str:
-    value = _required_exact_text(mapping, key, owner)
+    if key not in mapping or type(mapping[key]) is not str:
+        raise QualificationInputError(
+            f"{owner}.{key} must be one JSON string"
+        )
+    value = mapping[key]
+    if not value or value != value.strip() or "\r" in value:
+        raise QualificationInputError(
+            f"{owner}.{key} is not canonical nonempty LF text"
+        )
     if "\n" in value or "\0" in value or len(value) > 1024:
         raise QualificationInputError(
             f"{owner}.{key} must be one nonempty canonical line (<=1024 chars)"
@@ -852,13 +1377,9 @@ def _load_qualification_host_receipt(
     qualification_executed_file_sha256: str,
 ) -> dict[str, Any]:
     path = dataset / "qualification_host_receipt.json"
-    if not path.is_file() or path.is_symlink():
-        raise QualificationInputError(
-            f"{dataset}: missing regular non-symlink "
-            "qualification_host_receipt.json"
-        )
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw_bytes = _read_single_link_regular_bytes(path, str(path))
+        raw = raw_bytes.decode("utf-8", errors="strict")
     except (OSError, UnicodeError) as exc:
         raise QualificationInputError(
             f"{path}: cannot read strict UTF-8 host receipt: {exc}"
@@ -874,6 +1395,30 @@ def _load_qualification_host_receipt(
             f"{path}: host-receipt field set mismatch; "
             f"missing={sorted(_QUALIFICATION_HOST_FIELDS - observed_fields)}, "
             f"extra={sorted(observed_fields - _QUALIFICATION_HOST_FIELDS)}"
+        )
+    ordered_value = {
+        field: value[field] for field in _QUALIFICATION_HOST_FIELD_ORDER
+    }
+    # MATLAB's jsonencode has changed its non-ASCII escaping details between
+    # releases.  Both spellings below are unambiguous compact UTF-8 encodings
+    # of the exact field-order contract; accepting the pair avoids rejecting a
+    # legitimate Unicode host diagnostic while still excluding whitespace,
+    # reordered fields, alternate numeric spellings, and gratuitous escapes.
+    canonical_bytes = tuple(
+        (
+            json.dumps(
+                ordered_value,
+                separators=(",", ":"),
+                ensure_ascii=ensure_ascii,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        for ensure_ascii in (True, False)
+    )
+    if raw_bytes not in canonical_bytes:
+        raise QualificationInputError(
+            f"{path}: host receipt is not canonical compact field-order JSON"
         )
     schema = _qualification_host_text(value, "schema", str(path))
     if schema != _QUALIFICATION_HOST_SCHEMA:
@@ -1052,7 +1597,7 @@ def _validate_stage_policy(
     expected = _STAGE_POLICIES.get(stage)
     if expected is None:
         raise QualificationInputError(
-            f"{owner}.stage={stage!r} is not one of the ten qualification stages"
+            f"{owner}.stage={stage!r} is not one of the four qualification stages"
         )
     observed_states = _required_positive_int(manifest, "n_states", owner)
     if observed_states != expected["n_states"]:
@@ -1119,11 +1664,10 @@ def _validate_stage_policy(
 
 def _read_digest_table(path: Path) -> tuple[dict[str, str], str]:
     digest_path = path / "file_digests.mat"
-    if not digest_path.is_file() or digest_path.is_symlink():
-        raise QualificationInputError(
-            f"{path}: file_digests.mat must be a regular non-symlink file"
-        )
-    mat = _public_mat(digest_path)
+    digest_bytes = _read_single_link_regular_bytes(
+        digest_path, str(digest_path)
+    )
+    mat = _public_mat_bytes(digest_bytes, str(digest_path))
     if set(mat) != {"file_digests"}:
         raise QualificationInputError(
             f"{path}: file_digests.mat must contain exactly file_digests"
@@ -1208,13 +1752,25 @@ def _read_digest_table(path: Path) -> tuple[dict[str, str], str]:
 
 def _validate_dataset_header(
     path: Path, policy: CurrentPolicy
-) -> tuple[DatasetEvidence, dict[str, Any], dict[str, Any]]:
+) -> tuple[DatasetEvidence, dict[str, Any], dict[str, Any], dict[str, str]]:
     if not path.is_dir():
         raise QualificationInputError(f"not a directory: {path}")
     if path.is_symlink():
         raise QualificationInputError(f"dataset root may not be a symlink: {path}")
 
-    manifest = _manifest(path)
+    # The digest table is read FIRST so that every subsequent parse in this
+    # function and in _validated_payload can be bound to the digest of the exact
+    # buffer it parsed (see _verified_mat).  The table's own internal
+    # consistency is checked by _read_digest_table; whether its entries match
+    # the files on disk is checked by the verification loop further down and
+    # again by _reassert_endpoint_digests once the dataset has been used.
+    per_file, dataset_root = _read_digest_table(path)
+    manifest_mat = _verified_mat(path, "case_info.mat", per_file)
+    manifest = manifest_mat.get("case_info")
+    if not isinstance(manifest, dict):
+        raise QualificationInputError(
+            f"{path}: case_info.mat lacks a scalar case_info struct"
+        )
     owner = str(path / "case_info.mat")
     missing = sorted(_REQUIRED_MANIFEST_FIELDS - set(manifest))
     if missing:
@@ -1226,6 +1782,14 @@ def _validate_dataset_header(
             f"{path}: gen_schema={schema!r}, current policy expects "
             f"{policy.gen_schema!r}"
         )
+    channel_schema_id = _required_string(
+        manifest, "channel_schema_id", owner
+    )
+    if channel_schema_id != policy.channel_schema_id:
+        raise QualificationInputError(
+            f"{path}: channel_schema_id={channel_schema_id!r}, current policy "
+            f"expects {policy.channel_schema_id!r}"
+        )
     behavior = _required_string(manifest, "generation_behavior_version", owner)
     if behavior != policy.generation_behavior_version:
         raise QualificationInputError(
@@ -1234,6 +1798,19 @@ def _validate_dataset_header(
         )
     fingerprint = _required_sha(manifest, "gen_fingerprint", owner)
     stage = _required_string(manifest, "stage", owner)
+    state_design_kind = _required_string(
+        manifest, "state_design_kind", owner
+    )
+    expected_state_design_kind = (
+        "dense-scour-61x5-v1"
+        if stage == "F40-S"
+        else "five-family-multidamage-v2"
+    )
+    if state_design_kind != expected_state_design_kind:
+        raise QualificationInputError(
+            f"{path}: state_design_kind={state_design_kind!r}, stage {stage!r} "
+            f"requires {expected_state_design_kind!r}"
+        )
     stage_policy = _validate_stage_policy(manifest, stage, owner)
 
     release = _required_string(manifest, "matlab_release", owner)
@@ -1313,7 +1890,9 @@ def _validate_dataset_header(
     qualification_sha = _required_sha(
         manifest, "qualification_source_sha256", owner
     )
-    expected_qualification_sha = _expected_qualification_source_sha256(stage)
+    expected_qualification_sha = _expected_qualification_source_sha256(
+        stage, policy.source_snapshot
+    )
     if qualification_sha != expected_qualification_sha:
         raise QualificationInputError(
             f"{path}: qualification_source_sha256={qualification_sha} does not "
@@ -1321,15 +1900,12 @@ def _validate_dataset_header(
             f"{expected_qualification_sha}"
         )
     qualification_evidence_path = path / "qualification_executed.m"
-    if (
-        not qualification_evidence_path.is_file()
-        or qualification_evidence_path.is_symlink()
-    ):
-        raise QualificationInputError(
-            f"{path}: missing regular non-symlink qualification_executed.m"
-        )
-    expected_qualification_bytes = _expected_qualification_source_bytes(stage)
-    qualification_evidence_bytes = qualification_evidence_path.read_bytes()
+    expected_qualification_bytes = _expected_qualification_source_bytes(
+        stage, policy.source_snapshot
+    )
+    qualification_evidence_bytes = _read_single_link_regular_bytes(
+        qualification_evidence_path, str(qualification_evidence_path)
+    )
     if qualification_evidence_bytes != expected_qualification_bytes:
         raise QualificationInputError(
             f"{path}: qualification_executed.m is not the exact current "
@@ -1431,22 +2007,13 @@ def _validate_dataset_header(
             f"num_spans+1={num_spans + 1}"
         )
 
-    state_candidates = tuple(
-        sorted(
-            item.name
-            for item in path.iterdir()
-            if re.fullmatch(r"\d{4}\.mat", item.name, flags=re.IGNORECASE)
-        )
+    state_names = require_canonical_state_names(
+        (item.name for item in path.iterdir()),
+        n_states,
+        str(path),
+        error_type=QualificationInputError,
     )
-    expected_names = tuple(f"{index:04d}.mat" for index in range(1, n_states + 1))
-    if state_candidates != expected_names:
-        raise QualificationInputError(
-            f"{path}: state inventory is not exactly 0001.mat..{n_states:04d}.mat "
-            f"(found {len(state_candidates)} case-insensitive candidates)"
-        )
-    state_names = expected_names
 
-    per_file, dataset_root = _read_digest_table(path)
     required_digest_names = set(state_names) | {"case_info.mat", "damage_states.mat"}
     if set(per_file) != required_digest_names:
         missing_digest = sorted(required_digest_names - set(per_file))
@@ -1457,21 +2024,26 @@ def _validate_dataset_header(
         )
     for name, expected_digest in sorted(per_file.items()):
         target = path / name
-        if not target.is_file() or target.is_symlink():
-            raise QualificationInputError(
-                f"{path}: digested entry is missing, non-regular or symlinked: {name}"
-            )
-        actual = sha256(target)
+        target_bytes = _read_single_link_regular_bytes(
+            target, f"{path}: digested entry {name}"
+        )
+        actual = hashlib.sha256(target_bytes).hexdigest()
         if actual != expected_digest:
             raise QualificationInputError(
                 f"{path}: SHA-256 mismatch for {name}: {actual} != {expected_digest}"
             )
 
     marker = path / "_GENERATION_COMPLETE"
-    if not marker.is_file() or marker.is_symlink():
-        raise QualificationInputError(f"{path}: missing regular completion marker")
     expected_marker = f"{schema}\n{fingerprint}\n{dataset_root}\n"
-    if marker.read_text(encoding="utf-8") != expected_marker:
+    try:
+        marker_text = _read_single_link_regular_bytes(
+            marker, str(marker)
+        ).decode("utf-8", errors="strict")
+    except UnicodeError as exc:
+        raise QualificationInputError(
+            f"{path}: completion marker is not strict UTF-8"
+        ) from exc
+    if marker_text != expected_marker:
         raise QualificationInputError(
             f"{path}: completion marker does not exactly bind "
             "schema/fingerprint/dataset-content-root in canonical three-line form"
@@ -1497,6 +2069,8 @@ def _validate_dataset_header(
         campaign_matlab_environment_descriptor=campaign_descriptor,
         campaign_matlab_environment_sha256=campaign_sha,
         gen_schema=schema,
+        channel_schema_id=channel_schema_id,
+        state_design_kind=state_design_kind,
         generation_behavior_version=behavior,
         gen_fingerprint=fingerprint,
         generator_source_root_sha256=generator_sha,
@@ -1527,7 +2101,7 @@ def _validate_dataset_header(
         state_files=state_names,
         mechanism_coverage=empty_coverage,
     )
-    return evidence, manifest, generation_config
+    return evidence, manifest, generation_config, per_file
 
 
 def _finite_numeric_array(
@@ -1613,11 +2187,11 @@ def _matrix(
     array = _finite_numeric_array(value, label).astype(
         np.float64, copy=False
     )
-    if array.size != rows * columns:
+    if array.shape != (rows, columns):
         raise QualificationInputError(
-            f"{label} has {array.size} values; expected {rows}x{columns}"
+            f"{label} has shape {array.shape}; expected exactly "
+            f"({rows}, {columns})"
         )
-    array = array.reshape(rows, columns)
     return array
 
 
@@ -1654,6 +2228,25 @@ def _passages(value: Any, n_passages: int, label: str) -> list[Any]:
     return passages
 
 
+def _require_disabled_passages_empty(
+    passages: list[Any], label: str
+) -> None:
+    """Reject latent payloads for a mechanism disabled by the stage policy."""
+
+    for index, passage in enumerate(passages, start=1):
+        if isinstance(passage, dict):
+            raise QualificationInputError(
+                f"{label}[{index}] contains a struct although the mechanism "
+                "is disabled"
+            )
+        array = np.asarray(passage)
+        if array.size != 0 or array.dtype.kind not in "biuf":
+            raise QualificationInputError(
+                f"{label}[{index}] must be one empty numeric payload while "
+                "the mechanism is disabled"
+            )
+
+
 def _validate_signal_passages(
     value: Any,
     label: str,
@@ -1688,31 +2281,22 @@ def _validate_damage_table(
     evidence: DatasetEvidence,
     manifest: dict[str, Any],
 ) -> DamageLabels:
-    required = {
-        "StateFamily",
-        "AnchorTarget",
-        "AnchorLevel",
-        "CrackOn",
-        "DamageStates",
-        "BearingStates",
-        "BearingFixity",
-        "LatentBearingFixity",
-        "StateUID",
-        "StateSeedID",
-        "StateNamedStreamSeedID",
-        "PassageNamedStreamSeedID",
-        "PassageNamedStreamSeedIDFlat",
-        "random_stream_schedule_version",
-        "state_stream_names",
-        "passage_stream_names",
-        "LatentCrackOn",
-        "k_ref_bear",
-        "scour_supports",
-    }
-    missing = sorted(required - set(table))
     owner = f"{evidence.path}/damage_states.mat"
-    if missing:
-        raise QualificationInputError(f"{owner}: missing fields {missing}")
+    require_damage_table_shapes(
+        table,
+        n_states=evidence.n_states,
+        n_passages=evidence.passages_per_state,
+        n_supports=evidence.num_supports,
+        n_scour_supports=len(
+            _STAGE_POLICIES[evidence.stage]["scour_supports"]
+        ),
+        n_state_streams=len(_STATE_STREAM_NAMES),
+        n_passage_streams=len(_PASSAGE_STREAM_NAMES),
+        owner=owner,
+        error_type=QualificationInputError,
+    )
+
+    n_states = evidence.n_states
 
     supports = _vector(
         table["scour_supports"],
@@ -1723,7 +2307,6 @@ def _validate_damage_table(
     if len(set(int(value) for value in supports)) != supports.size:
         raise QualificationInputError(f"{owner}.scour_supports contains duplicates")
 
-    n_states = evidence.n_states
     families = tuple(
         str(item) for item in np.asarray(table["StateFamily"]).reshape(-1)
     )
@@ -1932,12 +2515,26 @@ def _validate_damage_table(
         or np.any(damage > 1)
         or np.any(bearing_states < 0)
         or np.any(bearing_fixity < 0)
-        or np.any(bearing_fixity > 1)
+        or np.any(bearing_fixity >= 1)
         or np.any(latent_bearing_fixity < 0)
-        or np.any(latent_bearing_fixity > 1)
+        or np.any(latent_bearing_fixity >= 1)
     ):
         raise QualificationInputError(
-            f"{owner}: damage/fixity labels are outside their physical range"
+            f"{owner}: damage/fixity labels are outside scour [0,1] or "
+            "fixity [0,1)"
+        )
+    expected_bearing_states = (
+        k_ref_bear * bearing_fixity / (1.0 - bearing_fixity)
+    )
+    if not np.allclose(
+        bearing_states,
+        expected_bearing_states,
+        rtol=1e-12,
+        atol=1e-6,
+    ):
+        raise QualificationInputError(
+            f"{owner}.BearingStates is not k_ref_bear*BearingFixity/"
+            "(1-BearingFixity)"
         )
     if np.any(supports <= 1) or np.any(supports >= evidence.num_supports):
         raise QualificationInputError(
@@ -2123,9 +2720,13 @@ def _validate_state_provenance(
     policy: CurrentPolicy,
 ) -> dict[str, Any]:
     owner = f"{evidence.path}/{state_name}"
-    missing = sorted(_REQUIRED_TOP_LEVEL_FIELDS - set(loaded))
-    if missing:
-        raise QualificationInputError(f"{owner}: missing top-level fields {missing}")
+    _require_uint32_state_seed_storage(loaded, owner)
+    require_exact_fields(
+        loaded,
+        _REQUIRED_TOP_LEVEL_FIELDS,
+        owner,
+        error_type=QualificationInputError,
+    )
 
     top_expected_strings = {
         "file_gen_schema": evidence.gen_schema,
@@ -2154,7 +2755,8 @@ def _validate_state_provenance(
     top_seed_raw = np.asarray(loaded["file_state_seed_id"])
     top_seed = _scalar(top_seed_raw, f"{owner}.file_state_seed_id")
     if (
-        isinstance(top_seed, (bool, np.bool_))
+        top_seed_raw.shape != ()
+        or isinstance(top_seed, (bool, np.bool_))
         or not math.isfinite(float(top_seed))
         or float(top_seed) != int(float(top_seed))
         or int(top_seed) != int(labels.state_seed_ids[state_index])
@@ -2171,13 +2773,17 @@ def _validate_state_provenance(
     data = loaded["data"]
     if not isinstance(data, dict):
         raise QualificationInputError(f"{owner}: data is not a scalar struct")
-    missing_data = sorted(_REQUIRED_DATA_FIELDS - set(data))
-    if missing_data:
-        raise QualificationInputError(f"{owner}.data: missing fields {missing_data}")
+    require_exact_fields(
+        data,
+        _REQUIRED_DATA_FIELDS,
+        f"{owner}.data",
+        error_type=QualificationInputError,
+    )
 
     data_expected_strings = {
         "gen_schema": evidence.gen_schema,
         "gen_fingerprint": evidence.gen_fingerprint,
+        "channel_schema_id": evidence.channel_schema_id,
         "matlab_release": evidence.matlab_release,
         "campaign_matlab_release": evidence.campaign_matlab_release,
         "actual_matlab_environment_descriptor":
@@ -2220,60 +2826,17 @@ def _validate_state_provenance(
         )
 
     n_passages = evidence.passages_per_state
-    dim_acel = _vector(
-        data["DimAcel"],
-        f"{owner}.data.DimAcel",
-        length=n_passages,
-        integer=True,
-        positive=True,
-    )
-    dim_space = _vector(
-        data["DimSpace"],
-        f"{owner}.data.DimSpace",
-        length=n_passages,
-        integer=True,
-        positive=True,
-    )
-    crop_start = _vector(
-        data["crop_start"],
-        f"{owner}.data.crop_start",
-        length=n_passages,
-        integer=True,
-        positive=True,
-    )
-    crop_end = _vector(
-        data["crop_end"],
-        f"{owner}.data.crop_end",
-        length=n_passages,
-        integer=True,
-        positive=True,
-    )
-    bridge_samp = _vector(
-        data["bridge_samp"],
-        f"{owner}.data.bridge_samp",
-        length=n_passages,
-        integer=True,
-        positive=True,
-    )
-    bridge_length = _vector(
-        data["L_bridge_eff"],
-        f"{owner}.data.L_bridge_eff",
-        length=n_passages,
-        positive=True,
-    )
     manifest_bridge = _required_positive_float(
         manifest, "L_bridge_m", str(Path(evidence.path) / "case_info.mat")
     )
-    if (
-        np.any(crop_start > crop_end)
-        or np.any(crop_end > dim_space)
-        or np.any(bridge_samp > (crop_end - crop_start + 1))
-        or not np.allclose(bridge_length, manifest_bridge, rtol=0, atol=1e-12)
-        or not np.array_equal(bridge_samp, np.round(100 * bridge_length))
-    ):
-        raise QualificationInputError(
-            f"{owner}.data RAW crop/bridge metadata is internally inconsistent"
-        )
+    raw_metadata = validate_raw_metadata(
+        data,
+        n_passages=n_passages,
+        bridge_length_m=manifest_bridge,
+        owner=f"{owner}.data",
+        error_type=QualificationInputError,
+    )
+    dim_acel = raw_metadata["DimAcel"]
 
     for field_name in _REQUIRED_SIGNALS:
         _validate_signal_passages(
@@ -2284,24 +2847,14 @@ def _validate_state_provenance(
             dim_acel,
         )
 
-    contact = _finite_numeric_array(
-        data["contact_log"], f"{owner}.data.contact_log"
+    validate_contact_log(
+        data["contact_log"],
+        n_passages=n_passages,
+        max_tension_N=policy.contact_force_tolerance_N,
+        max_tension_fraction=policy.contact_fraction_tolerance,
+        owner=f"{owner}.data.contact_log",
+        error_type=QualificationInputError,
     )
-    if contact.shape != (n_passages, 4):
-        raise QualificationInputError(
-            f"{owner}.data.contact_log has shape {contact.shape}; expected "
-            f"({n_passages}, 4)"
-        )
-    if (
-        not np.all(np.isin(contact[:, :2], (0, 1)))
-        or np.any(contact[:, 2] < 0)
-        or np.any(contact[:, 2] > 1)
-        or np.any(contact[:, 2] > policy.contact_fraction_tolerance)
-        or np.any(contact[:, 3] > policy.contact_force_tolerance_N)
-    ):
-        raise QualificationInputError(
-            f"{owner}.data.contact_log violates the reviewed logical/range/contact gate"
-        )
 
     scour = _vector(
         data["scour_vector"],
@@ -2325,6 +2878,12 @@ def _validate_state_provenance(
         f"{owner}.data.bearing_fixity",
         length=2,
     )
+    validate_bearing_fixity(
+        bearing_fixity,
+        owner=f"{owner}.data.bearing_fixity",
+        length=2,
+        error_type=QualificationInputError,
+    )
     dano = float(_scalar(data["Dano"], f"{owner}.data.Dano"))
     family = _required_string(data, "state_family", f"{owner}.data")
     state_uid = _required_exact_text(
@@ -2341,7 +2900,8 @@ def _validate_state_provenance(
             f"{owner}.data.state_seed_id is not numeric"
         ) from exc
     if (
-        not math.isfinite(state_seed_number)
+        state_seed_array.shape != ()
+        or not math.isfinite(state_seed_number)
         or state_seed_number < 1
         or state_seed_number > np.iinfo(np.uint32).max
         or state_seed_number != int(state_seed_number)
@@ -2368,10 +2928,36 @@ def _validate_state_provenance(
             f"{owner}.data.state_named_stream_seed_id is not the "
             "registered uint32 namespace row"
         )
+    passage_named_raw = np.asarray(
+        data["passage_named_stream_seed_id"]
+    )
+    expected_passage_shape = (
+        n_passages,
+        len(labels.passage_stream_names),
+    )
+    if (
+        passage_named_raw.dtype != np.dtype("uint32")
+        or passage_named_raw.shape != expected_passage_shape
+        or np.any(passage_named_raw == 0)
+        or not np.array_equal(
+            passage_named_raw,
+            labels.passage_named_stream_seed_ids[state_index],
+        )
+    ):
+        raise QualificationInputError(
+            f"{owner}.data.passage_named_stream_seed_id is not the "
+            "registered nonzero uint32 passage namespace matrix"
+        )
     latent_bearing = _vector(
         data["latent_bearing_fixity"],
         f"{owner}.data.latent_bearing_fixity",
         length=2,
+    )
+    validate_bearing_fixity(
+        latent_bearing,
+        owner=f"{owner}.data.latent_bearing_fixity",
+        length=2,
+        error_type=QualificationInputError,
     )
     latent_crack = _required_bool(
         data, "latent_crack_on", f"{owner}.data"
@@ -2404,8 +2990,6 @@ def _validate_state_provenance(
         np.any(scour < 0)
         or np.any(scour > 1)
         or np.any(bearing_vector < 0)
-        or np.any(bearing_fixity < 0)
-        or np.any(bearing_fixity > 1)
     ):
         raise QualificationInputError(f"{owner}.data label range is invalid")
 
@@ -2443,12 +3027,6 @@ def _validate_state_provenance(
         f"{owner}.data.Temperatura",
         length=n_passages,
     )
-    _vector(
-        data["Velocidade"],
-        f"{owner}.data.Velocidade",
-        length=n_passages,
-        positive=True,
-    )
     _finite_numeric_array(data["VehiclesProps"], f"{owner}.data.VehiclesProps")
     beam_f1 = float(_scalar(data["beam_f1_Hz"], f"{owner}.data.beam_f1_Hz"))
     if not math.isfinite(beam_f1) or not 0.2 <= beam_f1 <= 15:
@@ -2464,10 +3042,18 @@ def _validate_state_provenance(
                 f"{manifest_bridge:g} m bridge gate {bounds}"
             )
 
-    # Require passage cardinality even where a mechanism is disabled. Detailed
-    # struct validation is performed for the all-mechanism coverage stages.
-    _passages(data["track_log"], n_passages, f"{owner}.data.track_log")
-    _passages(data["oor_log"], n_passages, f"{owner}.data.oor_log")
+    # A disabled mechanism must be absent semantically, not merely switched off
+    # in case_info.mat.  Otherwise two forged inputs could carry identical
+    # deferred-mechanism payloads and still qualify one another.
+    track_label = f"{owner}.data.track_log"
+    oor_label = f"{owner}.data.oor_log"
+    track_passages = _passages(data["track_log"], n_passages, track_label)
+    oor_passages = _passages(data["oor_log"], n_passages, oor_label)
+    stage_policy = _STAGE_POLICIES[evidence.stage]
+    if not stage_policy["use_track_eov"]:
+        _require_disabled_passages_empty(track_passages, track_label)
+    if not stage_policy["use_oor_eov"]:
+        _require_disabled_passages_empty(oor_passages, oor_label)
     return data
 
 
@@ -2797,14 +3383,18 @@ def _validated_payload(
     dict[str, Any],
     dict[str, dict[str, Any]],
 ]:
-    evidence, manifest, generation_config = _validate_dataset_header(path, policy)
-    label_table = _public_mat(path / "damage_states.mat")
+    evidence, manifest, generation_config, per_file = _validate_dataset_header(
+        path, policy
+    )
+    label_table = _verified_mat(path, "damage_states.mat", per_file)
     labels = _validate_damage_table(label_table, evidence, manifest)
     _validate_generation_realizations(generation_config, labels, evidence)
     coverage = _CoverageAccumulator()
-    states: dict[str, dict[str, Any]] = {}
+    states = _AuthenticatedStatePayloads(
+        {name: per_file[name] for name in evidence.state_files}
+    )
     for index, state_name in enumerate(evidence.state_files):
-        loaded = _public_mat(path / state_name)
+        loaded = _verified_mat(path, state_name, per_file)
         data = _validate_state_provenance(
             loaded,
             evidence,
@@ -2858,9 +3448,10 @@ def compare_directories(
         ev_b.actual_matlab_environment_sha256,
     }:
         raise QualificationInputError(
-            "one input must have been generated by the current locked campaign "
-            f"MATLAB environment {locked_sha}; input declarations cannot replace "
-            "that repository policy"
+            "one input must declare and authenticate the current locked "
+            f"campaign MATLAB environment identity {locked_sha}; input "
+            "declarations cannot replace that repository policy, and this "
+            "binding is not proof of execution origin"
         )
     for attribute in (
         "stage",
@@ -2868,6 +3459,8 @@ def compare_directories(
         "campaign_matlab_environment_descriptor",
         "campaign_matlab_environment_sha256",
         "gen_schema",
+        "channel_schema_id",
+        "state_design_kind",
         "generation_behavior_version",
         "gen_fingerprint",
         "generator_source_root_sha256",
@@ -2916,10 +3509,12 @@ def compare_directories(
         force_exact=True,
     )
 
-    raw_identical = 0
+    raw_identical = sum(
+        states_a.authenticated_digests[state_name]
+        == states_b.authenticated_digests[state_name]
+        for state_name in ev_a.state_files
+    )
     for state_name in ev_a.state_files:
-        if sha256(path_a / state_name) == sha256(path_b / state_name):
-            raw_identical += 1
         loaded_a, loaded_b = states_a[state_name], states_b[state_name]
         top_a = {
             key: value
@@ -2963,6 +3558,15 @@ def compare_directories(
         raise QualificationInputError(
             "comparison reached zero semantic leaves or zero signal values"
         )
+    # Both endpoints were read, parsed and compared above.  Re-verify their
+    # digested MAT content AND their separate authorization sidecars now,
+    # BEFORE any verdict leaves this function.  A directory modified while it
+    # was being compared must not produce a verdict describing a mixture of
+    # old and new endpoint evidence.
+    _reassert_endpoint_snapshot(path_a, ev_a, policy)
+    _reassert_endpoint_snapshot(path_b, ev_b, policy)
+    _assert_policy_sources_unchanged(policy, "dataset comparison")
+
     if stats.mismatches:
         verdict = "MATERIALLY-DIFFERENT"
     elif stats.numerical_difference:
@@ -2986,28 +3590,139 @@ def compare_directories(
     )
 
 
-def _receipt_payload(result: ComparisonResult, *, accepted: bool) -> dict[str, Any]:
-    current = _current_policy()
-    if (
-        current.environment_lock_sha256 != result.environment_lock_sha256
-        or current.parser_environment != result.parser_environment
-        or current.python_runtime_source_root_sha256
-        != result.python_runtime_source_root_sha256
-        or current.python_runtime_source_file_count
-        != result.python_runtime_source_file_count
-    ):
+def _assert_result_matches_current_policy(
+    result: ComparisonResult,
+    current: CurrentPolicy,
+) -> None:
+    """Reject a stale/forged ComparisonResult before receipt publication."""
+    _assert_policy_sources_unchanged(
+        current, "ComparisonResult current-policy check"
+    )
+    result_policy = {
+        "environment_lock_sha256": result.environment_lock_sha256,
+        "parser_environment": result.parser_environment,
+        "python_runtime_source_root_sha256": (
+            result.python_runtime_source_root_sha256
+        ),
+        "python_runtime_source_file_count": (
+            result.python_runtime_source_file_count
+        ),
+    }
+    expected_policy = {
+        "environment_lock_sha256": current.environment_lock_sha256,
+        "parser_environment": current.parser_environment,
+        "python_runtime_source_root_sha256": (
+            current.python_runtime_source_root_sha256
+        ),
+        "python_runtime_source_file_count": (
+            current.python_runtime_source_file_count
+        ),
+    }
+    if result_policy != expected_policy:
         raise QualificationInputError(
             "repository/parser provenance changed after comparison; rerun the "
             "comparison before writing a receipt"
         )
-    return {
+    if (
+        isinstance(result.tolerance_rtol, (bool, np.bool_))
+        or isinstance(result.tolerance_atol, (bool, np.bool_))
+        or not math.isfinite(result.tolerance_rtol)
+        or not math.isfinite(result.tolerance_atol)
+        or result.tolerance_rtol < 0
+        or result.tolerance_atol < 0
+        or result.tolerance_rtol > _DEFAULT_RTOL
+        or result.tolerance_atol > _DEFAULT_ATOL
+    ):
+        raise QualificationInputError(
+            "ComparisonResult tolerances are outside the reviewed policy"
+        )
+    if (
+        type(result.raw_byte_identical_states) is not int
+        or result.raw_byte_identical_states < 0
+        or result.raw_byte_identical_states > result.evidence_a.n_states
+    ):
+        raise QualificationInputError(
+            "ComparisonResult raw-byte identity count is malformed"
+        )
+    expected_verdict = (
+        "MATERIALLY-DIFFERENT"
+        if result.stats.mismatches
+        else "NUMERICALLY-EQUIVALENT"
+        if result.stats.numerical_difference
+        else "SEMANTICALLY-BIT-IDENTICAL"
+    )
+    if result.verdict != expected_verdict:
+        raise QualificationInputError(
+            "ComparisonResult verdict is inconsistent with its statistics"
+        )
+    if result.evidence_a.stage != result.evidence_b.stage:
+        raise QualificationInputError(
+            "ComparisonResult endpoints no longer bind one stage"
+        )
+    stage = result.evidence_a.stage
+    expected_qualification = _expected_qualification_source_sha256(
+        stage, current.source_snapshot
+    )
+    expected_executable = hashlib.sha256(
+        _expected_qualification_source_bytes(
+            stage, current.source_snapshot
+        )
+    ).hexdigest()
+    expected_evidence = {
+        "campaign_matlab_release": current.campaign_matlab_release,
+        "campaign_matlab_environment_descriptor": (
+            current.campaign_matlab_environment_descriptor
+        ),
+        "campaign_matlab_environment_sha256": (
+            current.campaign_matlab_environment_sha256
+        ),
+        "gen_schema": current.gen_schema,
+        "channel_schema_id": current.channel_schema_id,
+        "generation_behavior_version": current.generation_behavior_version,
+        "generator_source_root_sha256": current.generator_source_root_sha256,
+        "generator_source_file_count": current.generator_source_file_count,
+        "max_parfor_workers": current.max_parfor_workers,
+        "qualification_source_sha256": expected_qualification,
+        "qualification_executed_file_sha256": expected_executable,
+    }
+    for owner, evidence in (
+        ("dataset_a", result.evidence_a),
+        ("dataset_b", result.evidence_b),
+    ):
+        mismatches = sorted(
+            field
+            for field, expected in expected_evidence.items()
+            if getattr(evidence, field) != expected
+        )
+        if mismatches:
+            raise QualificationInputError(
+                f"{owner} ComparisonResult policy/qualification bindings are "
+                f"stale or forged: {mismatches}"
+            )
+    _assert_policy_sources_unchanged(
+        current, "ComparisonResult current-policy check"
+    )
+
+
+def _receipt_payload(result: ComparisonResult, *, accepted: bool) -> dict[str, Any]:
+    if accepted and result.verdict != "NUMERICALLY-EQUIVALENT":
+        raise QualificationInputError(
+            "numerical-equivalence acceptance is valid only for a "
+            "NUMERICALLY-EQUIVALENT verdict"
+        )
+    current = _current_policy()
+    _assert_result_matches_current_policy(result, current)
+    comparator_bytes = _read_single_link_regular_bytes(
+        Path(__file__).resolve(), "qualification comparator source"
+    )
+    payload = {
         "schema": "matlab-environment-qualification-receipt-v4",
         "semantic_exactness_definition": (
             "Exact canonical payload equality after excluding only declared "
             "actual-environment fields and MAT-container metadata; not raw "
             "MAT-file byte identity."
         ),
-        "comparator_sha256": sha256(Path(__file__).resolve()),
+        "comparator_sha256": hashlib.sha256(comparator_bytes).hexdigest(),
         "environment_lock_sha256": result.environment_lock_sha256,
         "parser_environment": result.parser_environment,
         "python_runtime_source_root_sha256":
@@ -3047,26 +3762,122 @@ def _receipt_payload(result: ComparisonResult, *, accepted: bool) -> dict[str, A
         "comparison": asdict(result.stats),
         "raw_byte_identical_states": result.raw_byte_identical_states,
     }
+    # Close compare-to-receipt windows for every endpoint and for repository
+    # policy.  Receipt publication receives no success payload unless both are
+    # still exactly the identities authenticated by the ComparisonResult.
+    _reassert_endpoint_snapshot(
+        Path(result.evidence_a.path), result.evidence_a, current
+    )
+    _reassert_endpoint_snapshot(
+        Path(result.evidence_b.path), result.evidence_b, current
+    )
+    _assert_policy_sources_unchanged(current, "receipt construction")
+    final_policy = _current_policy()
+    if final_policy != current:
+        raise QualificationInputError(
+            "repository policy changed during receipt construction; rerun the "
+            "comparison"
+        )
+    _assert_result_matches_current_policy(result, final_policy)
+    _assert_policy_sources_unchanged(final_policy, "receipt construction")
+    if _read_single_link_regular_bytes(
+        Path(__file__).resolve(), "qualification comparator source"
+    ) != comparator_bytes:
+        raise QualificationInputError(
+            "qualification comparator source changed during receipt "
+            "construction"
+        )
+    return payload
 
 
-def _write_receipt(path: Path, payload: dict[str, Any]) -> None:
+def _write_receipt(
+    path: Path,
+    result: ComparisonResult,
+    *,
+    accepted: bool,
+) -> None:
+    payload = _receipt_payload(result, accepted=accepted)
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    # Keep the final reassertion inside the publishing function, immediately
+    # before exclusive creation.  Returning a checked payload to a separate
+    # writer would reopen a compare-to-publication window.
+    publication_policy = _current_policy()
+    _assert_result_matches_current_policy(result, publication_policy)
+    _reassert_endpoint_snapshot(
+        Path(result.evidence_a.path), result.evidence_a, publication_policy
+    )
+    _reassert_endpoint_snapshot(
+        Path(result.evidence_b.path), result.evidence_b, publication_policy
+    )
+    _assert_policy_sources_unchanged(
+        publication_policy, "pre-publication qualification policy"
+    )
+    if _current_policy() != publication_policy:
+        raise QualificationInputError(
+            "repository policy changed immediately before receipt publication"
+        )
+    comparator_bytes = _read_single_link_regular_bytes(
+        Path(__file__).resolve(), "qualification comparator source"
+    )
+    if hashlib.sha256(comparator_bytes).hexdigest() != payload[
+        "comparator_sha256"
+    ]:
+        raise QualificationInputError(
+            "qualification comparator source changed immediately before "
+            "receipt publication"
+        )
     try:
-        with path.open("x", encoding="utf-8", newline="\n") as fh:
+        with path.open("xb") as fh:
             fh.write(encoded)
+            fh.flush()
+            os.fsync(fh.fileno())
     except FileExistsError as exc:
         raise QualificationInputError(
             f"refusing to overwrite existing qualification receipt: {path}"
         ) from exc
-    if (
-        path.is_symlink()
-        or not path.is_file()
-        or path.read_text(encoding="utf-8") != encoded
-    ):
+    except OSError as exc:
         raise QualificationInputError(
-            f"qualification receipt did not persist as the exact regular file: {path}"
+            "could not persist the create-once qualification receipt; any "
+            "created path was retained for forensic review"
+        ) from exc
+    persisted = _read_single_link_regular_bytes(
+        path, "published qualification receipt"
+    )
+    if persisted != encoded:
+        raise QualificationInputError(
+            "qualification receipt did not persist as the exact intended "
+            f"single-link regular file: {path}"
         )
+    try:
+        _reassert_endpoint_snapshot(
+            Path(result.evidence_a.path),
+            result.evidence_a,
+            publication_policy,
+        )
+        _reassert_endpoint_snapshot(
+            Path(result.evidence_b.path),
+            result.evidence_b,
+            publication_policy,
+        )
+        _assert_policy_sources_unchanged(
+            publication_policy, "post-publication qualification policy"
+        )
+        if _current_policy() != publication_policy:
+            raise QualificationInputError(
+                "repository policy changed across receipt publication"
+            )
+    except (QualificationInputError, OSError) as exc:
+        # The create-once receipt is deliberately retained: removing through
+        # a mutable pathname would reopen the same check/unlink race avoided
+        # by dispatch publication.  This call raises, so the retained bytes
+        # cannot be mistaken for a successful authorization.
+        raise QualificationInputError(
+            "post-publication evidence validation failed; the create-once "
+            f"qualification receipt was retained for forensic review: {exc}"
+        ) from exc
 
 
 def _print_result(result: ComparisonResult) -> None:
@@ -3158,7 +3969,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.accept_numerical:
                 if args.receipt:
                     _write_receipt(
-                        args.receipt, _receipt_payload(result, accepted=False)
+                        args.receipt, result, accepted=False
                     )
                 print(
                     "PENDING: numerical equivalence is not automatic qualification. "
@@ -3173,15 +3984,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.receipt:
             _write_receipt(
                 args.receipt,
-                _receipt_payload(
-                    result,
-                    accepted=(
-                        result.verdict == "SEMANTICALLY-BIT-IDENTICAL"
-                        or (
-                            result.verdict == "NUMERICALLY-EQUIVALENT"
-                            and args.accept_numerical
-                        )
-                    ),
+                result,
+                accepted=(
+                    result.verdict == "NUMERICALLY-EQUIVALENT"
+                    and args.accept_numerical
                 ),
             )
             print(f"  receipt: {args.receipt}")

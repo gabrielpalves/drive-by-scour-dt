@@ -1,0 +1,110 @@
+{
+  "schema": "paper1-model-form-freeze-evidence-v1",
+  "status": "COMPLETE",
+  "claim_scope": "pre-commit-A finite-domain and deterministic model-form selection evidence",
+  "source": {
+    "source_commit_at_execution": "865728f801c83a642b06a223f2a22b33f2b429b7",
+    "source_clean_at_execution": false,
+    "generator_source_root_sha256": "aa187204cb3f89e24cb8bc894034044bad38b0358f5e0cd586338f84a8418efb",
+    "generator_source_file_count": 344,
+    "live_root_recomputed_after_execution": true,
+    "host": "PADILHA",
+    "matlab_release": "2025b"
+  },
+  "rail_domain_clearance": {
+    "artifact_root": ".audit_tmp/paper1_freeze_20260810_final03/rail_clearance",
+    "production_decision_id": "paper1-rail-domain-clearance-c06-v1",
+    "reviewed_production_decision_confirmed": true,
+    "input_hash": "ca7bd7f916385a9db5f6c6350d8d326532f610ede6662c7ae127e942e5b44667",
+    "manifest_sha256": "371b015e6087b28a4fc28f938107ac07a01e2390e4be356bbc2c7c1bb82ff2a6",
+    "completion_marker_sha256": "fbd9b41ce45319c06b74d9e443e7541d4ee5a52d0eeb0ff5aa0309463e0c10b4",
+    "verdict_sha256": "3853eae13e858335e55e9322021f33bb09ec031273de2d087aca079b0c57b0ee",
+    "case_count": 18,
+    "matrix": "F40 and L99.6 x V70/T3, V80/T18, V90/T33 x 6, 15, 30 m",
+    "status": "PASS",
+    "selected_production_clearance_m": 6,
+    "coarse_6_vs_30": {
+      "status": "PASS",
+      "worst_nrmse": 1.85338375347334e-08,
+      "worst_normalized_max_error": 3.33843543383935e-08,
+      "minimum_correlation": 0.999999999999999,
+      "maximum_profile_delta_m": 5.34294830600857e-16
+    },
+    "primary_15_vs_30": {
+      "status": "PASS",
+      "worst_nrmse": 1.8880802005705e-08,
+      "worst_normalized_max_error": 3.3614090533877e-08,
+      "minimum_correlation": 0.999999999999999,
+      "maximum_profile_delta_m": 5.34294830600857e-16
+    },
+    "claim_boundary": "finite-rail-domain choice for the registered matrix only; not general convergence, damage-model validation, or physical/field validation"
+  },
+  "track_parameter_sensitivity": {
+    "artifact": ".audit_tmp/paper1_freeze_20260810_final03/track_model_form.mat",
+    "artifact_sha256": "d1c192d7ce1df7046d77b01350283a42808f35a93518b37d49a5ca9a899f3c01",
+    "status": "EXPLORATORY_PARAMETER_SENSITIVITY_COMPLETE",
+    "case": "healthy F40, 80 km/h, 18 C, fixed Class-4 profile seed 20260728",
+    "production_baseline": "baseline-hybrid-v1",
+    "maximum_absolute_vehicle_channel_fractional_changes": {
+      "consistent_one_seat": {
+        "rms": 0.016042585306087931,
+        "peak": 0.01964384240029049
+      },
+      "consistent_two_rail": {
+        "rms": 0.020284201108495714,
+        "peak": 0.021607075456136049
+      },
+      "spacing_consistent_0p600_m": {
+        "rms": 0.0012619344052918757,
+        "peak": 0.001673840638091395
+      },
+      "rail_damping_0p050_percent": {
+        "rms": 0.000041902339956045864,
+        "peak": 0.00044279904517074975
+      },
+      "rail_damping_0p200_percent": {
+        "rms": 0.000065542780961602709,
+        "peak": 0.00042057808807849373
+      }
+    },
+    "bridge_acceleration_rms_m_s2": {
+      "baseline": 0.31102669278521078,
+      "consistent_one_seat": 0.3141014755098463,
+      "consistent_two_rail": 0.28777002607991514,
+      "spacing_consistent_0p600_m": 0.31007103517732132,
+      "rail_damping_0p050_percent": 0.31102941169682585,
+      "rail_damping_0p200_percent": 0.31102161649943588
+    },
+    "claim_boundary": "paired deterministic parameter sensitivity; signed changes are not population inference"
+  },
+  "rayleigh_closure_sensitivity": {
+    "artifact": ".audit_tmp/paper1_freeze_20260810_final03/rayleigh_model_form.mat",
+    "artifact_sha256": "8dd34fa37519fd86a0c69b638198ed56b82715e0b7a49cc3b247672bb7b524b2",
+    "status": "EXPLORATORY_PARAMETER_SENSITIVITY_COMPLETE",
+    "production_policy": "recalibrated-current-state-grid-v1",
+    "sensitivity_policy": "fixed-coefficients-sensitivity-v1",
+    "fixed_healthy_coefficients": {
+      "source_id": "healthy-F40-V80-T18-rayleigh-v1",
+      "bridge_alpha": 0.85183250456986725,
+      "bridge_beta": 0.0010462948858574865,
+      "rail_alpha": 0.028394416818995568,
+      "rail_beta": 0.000034876496195249571
+    },
+    "fixed_closure_changes_only_damping": true,
+    "crn_controls_exact": true,
+    "bridge_acceleration_rms_fractional_change": {
+      "scour": 0.0114772403056973,
+      "bearing_fixity": -0.01889931558072222,
+      "crack": 0.0002266223880316165
+    },
+    "maximum_absolute_vehicle_channel_fractional_change": {
+      "scour_rms": 0.000088995708493966319,
+      "scour_peak": 0.00003044218001924115,
+      "bearing_fixity_rms": 0.00022634657526987567,
+      "bearing_fixity_peak": 0.000090897750850582604,
+      "crack_rms": 0.0000027309446481993405,
+      "crack_peak": 0.00000092032797582852766
+    },
+    "claim_boundary": "paired deterministic damping-closure sensitivity; signed changes are not population inference"
+  }
+}

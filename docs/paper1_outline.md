@@ -7,6 +7,11 @@
 > regenerated campaign. The authoritative methods draft is
 > `docs/paper1_methodology.md`; the dispatch verdict is
 > `docs/audit_r5_results.md`.
+>
+> “Registered” in this outline means **prospectively specified in versioned,
+> hash-identified repository source**. It denotes no external registry deposit
+> and must not be described as externally preregistered. No OSF/Zenodo protocol
+> deposit is required or planned for this numerical SHM study.
 
 ## Working title
 
@@ -23,38 +28,43 @@ Avoid “damage depth,” “all damages,” “N-HiTS architecture,”
 
 ## One-sentence paper claim
 
-Under a registered 2-D TTBI simulation, fixed semantic state populations,
+Under a registered 2-D TTBI simulation, fixed semantic state designs,
 full-array-calibrated hyperparameters, and a state-grouped test firewall, the
 study quantifies how registered architecture/response-channel-subset choices and
-seven modeled L60 mechanism additions change achievable multi-pier
-support-stiffness-loss estimation after rung-specific retraining.
+seven registered L60 simulator intervention/task contrasts change achievable
+multi-pier support-stiffness-loss estimation after rung-specific retraining.
 
 This is the intended scope, not a result. The abstract must replace “quantifies”
 with the observed effect sizes only after the complete campaign.
 
 ## Contributions to test
 
-1. **A fixed-population CRN experiment.** L60 uses 450 semantic states at every
+1. **A fixed-design CRN experiment.** L60 uses 450 semantic states at every
    rung and L99.6 uses 475, with identical latent designs, UID-stable splits,
    and named random substreams within each geometry.
 2. **A compute-feasible, anchor-only HPO policy.** Free 100-trial HPO is
-   restricted to the full eight-DOF input at independent L60/s0 and L99/s21
+   restricted to the full eight-channel input at independent L60/s0 and L99/s21
    anchors; every other candidate and follower uses one exact frozen singleton
    trial. Architecture comparisons remain conditional on separate finite
    equal-budget searches and the registered seed set.
-3. **A four-arm architecture experiment with an actual pooling control.** The
-   plain CNN/GAP arm tests whether the implemented multi-rate pooling adds value;
-   the module is described as N-HiTS-inspired, not as full N-HiTS.
+3. **An equal-budget four-family architecture experiment.** The plain CNN/GAP
+   arm is the predeclared comparator for the multi-rate family. Report
+   conditional family-performance differences under separate equal 100-trial
+   searches; do not interpret them as the isolated causal value of pooling.
+   Describe the module as N-HiTS-inspired, not as full N-HiTS.
 4. **A two-channel response-subset study with a full-array control.** Conclusions
    are conditional on the registered full-array-calibrated policy and the
-   symmetric relative-noise stress. The code selects channels/DOFs, not physical
-   transducer count, packages, mounts, placement, or sensor technologies.
+   symmetric relative-noise stress. The code selects response-channel indices
+   (called "DOFs" only in frozen schema keys), not physical transducer count,
+   packages, mounts, placement, or sensor technologies.
 5. **Multi-target estimation and confounding diagnostics.** The task estimates
    pier-specific support-stiffness loss, identifies the most affected pier, and
-   measures bearing error and scour↔bearing leakage where bearing heads exist.
-6. **Seven paired L60 mechanism contrasts.** The primary analysis uses the exact
+   measures nominal-fixity error and support-loss↔fixity leakage where fixity
+   heads exist.
+6. **Seven paired L60 intervention/task contrasts.** The registered analysis uses the exact
    common outer-joint StateUIDs, paired training seeds, 100,000 state-first
-   bootstrap replicates, and Bonferroni familywise intervals.
+   resampling replicates, pointwise sensitivity intervals, and wider
+   seven-edge tail-adjusted sensitivity intervals.
 7. **Transparent physics and claim boundaries.** Scour is stiffness loss, crack
    is a uniform damaged-element \(EI\) block, hanging sleepers are linear
    support removal, and L99.6 is a blockwise scale/stress experiment.
@@ -82,30 +92,32 @@ and collaborators, plus relevant bearing/track-roughness studies. Existing work
 already establishes important feasibility, PAA, EOV, and sensor-placement
 precedents; do not claim those concepts as new. The methodological delta is the
 registered architecture/response-channel-subset experiment with fixed semantic
-populations, common random numbers, separate execution blocks, and paired
-state-level inference. Physical sensor-placement optimization remains outside
+designs, common random numbers, separate execution blocks, and paired
+state-level sensitivity analyses. Physical sensor-placement optimization remains outside
 the implemented experiment.
 
 ### Research questions
 
 - RQ1: Under the registered full-array calibration, which architecture and
-  two-channel response subset minimize inner-validation scour MSE at each
+  two-channel response subset minimize inner-validation support-stiffness-loss
+  MSE at each
   geometry anchor?
 - RQ2: What performance is lost or gained by using the selected two-channel subset
-  rather than the full eight-DOF response array?
+  rather than the full eight-channel response array?
 - RQ3: How accurately can one passage estimate multiple pier-specific
   stiffness-loss targets and localize the most affected pier?
-- RQ4: How do bearing, crack, persistent FRA-4 profile variability, track-layer
-  mechanisms, and wheel polygonization change achievable L60 performance?
+- RQ4: What achievable-performance changes occur under the registered bearing
+  task/physics, crack, persistent FRA-4 phase, track-layer, and wheel-
+  polygonization simulator interventions?
 - RQ5: How does the method behave in the separate four-span L99.6 scale/stress
   block?
 
 ### Claimed scope in the introduction
 
 Say “modeled support-stiffness loss” rather than physical scour depth. Say
-“response channel/DOF” rather than physical sensor count or placement. Say
-“performance under rung-specific retraining” rather than zero-shot OOD
-robustness.
+“response channel” (or “legacy DOF index” when discussing code keys) rather
+than physical sensor count or placement. Say “performance under rung-specific
+retraining” rather than zero-shot OOD robustness.
 
 ## 2. Related work
 
@@ -140,25 +152,57 @@ sources.
 
 ### 3.1 Registered TTBI model
 
+- Record software provenance exactly: the MATLAB lineage derives from
+  TTB-2D/SoftwareX, repository `ElsevierSoftwareX/SOFTX-D-22-00221`, upstream
+  commit `28d35528ac6624200a881bcd6130382b81579a01` (2022-10-11). At the first
+  local import (`4530bf1238b45d442da5071b8d02559913164dab`), 41 common files
+  were byte-identical to that upstream snapshot and 16 common files were
+  already modified. Cite the
+  SoftwareX software article/repository and describe subsequent local
+  modifications; do not imply the present generator is unmodified upstream
+  code.
 - 2-D vertical train–track–bridge coupling;
 - L60 three-span and L99.6 four-span bridges;
 - five-vehicle train, leading-vehicle measurements;
-- eight candidate response DOFs;
-- exact authorized physical parameters, mesh, solver, time step, crop, and
-  healthy modal-frequency sanity checks;
+- eight candidate response channels: three vehicle vertical accelerations, two
+  virtual Eulerian rail-acceleration samples at moving wheel coordinates, and
+  three vehicle pitch angular velocities;
+- exact implemented physical parameters with the open no-shear/deck-condensed
+  ballast-topology, planar-scaling, and 0.545-to-0.600 m spacing-transfer
+  caveats; do not claim every per-rail value was summed, that the retained set
+  is spacing-consistent, or that it reproduces Zhai's five-parameter topology;
+  classify the separate 0.1% rail Rayleigh target as inherited author-chosen;
+- geometry-specific support-aligned bridge/rail meshes (L60: 0.2/0.3 m;
+  L99.6: 0.3/0.3 m), solver, time step, crop, and the two-level
+  modal gate: 0.2–15 Hz first-passage admissibility for every state, plus
+  the healthy-target gate (L60 ≈4.18 Hz, accepted 3–6 Hz; L99.6 ≈2.75 Hz,
+  accepted 2–4 Hz);
 - bilateral-contact limitation, flats disabled, contact diagnostics and
   time-step closure.
 
 ### 3.2 Damage and nuisance semantics
 
 - scour: \(k_v(d)=(1-d)k_{v0}\), target = support-stiffness loss%;
-- bearing: nominal rotational fixity, not physical damage%;
+- bearing: nominal rotational fixity, not seized-bearing/physical damage%;
 - crack: uniform damaged-element \(EI\) loss, not Sinha/crack depth;
-- profile: fixed baseline through `s13`, then per-state FRA-4 phase distribution;
-- ballast/pad/hanging sleepers: registered linear track-layer mechanisms;
+- profile: one generated FRA-4 realization (phase seed 20260728) fixed
+  through `s13`, then per-state FRA-4 phase distribution (L99.6: fixed
+  through `s22`, per-state only at `s23`);
+- ballast/pad/hanging sleepers: registered linear track-layer mechanisms; the
+  exact count, group/patch, transition/coupling, wet/dry, pad-condition, and
+  failure laws are author-chosen stress priors or narrowly contextualized
+  engineering proxies, not fitted population distributions;
 - hanging-sleeper gap/void depth absent;
 - wheel polygonization included with probability/order/lognormal-amplitude law
-  reported exactly; flats excluded.
+  reported exactly and labelled an author-chosen design prior (the cited
+  literature supports the polygonization physics, not the exact
+  occurrence/severity numbers); flats excluded;
+- crack activation per family: off in controlled healthy/scour/bearing
+  families, forced on in `nuisance_only`, author-chosen UID-keyed Bernoulli
+  0.25 in `joint` (not a fitted population prevalence);
+- channel comparator named exactly: front-bogie vertical acceleration plus
+  Eulerian rail vertical acceleration sampled at the moving wheel-1 coordinate,
+  channel indices `[1, 3]`; `Wheel1_Vert` remains only a legacy schema key.
 
 ### 3.3 Rung graph
 
@@ -174,14 +218,16 @@ Registered L60 edges are
 `s0→s11`, `s0→s12`, `s11→s13`, `s12→s13`, `s13→s14`,
 `s14→s15`, and `s15→s16`.
 
-State explicitly that the bearing edges add bearing physics, output heads, and
-multi-task learning together. State that `s13→s14` replaces the fixed profile
-with the per-state FRA-4 distribution.
+State explicitly that the bearing edges add a nominal-fixity intervention,
+output heads, and multi-task learning together. These are registered
+simulator/task contrasts, not isolated bearing-physics effects. State that
+`s13→s14` retains the same FRA-v2 class-4 spectrum/cutoffs and replaces only
+one fixed phase realization with persistent per-state phase realizations.
 
 Present `s21→s22→s23` in a separate panel labelled **L99.6 blockwise
 scale/stress design**. Do not draw a causal `s0→s21` arrow.
 
-### 3.4 State populations and CRN
+### 3.4 State design and CRN
 
 Report the fixed families:
 
@@ -196,6 +242,19 @@ the state is the analysis/resampling cluster relative to passages, which are
 correlated repeated observations. The fixed anchors and one joint LHS realization
 are not an iid field sample.
 
+Justify 50 passages/state prospectively as a balanced, compute-feasible inner
+integration budget for 50 speed-temperature LHS operating cells per state. Do
+not present 50 as an independent-sample count, power calculation, or universal
+passage-level MCSE guarantee. Predeclare the stability policy: report
+training-seed IQR and development-only repeated-CV ranks; use the existing
+0.5-percentage-point MCSE target and ten-independent-evaluation-state floor
+only in `family_size_mcse_recommendations.csv` to plan **state counts in a
+future regeneration**, never to resize or exclude R11 states retrospectively.
+
+Define `target_healthy` as a legacy identifier for an all-zero target vector
+under the rung's active EOV policy (crack forced off). Call it the
+**zero-target baseline**, not a clean physical condition.
+
 ### 3.5 Data and preprocessing
 
 - noise-free raw MATLAB signals;
@@ -208,7 +267,8 @@ are not an iid field sample.
 - 50×2 speed/temperature LHS rounded to integer km/h/°C and exact five-vehicle
   Gaussian variability laws (body mass 10% CV, primary and secondary stiffness
   5% CV each);
-- global-DOF-keyed `all_mult` observation noise.
+- legacy-global-DOF-keyed `all_mult` observation noise (the key is a channel
+  index, not a modeled-degree-of-freedom assertion).
 
 Call `all_mult` a symmetric 5% relative-noise stress, not a physical
 accelerometer noise model.
@@ -218,14 +278,15 @@ accelerometer noise model.
 Compare:
 
 - CNN + multi-rate pooling;
-- Space2Vec CNN + multi-rate pooling;
+- CNN + Time2Vec-style spatial encoding + multi-rate pooling (internal key
+  `PAA_S2V_NHiTS`);
 - LSTM CNN + multi-rate pooling;
 - plain CNN + GAP.
 
 Treat the full array as a non-selectable response-budget control and candidate
 two-channel subsets as the reduced-input budget. `s0` and `s21` independently select
 their block reference architecture/pair; each anchor's 100-trial full-array
-calibration also supplies that anchor's non-selectable eight-DOF control.
+calibration also supplies that anchor's non-selectable eight-channel control.
 Each anchor also evaluates 8 single channels × 4 architectures × 3 seeds as a
 frozen diagnostic that cannot select the reference.
 `s16` and `s23` reopen the exact 4-architecture × 28-pair × 3-seed matrix with
@@ -233,15 +294,21 @@ frozen singleton parameters as exploratory deployment analyses. Their
 separate winners cannot rewrite the block reference used for registered
 contrasts.
 
-State explicitly that the five vertical-acceleration and three pitch-angular-
-velocity channels are modeled response quantities, not eight accelerometers.
-A subset can map to one or several devices; physical device count, package,
-mount, and placement are not identified.
+State explicitly that the array contains three vehicle vertical accelerations,
+two virtual moving-coordinate Eulerian rail-acceleration samples, and three
+vehicle pitch angular velocities—not eight accelerometers. A subset can map to
+one, several, or (for a virtual rail row under the present observation model)
+no directly deployable device. Physical device count, package, mount, and
+placement are not identified.
+
+Use `n_channels` in every new table/artifact. The code retains `n_sensors` only
+as an exact deprecated alias for compatibility with pre-R11 readers; disclose
+that alias once and never use it as a physical-count variable.
 
 ### 3.7 HPO and execution policy
 
 - two independent physical blocks: L60/s0 and L99/s21;
-- at each anchor: full eight DOFs only, 4 architectures × 3 seeds × 100 trials,
+- at each anchor: full eight-channel input only, 4 architectures × 3 seeds × 100 trials,
   registered multivariate TPE and Successive-Halving pruner enabled;
 - canonical best parameters stored per architecture × seed;
 - all candidates/followers: one exact Optuna singleton trial, no pruner;
@@ -284,18 +351,21 @@ generic “fixed seeds” statement.
   carried-reference, and full-array controls;
 - immutable outer test opened after freeze.
 
-### 3.9 Outcomes and inference
+### 3.9 Outcomes and registered analyses
 
 Within rungs:
 
-- scour MSE/per-pier MSE and RMSE;
+- support-stiffness-loss MSE/per-pier MSE and RMSE;
 - most-damaged-pier localization as a passage-level point estimate only when
   maximum true scour is strictly greater than 5 percentage points; no
   registered state-level localization interval;
-- bearing MSE and leakage diagnostics;
+- nominal rotational-fixity MSE and leakage diagnostics;
 - finite-seed median and seed IQR;
-- 2,000-draw, seed-42 state-first uncertainty for registered MSE report
-  comparators.
+- 2,000-draw, seed-42 state-first, pointwise finite-design resampling
+  sensitivity intervals for registered MSE report comparators;
+- explicit machine-readable `joint_claim_permitted=false` and
+  `superiority_claim_permitted=false`; no simultaneous or superiority
+  statement may be inferred from multiple within-rung intervals.
 
 Across L60:
 
@@ -306,13 +376,15 @@ Across L60:
 - mean over states within seed, median over fixed seeds;
 - right-minus-left edge effect in squared percentage points;
 - 100,000 paired state-first bootstrap replicates;
-- pointwise 95% and seven-edge Bonferroni familywise intervals;
+- pointwise central-95% and seven-edge alpha/7-tail-adjusted finite-design
+  resampling sensitivity intervals;
 - exploratory bearing×crack difference-in-differences.
 
 Describe both bootstrap analyses as empirical finite-design state-resampling
-uncertainty conditional on the registered anchor/LHS design. Do not claim
-field-population or design-superpopulation coverage without LHS-aware variance
-estimation or independent replicated state designs.
+sensitivity conditional on the registered anchor/LHS design. Neither interval
+is a confidence/FWER guarantee or supports significance, superiority, or a
+joint sign claim. Field-population or design-superpopulation inference would
+require an LHS-aware variance method or independent replicated state designs.
 
 ### 3.10 MATLAB host qualification and production parity
 
@@ -320,20 +392,20 @@ estimation or independent replicated state designs.
   `TTBI_QUALIFICATION_HOST_ID`;
 - freshly regenerate transient qualification scripts from clean commit A; run
   at least `s0_scour`, `s16_all`, and `s23_all4` on every required host;
-- retain each authenticated `qualification_host_receipt.json`, whose hardware
-  diagnostics are bound to the actual MATLAB environment, qualification source,
+- retain each validated `qualification_host_receipt.json`, whose self-attested
+  hardware diagnostics are bound to the actual MATLAB environment, qualification source,
   and exact executed script;
 - compare corresponding stage outputs for the required host/environment pairs
   and retain accepted `matlab-environment-qualification-receipt-v4` evidence;
 - require explicit acceptance for numerical equivalence; do not infer
   qualification from a comparator exit log alone;
 - CPU equality is not required. Equal MATLAB-environment digests are allowed
-  only for distinct authenticated host IDs, and host identity is not part of
+  only for distinct validated declared host IDs, and host identity is not part of
   production `gen_schema` or `gen_fingerprint`;
 - report the present 35-state/105-passage `s0_scour` laptop micro (27 min 32 s)
   only as pre-convergence, one-host integration/timing evidence. Every intended
   host must still run all three stages from commit A, and corresponding outputs
-  from distinct authenticated host IDs require accepted v4 receipts; and
+  from distinct validated declared host IDs require accepted v4 receipts; and
 - in production, wait specifically for a complete `0001.mat`, then run the
   MATLAB raw-parity smoke and dependent Python checker sequentially. Do not
   admit later output until both pass.
@@ -347,7 +419,9 @@ Report:
 - authorized source commit and protocol hashes;
 - every per-host MATLAB qualification sidecar and accepted v4 pairwise
   comparison receipt, plus environment/execution/capacity receipt identities;
-- exact state/passages counts and excluded passage reasons;
+- exact state/passage counts (a contact violation aborts authenticated
+  generation before a passage is ever admitted — there are no post-hoc
+  passage exclusions to report);
 - contact-closure result;
 - complete HPO terminal-state accounting;
 - no split or artifact-provenance failures.
@@ -363,46 +437,54 @@ out of selection tables.
 For each registered rung, compare the frozen two-channel reference against the full
 array with paired state-level effect estimates. Avoid “2 ≈ 8” unless the
 predefined equivalence/noninferiority criterion exists; otherwise report the
-effect and interval.
+effect and its explicitly pointwise finite-design sensitivity interval.
 
 ### 4.4 Multi-pier estimation and localization
 
-Report per-pier error and aggregate scour error with their registered
-state-resampling intervals. Report localisation separately as the registered
+Report per-pier error and aggregate support-stiffness-loss error with their registered
+pointwise finite-design resampling sensitivity intervals. Report localisation
+separately as the registered
 passage-level point estimate; do not attach the MSE interval to it. Do not call
 the task “detection.”
 
-### 4.5 Bearing estimation and leakage
+### 4.5 Nominal rotational-fixity estimation and leakage
 
 Separate:
 
-- bearing-head predictive error;
-- false scour response in bearing-only states;
-- false bearing response in scour-only states;
-- the combined cost of bearing physics plus extra heads/multi-task training.
+- fixity-head predictive error;
+- false support-stiffness-loss response in bearing-only states;
+- false fixity response in scour-only states;
+- the combined contrast of nominal-fixity physics plus extra heads/multi-task
+  training.
 
 ### 4.6 Seven L60 edge effects
 
 Primary table:
 
-| Edge | Mechanism/task change | Estimate (right−left) | Pointwise 95% CI | Bonferroni familywise CI | Outer analysis states |
+| Edge | Registered simulator/task change | Estimate (right−left) | Pointwise finite-design sensitivity interval | Seven-edge tail-adjusted sensitivity interval | Outer analysis states |
 |---|---|---:|---:|---:|---:|
-| `s0→s11` | bearing physics + heads/multi-task | pending | pending | pending | pending |
+| `s0→s11` | nominal-fixity intervention + heads/multi-task | pending | pending | pending | pending |
 | `s0→s12` | crack nuisance | pending | pending | pending | pending |
-| `s11→s13` | crack nuisance with bearing task | pending | pending | pending | pending |
-| `s12→s13` | bearing physics + heads/multi-task | pending | pending | pending | pending |
+| `s11→s13` | crack nuisance with fixity task | pending | pending | pending | pending |
+| `s12→s13` | nominal-fixity intervention + heads/multi-task | pending | pending | pending | pending |
 | `s13→s14` | fixed profile → per-state FRA-4 | pending | pending | pending | pending |
 | `s14→s15` | track-layer mechanisms | pending | pending | pending | pending |
 | `s15→s16` | wheel polygonization | pending | pending | pending | pending |
 
-Only the Bonferroni interval supports a familywise sign statement. Report the
-exploratory difference-in-differences separately.
+Both interval columns are descriptive finite-design sensitivity analyses.
+Neither supports confidence/FWER, significance, superiority, or joint-sign
+claims. Report the exploratory difference-in-differences separately.
 
 ### 4.7 L99.6 blockwise scale/stress results
 
 Report L99 independently, with its own anchor/reference/protocol identities.
 Do not interpret `s0→s21` as an L60-to-L99 treatment effect and do not insert
-L99 rows into the seven-edge family.
+L99 rows into the seven registered L60 contrasts. Restrict L99 to descriptive
+within-block performance and stress-configuration summaries. Do not estimate a
+paired cross-geometry effect: geometry, number of target heads, semantic-state
+inventory, anchor HPO/reference, and potentially runtime all change together.
+Treat `s21→s22` and `s22→s23` as composite blockwise configuration changes, not
+one-factor causal effects.
 
 ### 4.8 Diagnostic repeated CV
 
@@ -411,10 +493,13 @@ re-rank the canonical selection or replace the outer-test estimate.
 
 ## 5. Discussion
 
-Discuss only mechanisms supported by paired estimates and their intervals.
+Discuss registered simulator/task contrasts through paired effect estimates and
+their finite-design sensitivity intervals, without translating them into field
+causal claims.
 Potential topics:
 
-- whether multi-rate pooling adds value beyond the plain CNN/GAP control;
+- equal-budget conditional performance differences between the multi-rate and
+  plain CNN/GAP architecture families (not isolated causal value of pooling);
 - whether selected response-channel subsets change between geometry/EOV deployment
   regimes;
 - whether the full array materially improves over the selected two-channel budget;
@@ -436,12 +521,13 @@ Potential topics:
 - `all_mult` is not a datasheet-based sensor model;
 - candidate space, physical sensor mapping, and finite full-array-calibrated
   HPO searches bound all optimality claims;
-- finite-design bootstrap intervals are not field-population coverage
-  intervals;
+- finite-design resampling sensitivity intervals are not confidence/FWER or
+  field/design-superpopulation intervals and do not establish superiority;
 - rung-specific retraining is not zero-shot OOD evaluation;
 - no detection/POD/sensitivity/minimum-severity claim without a locked binary
   threshold;
-- L99.6 is blockwise, not confirmatory one-factor inference.
+- L99.6 is descriptive/blockwise, not one-factor or cross-geometry causal
+  inference.
 
 ## 6. Conclusion
 
@@ -453,14 +539,14 @@ and state the field-validation requirement.
 
 | Figure | Content | Source/status |
 |---|---|---|
-| 1 | TTBI model, bridge geometries, eight response DOFs | redraw from authorized model |
+| 1 | TTBI model, bridge geometries, eight response channels | redraw from authorized model |
 | 2 | L60 directed edge graph + separate L99 block | create from registered protocol |
 | 3 | fixed state families, latent design and named CRN streams | create |
 | 4 | PAA + four architecture arms, including plain CNN/GAP control | redraw |
 | 5 | split/HPO/test firewall and two independent execution blocks | create |
 | 6 | L60 anchor architecture/response-subset results | regenerate |
 | 7 | selected two-channel vs full-array paired effects | regenerate |
-| 8 | seven-edge estimates with pointwise and Bonferroni intervals | regenerate |
+| 8 | seven-edge estimates with pointwise and tail-adjusted finite-design sensitivity intervals | regenerate |
 | 9 | per-pier parity/localization and bearing leakage | regenerate |
 | 10 | L99 blockwise results | regenerate |
 
@@ -468,7 +554,7 @@ and state the field-validation requirement.
 
 1. Literature delta table, verified against primary sources.
 2. Authorized TTBI and damage/EOV parameter table.
-3. State families, counts, persistence, and inferential roles.
+3. State families, counts, persistence, and analysis roles.
 4. Architecture/HPO/search-budget specification.
 5. L60 and L99 anchor selection tables.
 6. Per-rung outer-test performance and analysis-state counts.
@@ -482,10 +568,13 @@ and state the field-validation requirement.
   lineage.
 - No historical figure or result number remains.
 - “State” and “passage” counts are never conflated.
-- Selection, diagnostic CV, outer-test reporting, seven-edge inference,
+- Selection, diagnostic CV, outer-test reporting, the seven-edge paired
+  sensitivity analysis,
   exploratory deployment selection, and L99 blockwise analysis are visibly
   separated.
-- All multiplicity claims use the registered seven-edge family.
+- No table, caption, or machine-readable field turns the seven-edge
+  tail-adjusted sensitivity envelope into a confidence/FWER, significance,
+  superiority, or joint-sign claim.
 - All physical labels and model limitations use the terminology above.
 - No statement elevates the symmetric relative-noise arm to a hardware sensor
   comparison.

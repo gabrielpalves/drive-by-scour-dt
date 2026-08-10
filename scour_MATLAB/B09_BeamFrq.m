@@ -30,6 +30,8 @@ function [Beam] = B09_BeamFrq(Beam,Calc)
 if and(Calc.Options.calc_beam_frq == 1,Calc.Options.calc_beam_modes == 0)
 
     lambda = eig(full(Beam.Mesh.Kg),full(Beam.Mesh.Mg));
+    [lambda,~] = local_sorted_eigenvalues( ...
+        lambda, Beam.Modal.num_rigid_modes);
     Beam.Modal.w = sqrt(lambda);
     Beam.Modal.f = Beam.Modal.w/(2*pi);
 
@@ -41,7 +43,8 @@ if and(Calc.Options.calc_beam_frq == 1,Calc.Options.calc_beam_modes == 0)
 elseif and(Calc.Options.calc_beam_frq == 1,Calc.Options.calc_beam_modes == 1)
     
     [V,lambda] = eig(full(Beam.Mesh.Kg),full(Beam.Mesh.Mg));
-    [lambda,k] = sort(diag(lambda));
+    [lambda,k] = local_sorted_eigenvalues( ...
+        diag(lambda), Beam.Modal.num_rigid_modes);
     V = V(:,k); 
     
     % Normaliztion of eigenvectors
@@ -89,3 +92,45 @@ if Calc.Plot.P2_Beam_modes >= 1
 end % if Calc.Plot.P2_Beam_modes == 1
 
 % ---- End of function ----
+end
+
+function [lambda, order] = local_sorted_eigenvalues( ...
+        raw_lambda, expected_rigid_modes)
+% Generalized EIG does not promise eigenvalue order.  Rayleigh damping and
+% fixed-DOF removal both require ascending modal order, so make it explicit
+% and reject anything beyond round-off departure from a real PSD spectrum.
+if ~isscalar(expected_rigid_modes) || ...
+        expected_rigid_modes ~= floor(expected_rigid_modes) || ...
+        expected_rigid_modes < 0 || expected_rigid_modes > 2
+    error('B09:InvalidRigidModeCount', ...
+        'Expected beam rigid-mode count must be an integer in [0,2].');
+end
+if any(~isfinite(raw_lambda))
+    error('B09:NonfiniteEigenvalue', ...
+        'Generalized beam eigenproblem returned a non-finite eigenvalue.');
+end
+scale = max([1; abs(raw_lambda(:))]);
+% A global relative tolerance such as 1e-10*max(lambda) is far too loose for
+% FE spectra spanning many decades.  Bound round-off by 128 ULPs at the
+% largest eigenvalue, then require exactly the independently derived number
+% of near-zero rigid modes.
+tol = 128 * eps(max(scale));
+if any(abs(imag(raw_lambda(:))) > tol)
+    error('B09:ComplexEigenvalue', ...
+        'Generalized beam eigenproblem returned a materially complex value.');
+end
+lambda = real(raw_lambda(:));
+if any(lambda < -tol)
+    error('B09:NegativeEigenvalue', ...
+        'Generalized beam eigenproblem returned a materially negative value.');
+end
+[lambda, order] = sort(lambda, 'ascend');
+near_zero = abs(lambda) <= tol;
+if sum(near_zero) ~= expected_rigid_modes
+    error('B09:RigidModeCountMismatch', ...
+        ['Eigenproblem has %d near-zero modes within %.6g, but boundary ' ...
+         'conditions predict %d.'], ...
+        sum(near_zero), tol, expected_rigid_modes);
+end
+lambda(near_zero) = 0;
+end

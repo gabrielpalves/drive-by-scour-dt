@@ -1,8 +1,8 @@
 """
 digital_twin/scour_multi.py
 ===========================
-Correlated multi-foundation scour evolution (Kamariotis gradual + flood shock)
-with a Gaussian-copula dependence structure across supports.
+Correlated multi-foundation support-stiffness-loss scenario model with a
+Gaussian-copula dependence structure across supports.
 
 Why a copula
 ------------
@@ -15,11 +15,13 @@ of dependence (per the project notes / Adnan 2026):
   2. Proximity (local): closely-spaced piers interact hydraulically, so their
      scour is extra-correlated; far-apart piers are independent in this term.
 
-We encode both in a single correlation matrix and sample the Kamariotis
-marginals (A, B, the inter-annual noise, and the flood-jump magnitudes) through
-a Gaussian copula with that correlation. Floods are a *shared* arrival process
-(one river → one Poisson clock); only the per-pier jump magnitudes are
-correlated-but-not-identical.
+We encode both in a single correlation matrix and sample the implemented
+gradual-process marginals (A, B, and inter-annual noise) through that copula.
+Floods are a *shared* arrival process (one river → one Poisson clock); only
+the per-pier jump magnitudes are correlated-but-not-identical. The flood rate
+and jump distribution are author-chosen scenario values pending site-specific
+or primary-source calibration; this is not a validated hydraulic deterioration
+law.
 
 This model is self-contained (NumPy only) so it is testable without the torch /
 TTBI stack. It produces a per-support scour-rate vector to feed straight into
@@ -35,13 +37,17 @@ import numpy as np
 
 
 class MultiScourModel:
-    DAMAGE_MAX: float = 60.0   # cap on scour damage [%], per support
+    # Campaign design ceiling in percentage points of modeled support-stiffness
+    # loss. It is not a physical scour-depth or failure limit.
+    DAMAGE_MAX: float = 60.0
 
-    # --- Kamariotis marginals (mirror ScourModel) ---
+    # Generic structural-deterioration marginals from Kamariotis et al. (2023),
+    # Table 1, mirrored from ScourModel. They are borrowed scenario priors, not
+    # hydraulic-scour or support-loss calibration.
     _A_MEAN: float = 1.94e-4;  _A_COV: float = 0.40
     _B_MEAN: float = 2.0;      _B_COV: float = 0.10
     _OMEGA_MEAN: float = -0.005; _OMEGA_COV: float = 0.10
-    # --- shared flood (Compound Poisson) ---
+    # --- shared flood (Compound Poisson; author-chosen scenario values) ---
     _LAMBDA_FLOOD: float = 0.10   # flood arrivals per year (one river clock)
     _JUMP_MEAN:    float = 5.0    # mean scour increment per flood [%]
     _JUMP_COV:     float = 0.60
@@ -108,7 +114,7 @@ class MultiScourModel:
     # ── evolution ───────────────────────────────────────────────────────────────
 
     def evolve(self, delta_t: float) -> np.ndarray:
-        """Advance all supports by delta_t years; return scour fractions [0,1]."""
+        """Advance by ``delta_t`` years and return TTBI loss fractions [0, 0.60]."""
         t_mid = self.time + delta_t / 2.0
         gradual_rate = self._A * self._B * (t_mid ** (self._B - 1.0))
         omega_sigma  = abs(self._OMEGA_MEAN * self._OMEGA_COV)
@@ -143,11 +149,24 @@ class MultiScourModel:
         return self.last_severity
 
     def get_scour_fractions(self) -> np.ndarray:
-        """Per-support scour fraction in [0, 1] (= damage% / DAMAGE_MAX, capped)."""
+        """Return TTBI support-stiffness-loss fractions.
+
+        ``current_X`` is stored in percentage points, whereas TTBI consumes a
+        dimensionless loss fraction ``d`` in ``k_v=(1-d)k_v0``. Therefore a
+        30% state maps to 0.30 and the 60% campaign ceiling maps to 0.60.
+        """
+        return np.clip(self.current_X, 0.0, self.DAMAGE_MAX) / 100.0
+
+    def get_normalized_severity(self) -> np.ndarray:
+        """Return state severity normalized by the 60% design ceiling to [0, 1].
+
+        This quantity can be useful for plotting or policy features, but it is
+        not a valid ``Damage.scour_rates`` input to TTBI.
+        """
         return np.clip(self.current_X, 0.0, self.DAMAGE_MAX) / self.DAMAGE_MAX
 
     def get_scour_rates(self) -> np.ndarray:
-        """Alias for the TTBI Damage.scour_rates vector (vertical-stiffness loss)."""
+        """TTBI ``Damage.scour_rates`` vector (support-stiffness-loss fraction)."""
         return self.get_scour_fractions()
 
     def repair(self, support: int | None = None) -> None:

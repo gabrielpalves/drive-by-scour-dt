@@ -1,10 +1,15 @@
 """Authenticated, compute-feasible hyperparameter execution policy.
 
-The campaign has two deliberately different Optuna modes:
+The campaign has three deliberately different Optuna modes:
 
 ``anchor_hpo``
-    A 100-trial search, with the registered pruner, performed only for the
-    full eight-channel input at the physical-execution-block anchor.
+    A 100-trial search, with the registered pruner, performed for each F40-S
+    factorial architecture on the prospectively selected front-bogie channel.
+
+``selected_pair_hpo``
+    A separate 100-trial search for each authenticated retained-pipeline slot
+    on the F40-S-selected physical sensor pair, independently within F40-S,
+    F40-M, L99-S, and L99-M.
 
 ``frozen_singleton``
     One real Optuna trial whose distributions are singleton domains copied
@@ -36,37 +41,50 @@ from core.execution_environment import (
     validate_execution_runtime,
 )
 from core.source_provenance import python_runtime_source_root
+from core.paper1_training_contract import (
+    ANCHOR_CHANNEL_INDEX,
+    FACTORIAL_CELLS,
+    HPO_RESTART_SEEDS,
+    RETAINED_PIPELINE_SLOTS,
+    STAGE_ORDER,
+)
 
 
-POLICY_SCHEMA = "ttbi-hyperparameter-execution-policy-v1"
-RUN_PLAN_SCHEMA = "ttbi-hyperparameter-run-plan-v2"
-MANIFEST_SCHEMA = "ttbi-hyperparameter-manifest-v3"
-STUDY_IDENTITY_SCHEMA = "ttbi-anchor-study-identity-v2"
-SOURCE_SCHEMA = "ttbi-frozen-hyperparameter-source-v1"
+POLICY_SCHEMA = "ttbi-hyperparameter-execution-policy-v3"
+RUN_PLAN_SCHEMA = "ttbi-hyperparameter-run-plan-v4"
+MANIFEST_SCHEMA = "ttbi-hyperparameter-manifest-v4"
+STUDY_IDENTITY_SCHEMA = "ttbi-anchor-study-identity-v3"
+SOURCE_SCHEMA = "ttbi-frozen-hyperparameter-source-v2"
 
 ANCHOR_HPO_MODE = "anchor_hpo"
+SELECTED_PAIR_HPO_MODE = "selected_pair_hpo"
 FROZEN_SINGLETON_MODE = "frozen_singleton"
 LEGACY_MODE = "legacy"
 
-ARCHITECTURES = (
-    "PAA_NHiTS",
-    "PAA_S2V_NHiTS",
-    "PAA_LSTM_NHiTS",
-    "PAA_CNN",
-)
-SEEDS = (42, 1337, 2026)
+ARCHITECTURES = tuple(cell.cell_id for cell in FACTORIAL_CELLS)
+SEEDS = tuple(HPO_RESTART_SEEDS)
 FULL_DOF_INPUT = tuple(range(8))
+HPO_ANCHOR_INPUT = (ANCHOR_CHANNEL_INDEX,)
 
 HYPERPARAMETER_POLICY = {
     "schema": POLICY_SCHEMA,
     "execution_blocks": {
-        "l60": {"anchor_stage": "s0_scour"},
-        "l99": {"anchor_stage": "s21_scour4"},
+        "f40s": {"anchor_stage": "F40-S"},
+        "f40m": {"anchor_stage": "F40-M"},
+        "l99s": {"anchor_stage": "L99-S"},
+        "l99m": {"anchor_stage": "L99-M"},
     },
     "architectures": list(ARCHITECTURES),
     "seeds": list(SEEDS),
     "anchor_hpo": {
-        "active_dofs": list(FULL_DOF_INPUT),
+        "active_dofs": list(HPO_ANCHOR_INPUT),
+        "n_trials": 100,
+        "use_registered_pruner": True,
+    },
+    "selected_pair_hpo": {
+        "applicable_stages": list(STAGE_ORDER),
+        "retained_pipeline_slots": list(RETAINED_PIPELINE_SLOTS),
+        "active_dofs": "authenticated F40-S selected_pair",
         "n_trials": 100,
         "use_registered_pruner": True,
     },
@@ -76,9 +94,10 @@ HYPERPARAMETER_POLICY = {
         "optuna_distribution": "one-point domain for every active parameter",
     },
     "selection_scope": (
-        "hyperparameters are selected only on the full eight-DOF control at "
-        "each execution-block anchor and are frozen by architecture and seed "
-        "for every sensor subset and downstream rung in that block"
+        "F40-S factorial hyperparameters are selected on front-bogie vertical "
+        "acceleration; frozen settings screen all singles/pairs, the selected "
+        "pair is re-HPO'd, and F40-M/L99-S/L99-M each receive independent "
+        "selected-pair HPO (no transport/rescue trigger)"
     ),
     "failure_contract": {
         "failed_trials_allowed": 0,
@@ -108,6 +127,9 @@ _CAMPAIGN_CONFIG_MARKERS = {
     "campaign_run_tag",
     "execution_receipt_sha256",
     "block_reference_manifest_sha256",
+    "selection_artifact",
+    "selection_artifact_sha256",
+    "selection_slot",
 }
 _MANIFEST_KEYS = {
     "schema",
@@ -145,6 +167,7 @@ _IDENTITY_KEYS = {
     "dataset",
     "model_name",
     "execution_environment_sha256",
+    "execution_compatibility_sha256",
     "campaign_run_tag",
     "execution_receipt_sha256",
     "study_protocol_record_sha256",
@@ -193,6 +216,8 @@ _RUN_PLAN_KEYS = {
     "block_reference_manifest_sha256",
     "hyperparameter_manifest_sha256",
     "hyperparameter_source",
+    "selection_artifact_sha256",
+    "selection_slot",
 }
 
 
@@ -398,6 +423,8 @@ def validate_run_plan(plan: dict) -> dict:
                 "block_reference_manifest_sha256",
                 "hyperparameter_manifest_sha256",
                 "hyperparameter_source",
+                "selection_artifact_sha256",
+                "selection_slot",
             )
         ):
             raise HyperparameterPolicyError(
@@ -416,7 +443,11 @@ def validate_run_plan(plan: dict) -> dict:
             )
         return value
 
-    if mode not in {ANCHOR_HPO_MODE, FROZEN_SINGLETON_MODE}:
+    if mode not in {
+        ANCHOR_HPO_MODE,
+        SELECTED_PAIR_HPO_MODE,
+        FROZEN_SINGLETON_MODE,
+    }:
         raise HyperparameterPolicyError(
             f"unregistered hyperparameter run mode {mode!r}"
         )
@@ -466,9 +497,9 @@ def validate_run_plan(plan: dict) -> dict:
         )
 
     if mode == ANCHOR_HPO_MODE:
-        if stage != anchor or dofs != FULL_DOF_INPUT:
+        if stage != "F40-S" or stage != anchor or dofs != HPO_ANCHOR_INPUT:
             raise HyperparameterPolicyError(
-                "anchor HPO plan is not the full eight-DOF block anchor"
+                "factorial anchor HPO must be F40-S/front-bogie only"
             )
         if (
             effective_n_trials
@@ -484,16 +515,54 @@ def validate_run_plan(plan: dict) -> dict:
         if (
             value["hyperparameter_manifest_sha256"] is not None
             or value["hyperparameter_source"] is not None
+            or value["selection_artifact_sha256"] is not None
+            or value["selection_slot"] is not None
         ):
             raise HyperparameterPolicyError(
-                "anchor HPO plan cites frozen hyperparameters"
+                "factorial anchor HPO plan carries downstream selection data"
+            )
+    elif mode == SELECTED_PAIR_HPO_MODE:
+        selected_policy = HYPERPARAMETER_POLICY["selected_pair_hpo"]
+        if (
+            stage not in selected_policy["applicable_stages"]
+            or stage != anchor
+            or len(dofs) != 2
+        ):
+            raise HyperparameterPolicyError(
+                "selected-pair HPO requires one registered block anchor and "
+                "two authenticated physical inputs"
+            )
+        if (
+            effective_n_trials != selected_policy["n_trials"]
+            or value["effective_use_pruner"]
+            is not selected_policy["use_registered_pruner"]
+        ):
+            raise HyperparameterPolicyError(
+                "selected-pair HPO plan has a non-registered budget/pruner mode"
+            )
+        if (
+            value["hyperparameter_manifest_sha256"] is not None
+            or value["hyperparameter_source"] is not None
+            or not _is_sha256(value["selection_artifact_sha256"])
+            or value["selection_slot"]
+            not in selected_policy["retained_pipeline_slots"]
+        ):
+            raise HyperparameterPolicyError(
+                "selected-pair HPO plan lacks its exact selection artefact/slot"
             )
     else:
         if (
-            stage == anchor and dofs == FULL_DOF_INPUT
+            stage == "F40-S" and stage == anchor and dofs == HPO_ANCHOR_INPUT
         ):
             raise HyperparameterPolicyError(
-                "full-array block anchor cannot use frozen-singleton mode"
+                "F40-S factorial anchor cannot use frozen-singleton mode"
+            )
+        if (
+            value["selection_artifact_sha256"] is not None
+            or value["selection_slot"] is not None
+        ):
+            raise HyperparameterPolicyError(
+                "frozen singleton plan carries selected-pair HPO lineage"
             )
         if (
             effective_n_trials
@@ -550,9 +619,9 @@ def validate_study_identity(identity: dict) -> dict:
         raise HyperparameterPolicyError("study identity carries the wrong anchor")
     architecture = _validated_architecture(value["architecture"])
     seed = _validated_seed(value["seed"])
-    if _validated_dofs(value["active_dofs"]) != FULL_DOF_INPUT:
+    if _validated_dofs(value["active_dofs"]) != HPO_ANCHOR_INPUT:
         raise HyperparameterPolicyError(
-            "anchor study identity was not calibrated on all eight DOFs"
+            "factorial study identity was not calibrated on front-bogie input"
         )
     _strict_nonempty_text(value["study_name"], "study name")
     _strict_nonempty_text(value["dataset"], "study dataset")
@@ -564,6 +633,7 @@ def validate_study_identity(identity: dict) -> dict:
     for key in (
         "protocol_hash",
         "execution_environment_sha256",
+        "execution_compatibility_sha256",
         "execution_receipt_sha256",
         "study_protocol_record_sha256",
         "best_params_sha256",
@@ -677,13 +747,12 @@ def validate_registered_params(architecture: str, params: dict) -> dict:
 
     architecture = _validated_architecture(architecture)
     values = _validate_params(params)
-    flags = {
-        "PAA_NHiTS": (False, False, True),
-        "PAA_S2V_NHiTS": (True, False, True),
-        "PAA_LSTM_NHiTS": (False, True, True),
-        "PAA_CNN": (False, False, False),
-    }
-    use_space2vec, use_lstm, use_nhits = flags[architecture]
+    cell = next(
+        item for item in FACTORIAL_CELLS if item.cell_id == architecture
+    )
+    use_space2vec = cell.position_encoding
+    use_lstm = cell.lstm
+    use_nhits = cell.multi_rate_pooling
     config = {
         "name_short": architecture,
         "use_space2vec": use_space2vec,
@@ -716,7 +785,7 @@ def validate_manifest(
     expected_source_root_sha256: str | None = None,
     expected_source_file_count: int | None = None,
 ) -> dict:
-    """Validate and authenticate a complete 4-architecture x 3-seed manifest."""
+    """Validate the complete 16-cell x five-restart F40-S manifest."""
 
     _validate_policy_alignment()
     if not isinstance(manifest, dict):
@@ -787,9 +856,14 @@ def validate_manifest(
         )
     if expected_runtime is not None:
         expected = validate_execution_runtime(expected_runtime)
-        if runtime != expected:
+        if (
+            runtime["execution_compatibility_sha256"]
+            != expected["execution_compatibility_sha256"]
+            or runtime["execution_compatibility_descriptor"]
+            != expected["execution_compatibility_descriptor"]
+        ):
             raise HyperparameterPolicyError(
-                "manifest runtime differs from the current execution runtime"
+                "manifest runtime is outside the current matched execution class"
             )
 
     source_sha = value["python_runtime_source_root_sha256"]
@@ -847,8 +921,8 @@ def validate_manifest(
             or identity["anchor_stage"] != anchor
             or identity["architecture"] != architecture
             or identity["seed"] != seed
-            or identity["execution_environment_sha256"]
-            != runtime["execution_environment_sha256"]
+            or identity["execution_compatibility_sha256"]
+            != runtime["execution_compatibility_sha256"]
             or identity["campaign_run_tag"] != run_tag
             or identity["execution_receipt_sha256"]
             != execution_receipt_sha
@@ -1275,6 +1349,8 @@ def derive_execution_plan(
             "block_reference_manifest_sha256": None,
             "hyperparameter_manifest_sha256": None,
             "hyperparameter_source": None,
+            "selection_artifact_sha256": None,
+            "selection_slot": None,
         })
 
     _validate_policy_alignment()
@@ -1366,17 +1442,26 @@ def derive_execution_plan(
             "execution runtime differs from the protocol block/anchor"
         )
 
-    expected_mode = (
-        ANCHOR_HPO_MODE
-        if stage == anchor and dofs == FULL_DOF_INPUT
-        else FROZEN_SINGLETON_MODE
-    )
     mode = config.get("hyperparameter_mode")
-    if mode not in {ANCHOR_HPO_MODE, FROZEN_SINGLETON_MODE}:
+    if mode not in {
+        ANCHOR_HPO_MODE,
+        SELECTED_PAIR_HPO_MODE,
+        FROZEN_SINGLETON_MODE,
+    }:
         raise HyperparameterPolicyError(
             "protocol-hashed config must explicitly declare "
-            f"hyperparameter_mode as {expected_mode!r}"
+            "one registered hyperparameter mode"
         )
+    expected_mode = (
+        SELECTED_PAIR_HPO_MODE
+        if mode == SELECTED_PAIR_HPO_MODE
+        else (
+            ANCHOR_HPO_MODE
+            if stage == "F40-S" and stage == anchor
+            and dofs == HPO_ANCHOR_INPUT
+            else FROZEN_SINGLETON_MODE
+        )
+    )
     if mode != expected_mode:
         raise HyperparameterPolicyError(
             f"{stage}/{list(dofs)} requires {expected_mode!r}, not {mode!r}"
@@ -1384,6 +1469,8 @@ def derive_execution_plan(
 
     manifest_sha: str | None = None
     source: dict | None = None
+    selection_artifact_sha: str | None = None
+    selection_slot: str | None = None
     if mode == ANCHOR_HPO_MODE:
         forbidden = {
             "frozen_hyperparameters",
@@ -1399,6 +1486,48 @@ def derive_execution_plan(
         effective_n_trials = HYPERPARAMETER_POLICY["anchor_hpo"]["n_trials"]
         effective_pruner = HYPERPARAMETER_POLICY[
             "anchor_hpo"
+        ]["use_registered_pruner"]
+    elif mode == SELECTED_PAIR_HPO_MODE:
+        forbidden = {
+            "frozen_hyperparameters",
+            "hyperparameter_manifest",
+            "hyperparameter_manifest_sha256",
+            "hyperparameter_source",
+        }.intersection(config)
+        if forbidden:
+            raise HyperparameterPolicyError(
+                "selected-pair HPO config carries frozen-manifest fields "
+                f"{sorted(forbidden)!r}"
+            )
+        from core.paper1_selection import (
+            Paper1SelectionError,
+            resolve_selection_claim,
+        )
+
+        selection_artifact = config.get("selection_artifact")
+        selection_artifact_sha = config.get("selection_artifact_sha256")
+        selection_slot = config.get("selection_slot")
+        try:
+            claim = resolve_selection_claim(
+                selection_artifact,
+                stage=stage,
+                slot=selection_slot,
+                pair=list(dofs),
+                architecture=architecture,
+                campaign_run_tag=campaign_run_tag,
+                artifact_sha256=selection_artifact_sha,
+            )
+        except Paper1SelectionError as exc:
+            raise HyperparameterPolicyError(
+                f"selected-pair HPO claim is invalid: {exc}"
+            ) from exc
+        selection_artifact_sha = claim["artifact_sha256"]
+        selection_slot = claim["slot"]
+        effective_n_trials = HYPERPARAMETER_POLICY[
+            "selected_pair_hpo"
+        ]["n_trials"]
+        effective_pruner = HYPERPARAMETER_POLICY[
+            "selected_pair_hpo"
         ]["use_registered_pruner"]
     else:
         manifest_sha, source = _validate_frozen_claim(
@@ -1441,6 +1570,8 @@ def derive_execution_plan(
         "block_reference_manifest_sha256": block_reference_sha,
         "hyperparameter_manifest_sha256": manifest_sha,
         "hyperparameter_source": source,
+        "selection_artifact_sha256": selection_artifact_sha,
+        "selection_slot": selection_slot,
     })
 
 
@@ -1534,6 +1665,8 @@ def anchor_study_identity(
         "use_pruner": plan["effective_use_pruner"],
         "execution_environment_sha256":
             runtime["execution_environment_sha256"],
+        "execution_compatibility_sha256":
+            runtime["execution_compatibility_sha256"],
         "campaign_run_tag": plan["campaign_run_tag"],
         "execution_receipt_sha256": plan["execution_receipt_sha256"],
         "block_reference_manifest_sha256":
@@ -1563,6 +1696,8 @@ def anchor_study_identity(
         "model_name": config["name"],
         "execution_environment_sha256":
             runtime["execution_environment_sha256"],
+        "execution_compatibility_sha256":
+            runtime["execution_compatibility_sha256"],
         "campaign_run_tag": plan["campaign_run_tag"],
         "execution_receipt_sha256": plan["execution_receipt_sha256"],
         "study_protocol_record_sha256": canonical_json_sha256(record),

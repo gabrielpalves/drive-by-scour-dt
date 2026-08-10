@@ -58,8 +58,8 @@ Convention below: **[N] Title** — bullets = on-slide; *say:* = the spoken why;
 - *say:* same backbone, same PAA front end — only the head + loss change. Clean control.
 
 **[6] The architecture we ablate (and the physics claim).**
-- Modular 1-D CNN + 3 toggle blocks: Space2Vec (spatial embedding), LSTM (recurrence),
-  **N-HiTS multi-rate pooling**.
+- Modular 1-D CNN + 3 toggle blocks: Time2Vec-style spatial-coordinate encoding,
+  LSTM (recurrence), and fixed-width adaptive **multi-rate pooling**.
 - **Physics claim:** the drive-by signal is two-timescale — fast wheel/rail transients over the
   slow deflection basin that actually encodes scour. Multi-rate pooling represents both by
   construction.
@@ -68,11 +68,12 @@ Convention below: **[N] Title** — bullets = on-slide; *say:* = the spoken why;
   help the already-strong channels — capacity without matching structure adds variance.
 
 **[7] The champion-selection metric (a methodological point Todd's group will probe).**
-- We do NOT rank by the single luckiest Optuna trial. We rank by **median error + IQR + a
-  collapse-rate** (fraction of runs that fail to learn the ordering), with a **UCB** variant
-  `MSĒ + 1.96·σ/√n`.
-- Multi-damage grid: **3 independent seeds/config**; train/val split fixed (seed 42) so seed
-  spread = init/HPO variance only. Single-scour study used 30-seed UCB.
+- We do NOT rank by the single luckiest Optuna trial. Five HPO winners are
+  adjudicated on prospectively seeded repeated grouped folds of development
+  states, with explicit initialization seeds.
+- After that choice is frozen, a separate predeclared refit set is evaluated on
+  the sealed outer test for report-only stability. Outer-test spread does not
+  re-rank the winner.
 - *say:* the collapse-rate is itself a *result* — some single-sensor configs look fine on the
   lucky trial and are unusable in deployment. This is the "reliably good, not occasionally
   excellent" argument. Invite critique here (it's a selection-statistics choice).
@@ -101,36 +102,43 @@ Convention below: **[N] Title** — bullets = on-slide; *say:* = the spoken why;
 - *fig:* Stage-1 4-head parity + a leakage bar.
 
 **[10b] How we anchor the nuisances (the "are you sure?" slide).**
-- Every EOV parameter is cited or derived-from-cited — including the **draw frequency**:
-  persistent conditions (profile realisation, crack, track state) are drawn **per damage
-  state**, not per passage, because track geometry evolves over MGT, not between trains
-  (EN 13848-2: ≤0.5 mm pass-to-pass repeatability).
-- **The prevalence paradox, resolved** — a nice story: field data say *~50% of concrete
-  sleepers show some voiding*; our mechanical model tops out at ~9%. Both are right —
-  most voids are **sub-threshold** (<1 mm absorbed elastically; **1–2 mm** already raises
-  adjacent contact force **~70%**). Only 10–20% of settled sleepers exceed 1.5–2 mm ⇒
-  **5–10% impactfully unsupported** ⇒ Poisson λ=3.0 groups/100 m.
-- Also corrected: pads (the cited 0.5% is an **annual incidence rate**, not a snapshot — we
-  were ~4× under); fouling↔voiding **coupled** (mud pumping); ballast **×3** near abutments.
-- *say:* this is the slide that answers "did you just make these numbers up?" — no, and where
-  we couldn't source something we say so (⚠ one GPR figure still needs a better source).
+- The nuisance distribution mixes scope-caveated engineering proxies of
+  primary measurements, one contradicted-and-retained band, and author-chosen
+  stress scenarios (the earlier "inferred" class is retracted). Persistent conditions
+  (profile realization, crack and track state) are drawn **per state** as an
+  explicit scenario-persistence assumption; EN 13848-2 measurement-system
+  repeatability does not establish physical pass-to-pass track persistence.
+- Field literature motivates frequent poor support and demonstrates large
+  dynamic effects for specific gaps, but it does not identify the campaign's
+  Poisson λ=3.0 count law or DU{1,…,5} group-size distribution. Those are
+  conditional modeling priors, not a solved population-prevalence paradox.
+- The pad-failure `p=0.02` is wholly author-chosen: the alleged 0.5% annual
+  rate is absent from Williams et al. (2014) and the other audited pad sources.
+  The 3:1 fouling/voiding odds and ×3 transition weighting are likewise
+  evidence-motivated design choices, not measured probabilities.
+- *say:* this slide separates what each source actually establishes from the
+  exact scenario distribution chosen by the authors.
 
 **[10c] A correction we're reporting, not hiding.**
 - For the crack location we computed the **moving-load |M| envelope** and concluded uniform
   placement was fine (envelope is broad; peaks favour mid-span ~2:1).
-- **The literature overturned it:** real cracking is **hogging-dominated >4:1** — over a pier
+- **The literature changed the design emphasis:** support-region cracking is
+  physically plausible — over a pier
   the **top fibre** is in tension (concrete's weakest mode) *and* takes runoff/chlorides;
-  **Eurocode 4** mandates a cracked section over 15% of span each side of supports.
+  Eurocode 4's cracked-section treatment motivates a support-region window but
+  does not estimate occurrence odds. The campaign's **4:1 weight is author-chosen**.
 - *say:* the envelope answers *"where is bending large?"*, not *"where does concrete fail?"* —
   the wrong lens. Good slide for this audience: it shows the method self-corrects.
 
 **[11] Result — the roughness finding (the interesting one).**
-- Under realistic **per-passage** roughness (first pilot), **all sprung channels collapsed** to
-  predict-the-mean; **unsprung wheel channels survived** → the clean-track ranking **inverted**.
-- Physics: suspension filtering + car-body resonance masks the quasi-static scour signal;
-  the unsprung mass traces profile+deflection directly (axle-box-acceleration literature).
-- **Mixed pair FrontBogie_Vert+Wheel1 beat wheel+wheel by 17%** despite the bogie alone being
-  collapse-level — a TSD/two-axle **residual (profile-reference) fusion** mechanism.
+- Under **per-passage** roughness in the first pilot, the modeled vehicle
+  channels collapsed while the virtual moving-coordinate rail channels retained
+  partial skill. The old "unsprung wheel channel" label was incorrect.
+- Channels 3/4 are (N(x_w)^T A_{rail}), not axle-box acceleration; axle-box
+  literature and suspension-chain arguments cannot be used as direct validation.
+- The legacy pair `FrontBogie_Vert+Wheel1_Vert` beat the two-moving-rail-channel
+  pair by 17% in that pilot. Call this an observed comparator result, not a
+  demonstrated TSD/unsprung-sensor fusion mechanism.
 - **Caveat (say it):** pilot used deprecated geometry + an over-aggressive per-passage EOV;
   we corrected the EOV design (per-STATE profile, FRA-4, EN 13848-2 rationale) and are
   regenerating — direction is robust, magnitudes pending.
@@ -157,8 +165,9 @@ Convention below: **[N] Title** — bullets = on-slide; *say:* = the spoken why;
 **[12] Whys, gathered (the intellectual core).**
 - Pooling wins because it matches two-timescale physics (not tuning luck) — consistent across
   classification AND regression.
-- "Which sensors" is **regime-dependent**: sprung win on clean track, unsprung under roughness,
-  and a **mixed pair** hedges — so sensor economy is really a **fusion** question.
+- The pilot ranks response representations, not deployable sensor locations:
+  channels 3/4 are virtual rail-field samples. A sensor-economy claim requires a
+  realizable observation model and cannot be drawn from this channel ranking.
 - Selection by robustness (collapse-rate) not point estimate.
 
 **[13] Limitations (say them before they ask).**

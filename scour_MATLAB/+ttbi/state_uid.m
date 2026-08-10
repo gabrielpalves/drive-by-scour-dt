@@ -1,0 +1,13 @@
+function uid = state_uid(L_bridge, num_spans, scour_supports, ...
+        family, target, level, replica)
+%STATE_UID Canonical semantic identity of one damage state.
+    % Stable semantic identity: deliberately excludes STAGE and row/DC.
+    % Corresponding states therefore retain one identity across rung-specific
+    % row insertions and across campaign blocks that intentionally share the
+    % same geometry and controlled state.  v2 encodes physical percentage in
+    % the scour anchor level, so F40-S and F40-M have identical matched UIDs.
+    uid = sprintf(['ttbi-state-v2|Lmm=%06d|spans=%d|scour=%s|' ...
+        'family=%s|target=%02d|level=%04d|rep=%03d'], ...
+        round(1000 * L_bridge), num_spans, sprintf('%02d', scour_supports), ...
+        family, target, level, replica);
+end

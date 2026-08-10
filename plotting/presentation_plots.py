@@ -42,7 +42,7 @@ import pandas as pd
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from aggregate_ablation import (  # noqa: E402
-    ARCH_LABEL, ARCH_ORDER, COLLAPSE_ACC, DOF_NAMES, LEAF_RE, OUT_DIR,
+    ARCH_LABEL, ARCH_ORDER, COLLAPSE_ACC, DOF_DISPLAY_NAMES, LEAF_RE, OUT_DIR,
     PALETTE, REPO_ROOT, RESULT_ROOTS, load_runs, summarise,
 )
 
@@ -227,7 +227,7 @@ def confusion_champion(arch: str) -> None:
         print(f"  [warn] no confusion matrix for {arch}")
         return
     fig, ax = plt.subplots(figsize=(6.2, 5.4))
-    im = _plot_cm(ax, cm, f"Champion confusion - {ARCH_LABEL[arch]} (Full 8-DOF)")
+    im = _plot_cm(ax, cm, f"Champion confusion - {ARCH_LABEL[arch]} (Full 8-channel)")
     fig.colorbar(im, ax=ax, fraction=0.046, label="row-normalised frequency")
     fig.tight_layout()
     fig.savefig(PRES_DIR / "confusion_champion.png", dpi=DPI, bbox_inches="tight")
@@ -245,7 +245,7 @@ def confusion_all_archs() -> None:
     if im is not None:
         fig.colorbar(im, ax=axes, fraction=0.025,
                      label="row-normalised frequency")
-    fig.suptitle("Confusion matrices on Full 8-DOF (seeds summed)")
+    fig.suptitle("Confusion matrices on Full 8-channel input (seeds summed)")
     fig.savefig(PRES_DIR / "confusion_all_archs.png", dpi=DPI)
     plt.close(fig)
 
@@ -268,7 +268,7 @@ def _grouped_barh(ax, pivot: pd.DataFrame, archs: list[str]) -> None:
 
 def all_archs_single_dof(summary: pd.DataFrame) -> None:
     s = summary[summary.phase == "CompA"].copy()
-    s["dof"] = s.dof_set.astype(int).map(lambda i: DOF_NAMES[i])
+    s["dof"] = s.dof_set.astype(int).map(lambda i: DOF_DISPLAY_NAMES[i])
     piv = s.pivot_table(index="dof", columns="arch", values="mse_median")
     piv = piv.reindex(columns=ARCH_ORDER)
     piv = piv.loc[piv.mean(axis=1).sort_values().index]  # best sensors on top
@@ -355,7 +355,7 @@ def main() -> None:
 
     print("Rendering boxplots ...")
     boxplot_arch_by_seed(df, opt, FULL8,
-                         "Architecture x seed - Full 8-DOF input",
+                         "Architecture x seed - Full 8-channel input",
                          "box_architecture_full8dof.png")
     boxplot_arch_by_seed(df, opt, best_pair.dof_set,
                          f"Architecture x seed - best 2-sensor input "

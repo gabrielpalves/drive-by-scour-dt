@@ -1,0 +1,206 @@
+\section{Introduction}
+\label{sec:introduction}
+
+\subsection{Motivation}
+\label{sec:motivation}
+
+Scour --- the removal of riverbed material from around bridge foundations by
+flowing water --- is consistently identified as a leading cause of bridge
+failure~\cite{wardhana2003analysis, arneson2012hec18}. For railway networks the
+exposure is systemic: a single scour-critical crossing can close a line, and
+probabilistic assessments of the British railway network attribute a
+substantial share of its weather-related risk to bridge scour during
+floods~\cite{lamb2019scour}. The hazard is also awkwardly timed. Scour develops
+fastest during high flows, exactly when visual and diver inspections are most
+dangerous and least reliable, and damage can refill with loose sediment before
+an inspection takes place~\cite{prendergast2014review, arneson2012hec18}.
+Instrumenting every vulnerable bridge permanently is rarely economical for a
+large inventory, which motivates indirect approaches that reuse vehicles
+already crossing the structure.
+
+Drive-by monitoring extracts information about a bridge from the dynamic
+response of a traversing vehicle, an idea introduced for bridge-frequency
+identification by Yang et al.~\cite{yang2004extracting} and since developed
+into a broad research field~\cite{malekjafarian2015review}, including dedicated
+railway applications~\cite{braganca2023review, souza2023review}. The physical
+basis for drive-by scour monitoring is established: foundation-stiffness loss
+changes the soil--foundation and structural dynamics
+\cite{prendergast2013investigation, prendergast2016determining}. Wavelet-based
+analyses of simulated train-borne signals identified localized scour
+signatures~\cite{fitzgerald2019drive}; vehicle pitch has shown specific scour
+sensitivity~\cite{mcgeown2024pitch}; scour-induced stiffness loss has been
+identified from field-measured drive-by data~\cite{tola2025scour}; and
+machine-learning pipelines have classified scour severity under operational
+variability~\cite{fernandes2024driveby, fernandes2025early,
+fernandes2026early, fernandes2026canelas}. A vehicle-borne estimate of
+foundation condition is also a natural input to decision-oriented monitoring
+and digital-twin frameworks~\cite{kamariotis2023framework,
+torzoni2024digital}, which benefit from a continuous component-level state
+rather than a binary alarm.
+
+\subsection{Related work: the drive-by scour and multi-damage line}
+\label{sec:related}
+
+This study continues the drive-by scour programme developed by Fernandes and
+co-workers. Fernandes et al.~\cite{fernandes2024driveby} detected scour,
+modeled as local pier-foundation stiffness loss, with an unsupervised deep
+autoencoder operating on raw vertical accelerations. Comparing on-board
+positions, they found the best detection at the bogies. Fernandes et
+al.~\cite{fernandes2025early} then studied supervised multi-damage
+classification of cracks, bearing-device damage, and scour using min--max
+normalization, Piecewise Aggregate Approximation (PAA), and a CNN tuned by
+Bayesian optimization. Fernandes et al.~\cite{fernandes2026early} classified
+scour levels with a supervised CNN and showed the value of adding speed as an
+input. Fernandes et al.~\cite{fernandes2026canelas} extended the approach to a
+high-fidelity finite-element model of the Canelas railway bridge, calibrated to
+field modal parameters, using a Bayesian-optimized CNN--LSTM.
+
+Three wider strands shape the present design. First, drive-by learning studies
+often hold the rail-irregularity profile fixed within a scenario while varying
+speed, mass, and noise~\cite{locke2020using, fernandes2025early}; profile
+handling must therefore be stated as an experimental choice. Second,
+sprung-mass channels are filtered by the suspension, whereas unsprung or
+axle-level responses act nearer the wheel--rail interface
+\cite{molodova2011axle, malekjafarian2015review}, which motivates comparing
+responses across suspension levels. Third, two-sensor residual concepts can
+cancel shared profile content~\cite{keenahan2014use, obrien2015apparent}, so
+pairs may contain information that neither member provides alone.
+
+This literature establishes feasibility, but it does not give a controlled
+answer to the linked design choices of representation, neural components, and
+response channels. Published studies generally optimize one pipeline or a
+small set of preselected positions. Independent searches can also mix method
+quality with finite hyperparameter-search luck, while passage-level splitting
+can leak the repeated observations of one bridge state across partitions.
+
+\subsection{Gap and design questions}
+\label{sec:gap}
+
+The experiment reported here is prospectively specified and source-locked:
+its scientific blocks, state catalogues, splits, training grid, selection
+rules, and analysis roles were fixed in versioned, hash-identified source
+before production data were generated. Throughout this paper, ``registered''
+is shorthand for that repository-fixed specification; it denotes no external
+registry deposit.
+
+The settled Paper-1 campaign contains four blocks rather than a progressive
+mechanism ladder. F40-S is a two-span, one-target scour benchmark; F40-M adds
+nominal bearing fixity and local flexural-rigidity loss. L99-S and L99-M repeat
+those scour-only and multi-damage roles on a four-span, three-target geometry.
+All blocks share one fixed rail-profile realization and vary speed,
+temperature, and vehicle properties between passages. Track-layer damage,
+wheel polygonization, suspension damage, and varied profile phases are
+deferred by configuration. Their implementation remains in the one qualified
+source tree, but they are not part of this experiment.
+
+Within that scope, the study asks:
+
+\begin{itemize}
+  \item \textbf{RQ1.} On F40-S, how do RAW versus PAA input, Time2Vec-style
+  spatial-coordinate encoding, LSTM recurrence, and fixed-width multi-rate
+  pooling affect grouped-development scour error across a matched 16-cell HPO
+  factorial?
+  \item \textbf{RQ2.} Among eight modeled \texttt{physical8\_v1} responses,
+  which unordered two-channel pair minimizes the prospectively specified
+  aggregate screen score for the retained RAW/PAA pipelines, and what do the
+  eight non-selectable single-channel diagnostics show?
+  \item \textbf{RQ3.} After independent selected-pair HPO in each block, how
+  accurately do the retained pipelines estimate one or three support-specific
+  stiffness-loss targets and localize the most affected support?
+  \item \textbf{RQ4.} On the genuinely shared semantic states, how does the
+  combined multi-damage physics/task block (nominal bearing fixity, local $EI$
+  loss, and bearing heads) differ from its scour-only counterpart in F40 and
+  L99?
+  \item \textbf{RQ5.} How stable are the frozen configurations across a
+  disjoint post-selection initialization set, and what descriptive change is
+  observed when F40-S settings are transferred downstream without retuning?
+\end{itemize}
+
+Three claim boundaries apply throughout. The target is modeled vertical
+support-stiffness loss, not physical scour-hole depth. The inputs are modeled
+response channels, not transducer packages or placements; specifically, the
+two wheelset rows are idealized total constrained-motion acceleration proxies,
+not validated axle-box sensor observations. Finally, each block receives its
+own selected-pair HPO for the primary analysis, so cross-block primary results
+do not measure frozen-hyperparameter transport.
+
+\subsection{Contributions}
+\label{sec:contributions}
+
+The paper contributes the following experimental design and, once populated by
+the authenticated campaign, its corresponding estimates:
+
+\begin{enumerate}
+  \item a four-block, state-grouped simulation design with explicit semantic
+  pairing: a 30-state F40-S/F40-M controlled subset and complete
+  475-state L99-S/L99-M pairing, with common random numbers only where those
+  identities actually match;
+  \item a balanced $2\times2\times2\times2$ architecture factorial covering
+  RAW/PAA, spatial encoding, recurrence, and fixed-width multi-rate pooling,
+  with five independent 100-trial HPO restarts per F40-S cell;
+  \item a complete Option-C adjudication in which the five HPO winners per cell
+  are compared on one predeclared three-fold grouped-development OOF partition
+  before the outer test is opened;
+  \item a prospectively listed \texttt{physical8\_v1} response screen over
+  eight non-selectable singles and all 28 selectable pairs for four retained
+  RAW/PAA pipeline slots, with paired initialization seeds and authenticated
+  alias deduplication;
+  \item independent selected-pair HPO and disjoint post-freeze stability fits
+  in every scientific block, separating primary block-local performance from a
+  secondary frozen-F40-S transfer analysis; and
+  \item explicit numerical and observation-model boundaries for the
+  support-aligned meshes, inherited track topology and scaling, Rayleigh
+  damping policy, and idealized wheelset response proxies.
+\end{enumerate}
+
+Table~\ref{tab:delta} summarizes the relation to the closest prior work.
+\pending{Add one sentence after Table~\ref{tab:delta} stating the headline
+authenticated four-block outcome.}
+
+\begin{table}[htbp]
+\centering
+\caption{This study in relation to the drive-by scour line of Fernandes et
+al. Prior-work entries summarize the cited primary sources.}
+\label{tab:delta}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.2cm}p{2.8cm}p{2.8cm}p{3.0cm}p{3.2cm}}
+\toprule
+Work & Task / mechanisms & Pipeline & Selection & Robustness / analysis \\
+\midrule
+Fernandes 2024~\cite{fernandes2024driveby} & unsupervised scour detection &
+raw signal + deep autoencoder & fixed AE; on-board positions compared & KL
+damage index, ROC \\
+\addlinespace
+Fernandes 2025~\cite{fernandes2025early} & classification of crack + bearing +
+scour & min--max + PAA + CNN & Bayesian-optimized CNN; two fixed channels &
+confusion matrices, boxplots, EOV sensitivity \\
+\addlinespace
+Fernandes 2026a~\cite{fernandes2026early} & classification of scour levels &
+CNN (+ speed input) & Bayesian-optimized CNN; two fixed channels & confusion
+matrices, boxplots \\
+\addlinespace
+Fernandes 2026b~\cite{fernandes2026canelas} & classification of scour depths
+(field-calibrated model) & CNN--LSTM & Bayesian-optimized per channel
+configuration & multi-run statistics \\
+\addlinespace
+\textbf{This work} & \textbf{continuous one-/three-support regression,
+localization, and bearing co-estimation in four explicit blocks} &
+\textbf{RAW/PAA $\times$ position $\times$ LSTM $\times$ fixed-width
+multi-rate factorial} & \textbf{Option-C grouped OOF adjudication; complete
+8-single/28-pair screen; per-block selected-pair HPO} & \textbf{sealed outer
+test; disjoint post-freeze stability; authenticated paired-state and secondary
+transfer roles} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Paper organization}
+
+Section~\ref{sec:framework} gives the experimental overview.
+Section~\ref{sec:simulation} describes the TTBI model, the four state
+catalogues, and active/deferred mechanisms. Section~\ref{sec:data_processing}
+details preprocessing, architectures, HPO, adjudication, and response-channel
+selection. Section~\ref{sec:results} provides results and discussion;
+Section~\ref{sec:limitations} states claim boundaries and practical
+feasibility; and Section~\ref{sec:conclusion} concludes.

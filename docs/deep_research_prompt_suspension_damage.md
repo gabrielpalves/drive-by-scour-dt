@@ -3,6 +3,18 @@
 > **HISTORICAL RESEARCH PROMPT.** Current R11 evaluates empirical robustness
 > under the simulated nuisance distribution; it does not assume or claim
 > mathematical invariance.
+>
+> **Correction (2026-08-03):** the prompt below describes the vehicle as
+> "10-DOF" and calls two saved rows wheel/axle responses. The implemented
+> TTB-2D vehicle carries **six** generalized DOFs (vertical + pitch of the car
+> body and both bogies; `scour_MATLAB/B18_TrainVehEq.m` builds a 6×6 mass
+> matrix). `AcelRodaPrimVag` is instead the rail FE nodal-acceleration field
+> interpolated at each instantaneous wheel coordinate,
+> `N(x_w)^T A_rail`: an Eulerian/partial acceleration. It is neither wheelset
+> acceleration nor the total acceleration following the moving contact point;
+> the latter's convective terms enter separately in `B66_ContactForce.m`.
+> The prompt is preserved verbatim as sent; do not reuse either its DOF count
+> or its sensor/channel interpretation.
 
 Paste the block below into Gemini Deep Research (or NotebookLM Deep Research).
 Written 2026-07-21, motivated by a methodology review of the ablation ladder: the

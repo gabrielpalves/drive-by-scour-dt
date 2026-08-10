@@ -3,8 +3,11 @@ import matplotlib.pyplot as plt
 
 def b17_calc_uat(Sol, Track, Calc, Veh):
     """
-    Function to calculate the vertical displacement of the model under the
-    wheels of each vehicle in the Train.
+    Interpolate rail FE fields at every instantaneous wheel coordinate.
+
+    ``acc_under = N(x_w).T @ A_rail`` is an Eulerian/partial-time rail
+    acceleration. It is not wheelset acceleration and not total acceleration
+    following the moving contact point; B66 adds the spatial/convective terms.
     """
 
     num_t = int(Calc.Solver.num_t)
@@ -57,7 +60,8 @@ def b17_calc_uat(Sol, Track, Calc, Veh):
             V_val = Sol.Model.Nodal.V[dofs_T, time_idx]
             A_val = Sol.Model.Nodal.A[dofs_T, time_idx]
 
-            # Compute the dot products instantaneously by summing down the rows (axis=0)
+            # Instantaneous FE interpolation. In particular, acc_under keeps
+            # only the Eulerian N(x_w).T @ A_rail contribution.
             Sol.Veh[v].def_under[wheel, valid_t] = np.sum(sf * U_val, axis=0)
             Sol.Veh[v].vel_under[wheel, valid_t] = np.sum(sf * V_val, axis=0)
             Sol.Veh[v].acc_under[wheel, valid_t] = np.sum(sf * A_val, axis=0)
@@ -88,7 +92,7 @@ def b17_calc_uat(Sol, Track, Calc, Veh):
     # plt.plot(Calc.Solver.t, Sol.Veh[v].acc_under.T)
     # plt.xlabel('Solver time (s)')
     # plt.ylabel('Acceleration (m/s^2)')
-    # plt.title(f'Acceleration under wheels of vehicle {v + 1}')
+    # plt.title(f'Eulerian rail acceleration at wheel coordinates, vehicle {v + 1}')
     # plt.autoscale(enable=True, axis='x', tight=True)
     # 
     # plt.tight_layout()

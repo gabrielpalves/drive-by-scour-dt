@@ -3,10 +3,13 @@ digital_twin/flood.py
 ======================
 The flood-decision layer of the drive-by Digital Twin (Paper 2, Step 2).
 
-Scour is flood-driven (Kamariotis Compound-Poisson shock, digital_twin.assets /
-scour_multi). When a flood occurs the asset owner does NOT yet know how much
-scour it added; they only have a noisy hydrological reading from a river-stage
-gauge. This module turns that reading into a decision input:
+The lifecycle layer adapts the generic compound-Poisson shock family used by
+Kamariotis et al. (2023) to an author-chosen flood/support-loss scenario
+(`digital_twin.assets` / `scour_multi`). Its rate and jump defaults are not
+hydraulic-scour calibration. When a flood occurs the asset owner does not yet
+know the modeled support-loss increment; they only have a noisy hydrological
+reading from a river-stage gauge. This module turns that reading into a
+decision input:
 
     1. FloodTrigger  — the major-vs-minor classifier. A river gauge measures
        stage precisely but DISCHARGE is inferred through a stage-discharge

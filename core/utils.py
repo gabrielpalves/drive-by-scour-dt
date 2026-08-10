@@ -242,7 +242,8 @@ def define_save_locations(
 # 3. DOF definitions - single source of truth
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Ordered list: index == DOF integer used throughout the codebase.
+# Ordered legacy schema identifiers: index == channel integer used throughout
+# the codebase. Do not rename Wheel1_Vert/Wheel2_Vert in stored results.
 DOF_NAMES: list[str] = [
     "CarBody_Vert",      # 0
     "FrontBogie_Vert",   # 1
@@ -252,6 +253,19 @@ DOF_NAMES: list[str] = [
     "CarBody_Pitch",     # 5
     "FrontBogie_Pitch",  # 6
     "RearBogie_Pitch",   # 7
+]
+
+DOF_DESCRIPTIONS: list[str] = [
+    "car-body vertical acceleration",
+    "front-bogie vertical acceleration",
+    "rear-bogie vertical acceleration",
+    ("idealized constrained-wheelset vertical acceleration at wheel 1 "
+     "(axle-box response proxy; frozen key Wheel1_Vert)"),
+    ("idealized constrained-wheelset vertical acceleration at wheel 2 "
+     "(axle-box response proxy; frozen key Wheel2_Vert)"),
+    "car-body pitch angular velocity",
+    "front-bogie pitch angular velocity",
+    "rear-bogie pitch angular velocity",
 ]
 
 # Convenience look-ups derived from DOF_NAMES - do not edit these directly.
@@ -276,6 +290,9 @@ def dof_label(dof: int) -> str:
     Raises:
         KeyError: If dof is not in [0, 7].
     """
+    if dof in (3, 4):
+        return DOF_DESCRIPTIONS[dof]
+
     raw   = IDX_TO_DOF_NAME[dof]           # e.g. "FrontBogie_Pitch"
     parts = raw.split('_')                  # ["FrontBogie", "Pitch"]
 

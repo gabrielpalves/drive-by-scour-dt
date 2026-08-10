@@ -1,7 +1,8 @@
 % Definition of Track
 function Track = A02_Track()
-% Not a function.
-% Defines the content of the variable Track.
+% A FUNCTION (converted from the upstream TTB-2D script): returns the Track
+% struct. Takes no arguments because the track properties are loaded from the
+% reviewed TrackProp source below rather than sampled per passage.
 
 % *************************************************************************
 % *** Script part of TTB-2D tool for Matlab environment.                ***
@@ -12,16 +13,14 @@ function Track = A02_Track()
 
 % -- Mechanical properties --
 
-% File loading path
+% Retained for compatibility with the established Track struct schema. Source
+% selection is no longer path-driven: the reviewed function is called directly.
 Track.Load.path = '';
 
 % Loading predefined list of track properties
 
 % Possibility 1: With Ballast on Bridge
-run([Track.Load.path,'TrackProp_Zhai_et_al_WithBallastOnBridge']);
-
-% % Possibility 2: No Ballast on Bridge
-% run([Track.Load.path,'TrackProp_Zhai_et_al_NoBallastOnBridge']);
+Track = TrackProp_Zhai_et_al_WithBallastOnBridge(Track);
 
 % -- End of script --
 end

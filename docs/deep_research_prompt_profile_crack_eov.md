@@ -1,5 +1,13 @@
 # Deep-research prompt — rail-profile & crack EOV randomization design for drive-by scour ML
 
+> **Retrospective channel-semantics correction (2026-08-03):** this historical
+> prompt calls the two `AcelRodaPrimVag` rows unsprung wheel/axlebox channels.
+> They are actually the rail FE nodal-acceleration field interpolated at each
+> instantaneous wheel coordinate, `N(x_w)^T A_rail`: an Eulerian/partial rail
+> acceleration, not wheelset acceleration and not the total moving-contact
+> acceleration. The prompt is preserved below as sent; its physical channel
+> interpretation must not be reused.
+
 Paste the block below into NotebookLM Deep Research (or Gemini Deep Research).
 Written 2026-07-12, motivated by the Stage-2 empirical result: with per-passage
 FRA-class-{4,5,6} profile regeneration + a fresh random deck crack on EVERY passage,

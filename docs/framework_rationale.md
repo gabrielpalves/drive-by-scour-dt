@@ -1,24 +1,23 @@
-# Drive-by DT — framework rationale & decision log
+# Drive-by DT — historical framework rationale and decision log
 
-> ## ⚠️ ARCHIVAL DECISION LOG — PRE-A SNAPSHOT
+> **ARCHIVAL DECISION LOG — NOT A CURRENT CAMPAIGN GUIDE.**
 >
-> This file preserves decisions and implementation states at the dates recorded.
-> A historical `built` label means “implemented and tested at that time”; it is
-> **not** evidence that the item remains valid under the current R11 campaign
-> contract or that dispatch is authorized. In particular, the pre-R11
-> 61-class/sensor champion is invalid for the current campaign. The future
-> authorized R11 `s0_scour` run selects the L60 reference, while
-> `s21_scour4` independently selects the L99 reference. At the dated
-> pre-authorization snapshot recorded here, status was **DISPATCH BLOCKED**
-> pending completion of the checks, the implemented
-> genuine-R11 heavy benchmark on clean commit A, and cross-host qualification,
-> followed by report-only commit B; the bundle builder must refuse publication
-> while the authorization report remains blocked. The sole current dispatch
-> authority is `docs/audit_r5_results.md`; its eventual authorized verdict
-> supersedes this intentionally unchanged snapshot. The final section,
-> **“Current R11 scientific
-> campaign contract,”** supersedes every earlier campaign-size, HPO, state-count,
-> execution-block, and inferential recommendation in this chronological log.
+> This file preserves decisions, terminology, implementation states, and
+> corrections at the dates recorded. A historical `built` or `current` label is
+> evidence only of what was believed at that point; it does not authorize a run
+> or establish validity under the present Paper 1 source. In particular, the
+> legacy campaign-contract section and every earlier campaign-size, stage,
+> state-count, HPO, execution-block, and statistical recommendation in this file
+> are superseded.
+>
+> Use [`docs/paper1_campaign_plan.md`](paper1_campaign_plan.md) for the controlling
+> four-block specification, [`README_CAMPAIGN.md`](../README_CAMPAIGN.md) for
+> operations, and [`docs/audit_r5_results.md`](audit_r5_results.md) for the sole
+> dispatch verdict. Authenticated manifests, protocol descriptors, evidence
+> receipts, and final result artifacts outrank this chronological narrative.
+>
+> Historical uses of "registered" mean prospectively specified in versioned,
+> hash-identified repository source; they do not claim external preregistration.
 
 A living record of **what** we decided, **why**, and the **references** that back it,
 so the methodology section of the paper writes itself and every step is defensible
@@ -49,6 +48,19 @@ Status note (skew investigation, 2026-06-15): live Python re-sim **still** mispr
 **2.1 Scour = Kamariotis gradual power-law + Compound-Poisson flood shocks.** — *built*
 Why: scour is flood-driven; a gradual creep plus discrete flood jumps is the accepted phenomenology.
 Ref: Kamariotis et al. (2024), *Quantifying the value of SHM*.
+
+**Correction, 2026-08-03:** the implemented lifecycle process is an
+author-chosen support-stiffness-loss scenario, not a validated hydraulic scour
+law. In particular, its flood arrival and jump parameters remain placeholders
+pending primary-source or site-specific calibration. The historical statement
+above must not be used as evidence that the exact implementation is accepted or
+field-validated. Direct verification against Kamariotis et al. (2023) shows
+that the implemented gradual-prior values reproduce its generic Table 1 example
+(`A` mean 1.94e-4/COV 0.40, `B` mean 2.0/COV 0.10, process-noise mean
+-0.005/COV 0.10), whereas this repository's shock defaults
+(`lambda=0.10/year`, jump mean 5.0, COV 0.60) deliberately differ from the
+paper's (`lambda=0.04/year`, mean 3.75, COV 0.25). Neither set is a
+scour-to-support-stiffness calibration.
 
 **2.2 Multi-foundation correlation via a Gaussian copula** (river common factor + proximity term). — *built, optional*
 Ref: Adnan (2026) for the foundation-proximity correlation term.
@@ -158,19 +170,19 @@ The probe (low mass, locked low speed) is a *different operating condition* than
 - **RE-RUN POLICY 2026-07-12 (user): never EXTEND existing Optuna studies — re-runs start FROM SCRATCH.** Driver `RUN_TAG` implemented: when set (e.g. "v8"), every study/output name gets the suffix → fresh full-budget studies; old DB rows/weights preserved (provenance). New datasets need no tag (dataset-keyed DB paths ⇒ no collision). Exception by design: the L100 mixed-pair PILOT deliberately RESUMES the old 75-trial/seed-42 context (budget-matched comparability with the existing wheel-pair studies) — do not tag it. Bundle **v8** rebuilt with the noise policy + RUN_TAG + varVST folder names. FOOTGUN FIX 2026-07-13: the noise config is now part of the study NAME too (`_cfg_suffix()`: `_nz-<mode>` + `_<RUN_TAG>`) — without it, re-running a stage with a different `SENSOR_NOISE` would silently resume studies whose earlier trials trained on differently-noised data.
 - **L100 MIXED-PAIR PILOT — RESULTS 2026-07-13 (`results/Stage2/results/stage2_4span_L100pilot_summary/`; 75 trials/seed42, budget-matched to the deprecated L100 leaderboard). FUSION CONFIRMED, with a suspension-chain gradient.** FrontBogie_Vert+Wheel1_Vert: scour MSE **105.1** vs Wheel1+Wheel2 126.1 (**−17%**; RMSE 10.3 vs 11.2 pp), localisation **0.797** vs 0.744, pier-2 MSE 74.3 vs 124.3 (−40%), false-scour-from-bearing leak 19.2 vs 22.7 pp (bearing head slightly worse, 448 vs 431, driven by bearing_right). The remarkable part: FrontBogie_Vert ALONE is collapse-level on this data (scour 327, loc 0.42) yet adds 17% as a fusion partner — the TSD/two-axle residual mechanism (wheel supplies the roughness reference; the bogie supplies the suspension-filtered inertial response), exactly what the deep-research report predicted (OBrien/Keenahan logic). Gradient: CarBody_Vert+Wheel1 (155.5) is WORSE than wheel+wheel — one more suspension stage between partner and track destroys the fusion value; the partner must sit LOW in the chain. Methodological consequence: the greedy auto-pair (top-2 singles) is demonstrably suboptimal under roughness EOV (best pair = #1 + #6 single) → `EXTRA_PAIRS=[[1,3]]` (FBvert+W1) is now the DEFAULT in every stage for chain-wide comparability. Caveats: deprecated L100 geometry + per-passage EOV data, single seed — treat as a pilot direction, to be re-established on the regenerated chain.
 - **EN 61373 CORRECTION 2026-07-13 (user caught an over-claim).** The carbody:bogie:axle ≈ 1:5.4:38 severities are random-vibration TEST levels for equipment QUALIFICATION by mounting position — they describe the vibration ENVIRONMENT a device must survive, NOT measurement noise added to an acquired signal. Correct uses: sensor RANGE selection per position, reliability/aging scaling (what the MEMS report uses them for → `digital_twin/sensor_health.py` territory), and second-order vibration-rectification bias (VRE ∝ g²; the docx cites gyro VRE 0.5°/h/g²). The load-time noise model must instead use per-channel ADDITIVE floors from sensor DATASHEETS (noise density [µg/√Hz] × √bandwidth; rail-qualified IMUs in the shortlist: ADIS16488, Tronics AXO305/GYPRO4300) — the indirect position dependence enters only because higher-vibration positions need larger full-scale ranges, which typically carry higher noise densities (a datasheet fact, not an EN 61373 number). Comments corrected in core/dataset.py, A00, README.
-- **🔴 CRITICAL — DECK MASS WAS 1000× TOO LIGHT. FIXED 2026-07-15 (rho 9.6 → 9600 kg/m). Every dataset generated before this is INVALID.** The user supplied Fernandes's published parameters for this exact bridge — I = 0.33 m⁴, 2 × 20 m spans, 0.3 m elements, E = 3.5e10 N/m², **rho = 9600 kg/m**, 3% damping — which finally resolved the deck-mass flag raised 2026-07-13. `A03_Bridge.m` carried `Beam.Prop.rho = 9.6`; since `B43` sets `Prop.A = 1 m²` and `B01/B03` build the mass matrix as `rho_n · A_n`, that value IS the deck mass per unit length ⇒ **1000× too light** (9.6 kg/m ≈ a 0.004 m² rod, not a deck). VERIFIED with the model's own numbers (`plotting/beam_freq.py`: Euler–Bernoulli FE, consistent mass, the real `k_v0 = 344e6 N/m` support springs): **rho=9.6 → f₁ = 130.6 Hz** (L40/2-span) vs **rho=9600 → f₁ = 4.13 Hz** (textbook for a 20 m railway span); ratio = √1000 = 31.6× exactly. Also L60/3-span 132.2 → 4.18 Hz; L99.6/4-span 86.9 → 2.75 Hz. **Why this is severe, not cosmetic:** a ~131 Hz deck is effectively RIGID to a vehicle whose car body sits at 1–3 Hz and bogies at ~10–30 Hz, so the vehicle–bridge *interaction* — the entire physical basis of drive-by monitoring — carried almost no deck dynamic signature. The models could still read scour (support-stiffness loss still changes the quasi-static deflection), which is precisely why this hid for so long: **the ML worked, so nothing looked broken.** CONSEQUENCES: (1) all previously published numbers (Stage-0 0.757 / loc 0.99, Stage-1 bearing, the L100 pilot) are **invalid**, not merely superseded — they describe an unphysical bridge; the paper drafts must stop quoting them even as "direction". (2) **The roughness finding may change**: with a correct ~4 Hz deck sitting right in the car-body/bogie band, the sprung channels have a real deck signature to find, which they never had before — `s14_prof` may now answer differently. (3) Timing was pure luck: the whole campaign was already being regenerated. LESSON for the paper's honesty section: a physically wrong model that still trains well is the most dangerous kind of bug — this is the argument for the frequency sanity-check now on the verify list.
+- **🔴 CRITICAL — DECK MASS WAS 1000× TOO LIGHT. FIXED 2026-07-15 (rho 9.6 → 9600 kg/m). Every dataset generated before this is INVALID.** The user supplied Fernandes's published parameters for this exact bridge — I = 0.33 m⁴, 2 × 20 m spans, 0.3 m elements, E = 3.5e10 N/m², **rho = 9600 kg/m**, 3% damping — which finally resolved the deck-mass flag raised 2026-07-13. **Mesh correction 2026-08-03:** the cited 0.3 m density is provenance, not the current production mesh; L40/2 and L60/3 now use the support-aligned 0.2 m bridge grid. `A03_Bridge.m` carried `Beam.Prop.rho = 9.6`; since `B43` sets `Prop.A = 1 m²` and `B01/B03` build the mass matrix as `rho_n · A_n`, that value IS the deck mass per unit length ⇒ **1000× too light** (9.6 kg/m ≈ a 0.004 m² rod, not a deck). VERIFIED with the model's own numbers (`plotting/beam_freq.py`: Euler–Bernoulli FE, consistent mass, the real `k_v0 = 344e6 N/m` support springs): **rho=9.6 → f₁ = 130.6 Hz** (L40/2-span) vs **rho=9600 → f₁ = 4.13 Hz** (textbook for a 20 m railway span); ratio = √1000 = 31.6× exactly. Also L60/3-span 132.2 → 4.18 Hz; L99.6/4-span 86.9 → 2.75 Hz. **Why this is severe, not cosmetic:** a ~131 Hz deck is effectively RIGID to a vehicle whose car body sits at 1–3 Hz and bogies at ~10–30 Hz, so the vehicle–bridge *interaction* — the entire physical basis of drive-by monitoring — carried almost no deck dynamic signature. The models could still read scour (support-stiffness loss still changes the quasi-static deflection), which is precisely why this hid for so long: **the ML worked, so nothing looked broken.** CONSEQUENCES: (1) all previously published numbers (Stage-0 0.757 / loc 0.99, Stage-1 bearing, the L100 pilot) are **invalid**, not merely superseded — they describe an unphysical bridge; the paper drafts must stop quoting them even as "direction". (2) **The roughness finding may change**: with a correct ~4 Hz deck sitting right in the car-body/bogie band, the sprung channels have a real deck signature to find, which they never had before — `s14_prof` may now answer differently. (3) Timing was pure luck: the whole campaign was already being regenerated. LESSON for the paper's honesty section: a physically wrong model that still trains well is the most dangerous kind of bug — this is the argument for the frequency sanity-check now on the verify list.
 - **BEARING RANGE EXTENDED 2026-07-15 (user asked: are we considering higher values than Fernandes's? — answer: no, and we should).** Old design: `k_r ~ U(0, 1e9)`, label = seized-% = k_r/1e9. **The flaw:** Fernandes's 1e9 is the *minimum drive-by-DETECTABLE* seized bearing (a detectability FLOOR from the Feng/O'Brien line), so using it as our MAXIMUM put the entire label range between "healthy" and "barely detectable" — backwards. Khan (2022) sweeps k_r continuously to 1e12 with near-full fixity, so real seized bearings live far above 1e9. Response is governed by the analytic **fixity ratio** φ = k/(k + 4EI/L_end) (confirmed by our own sweep, `results/bearing_sensitivity/`); for our deck 4EI/L_end = 2.31e9 (L60) / 1.86e9 (L99.6), so k_r = 1e9 is only **φ ≈ 0.30 / 0.35** — the lower third of the available response. But a *linear* draw over a large k_r range is equally wrong (it piles all the response into the first ~1% of the label). **FIX:** draw **φ ~ U(0, 0.95)** and invert k_r = φ/(1−φ)·4EI/L_end (φ=0.95 → k_r = 4.39e10 at L60). φ is bounded [0,1], **near-linear in response** (a good regression target), and **geometry-normalised** — so the bearing label means the same thing on the L60 and L99.6 bridges, which raw k_r never did (a hidden cross-rung comparability bug in the old design). Fernandes's 1e9 survives as a **reportable landmark** (φ≈0.30), not a cap; the documented RANGE limitation is now **removed** from the paper. IMPLEMENTED: A00 samples fixity in the joint LHS + anchors, stores BOTH `bearing_vector` (k_r, the physics) and `bearing_fixity` (the label); manifest records `bearing_fixity_max`, `bearing_k_ref_Nm_rad`, `bearing_label='fixity_ratio'`; `core/dataset.py` prefers `bearing_fixity` (→ fixity %) and falls back to legacy `k/bearing_max` for old files.
-- **TRACK COUNT AND CRACK-LOCATION PRIORS UPDATED 2026-07-15 (Gemini deep research — too large for NotebookLM; `papers/Track Defect Prevalence Data Search.{md,docx}`).** Implemented changes were hanging groups `DU{0..3}`→**Poisson λ=3.0/100 m**, ballast patches `DU{0..2}`→**Poisson λ=1.2/100 m**, window-scaled counts, pad snapshot probability **0.005→0.02**, fouling↔voiding coupling ×3, and ballast weighting ×3 near abutments. These are inference-backed modeling priors, not measured campaign-population constants. The pad value `p=0.02` is inferred from a 0.5% annual incidence and 3–5 year cadence; it is not a directly observed snapshot prevalence. The previously cited `scratchpad/check_track_stats.py` is absent, so no reproducible MC verification is claimed; λ=3.0 gives an arithmetic expected unsupported share of 5.4% under the assumed mean group size. For cracks, `p=0.25` is likewise a modeling prior. Eurocode 4 motivates a cracked support-region window but does **not** provide hogging:sagging occurrence odds; the implemented **4:1 weight is an explicit design prior** with locations within ±17.5% of a span. Full evidence limits are maintained in `docs/track_eov_sampling_spec.md`.
+- **TRACK COUNT AND CRACK-LOCATION PRIORS UPDATED 2026-07-15 (Gemini deep research — too large for NotebookLM; `papers/Track Defect Prevalence Data Search.{md,docx}`).** Implemented changes were hanging groups `DU{0..3}`→**Poisson λ=3.0/100 m**, ballast patches `DU{0..2}`→**Poisson λ=1.2/100 m**, window-scaled counts, pad snapshot probability **0.005→0.02**, fouling↔voiding coupling ×3, and ballast weighting ×3 near abutments. These are modeling priors, not measured campaign-population constants. **Correction 2026-07-31:** the contemporary report's claimed 0.5% annual pad incidence was not present in Williams et al. (2014) or the other audited pad/fastening primaries; therefore `p=0.02` is wholly author-chosen, not an incidence-to-prevalence inference. The previously cited `scratchpad/check_track_stats.py` is absent, so no reproducible MC verification is claimed; λ=3.0 gives an arithmetic expected unsupported share of 5.4% under the assumed mean group size. For cracks, `p=0.25` is likewise a modeling prior. Eurocode 4 motivates a cracked support-region window but does **not** provide hogging:sagging occurrence odds; the implemented **4:1 weight is an explicit design prior** with locations within ±17.5% of a span. Full evidence limits are maintained in `docs/track_eov_sampling_spec.md`.
 - **HISTORICAL DAMAGE-LOCATION PRIOR ANALYSIS — 2026-07-14; crack conclusion superseded 2026-07-15.** Scour is confined to selected river piers; modeled bearing condition acts at abutment rotational springs; hanging-sleeper density is weighted near bridge transitions; ballast patches and rail pads are sampled over the modeled track; wheel OOR travels with the vehicle. A moving-load moment-envelope calculation showed that a broad crack draw was mechanically excitable over most of both geometries, but it did not estimate real crack prevalence. The subsequent durability-informed review adopted the explicit 4:1 hogging:sagging prior described above. Crack remains a nuisance rather than a head: the campaign **evaluates empirical robustness** to it and does not assume mathematical invariance. Torsion and other non-vertical crack pathways remain outside the 2-D model.
 - **OPTION B ADOPTED + IMPLEMENTED 2026-07-14 (user, with a 3rd Lab PC): D01 saves the RAW time-domain signal; Python interpolates + crops at LOAD time.** Rationale: the noise-domain finding (below) proved before≠after the interpolation, so baking ANY choice into the data forecloses the other. Now the measurement model lives entirely at load time and can change forever without regeneration. IMPLEMENTED: `D01_DataProcessing.m` stores `Sol.Veh(1).A(1:3,:)` / `V(4:6,:)` / `acc_under(1:4,:)` un-interpolated + noise-free, plus per-passage `DimAcel/DimSpace/crop_start/crop_end/bridge_samp/L_bridge_eff`; A00 ships them in `data2save` (presence of `DimSpace` = RAW format flag); `core/dataset._raw_to_space_crop` mirrors the legacy transform exactly (`xx=linspace(1,DimSpace,DimAcel)`, `xi=1:DimSpace`, `np.interp` == `interp1` linear, 1-based inclusive crop) with a ragged-length guard; legacy (pre-interpolated) files still load via the `DimSpace`-absent branch. Legacy baked noise made CONDITIONAL (`if Damage.desvio>0`) so no RNG is consumed when off — and when ON it now lands in the TIME domain of the saved raw signal = the physically correct place. **STORAGE IS ~NEUTRAL (the user's worry was unfounded): `DimSpace ≈ 2.2·DimAcel` (space grid = 100 samples/m; ~5856 time samples vs the old ~5831-sample crop) ⇒ the raw series is about the size of the old cropped window while covering the WHOLE passage (approach+bridge+exit).** VERIFIED: Python self-test (`scratchpad/test_raw_crop.py`) — ramp reproduces to 0.0, 1-based indexing exact, legacy 5821-sample window reproduced, clamped-crop case OK. PENDING (user runs once per campaign): `scour_MATLAB/smoke_raw_parity.m` + `check_raw_parity.py` on real data → must print PARITY PASS (<1e-12) before the long generation.
 - **ABLATION CONTRAST DESIGN RESTRUCTURED 2026-07-14 (wording corrected 2026-07-27).** The L60/3-span design is branched, not one linear one-factor ladder: `s0_scour→s11_bear→s13_bearcrack` and `s0_scour→s12_crack→s13_bearcrack→s14_prof→s15_track→s16_all`. Each L60 edge adds one declared mechanism; `s13` contains the **three modeled bridge-condition mechanisms** (scour, bearing and crack), and `s16` contains **all modeled vertical-pathway EOVs**. The L99.6/4-span `s21_scour4→s22_bearcrack4→s23_all4` arm is a blockwise scale/stress branch: `s21→s22` jointly adds bearing and crack, and `s22→s23` jointly adds the profile/track/wheel EOV block. Crack stays a nuisance, not a head; profile has its own L60 contrast; track and wheel enter on successive L60 edges. Heads throughout are scour (per pier) and bearing (per abutment) only.
 - **WINDOWS MAX_PATH FIX 2026-07-14: dataset folder names shortened.** The self-describing name reached ~110 chars and, nested under the repo + results tree, blew past Windows' 260-char MAX_PATH. Folder is now `<stage>_L<len>_st<N>` (~20 chars, e.g. `s14_prof_L60_st267`); the FULL descriptor is preserved as `case_info.case_desc` (+ `case_info.txt`, + the new `case_info.stage`), so the dataset stays self-describing with no path pain. (Registry `LongPathsEnabled=1` + `git config core.longpaths true` are the OS-side complements, but many tools — incl. parts of MATLAB — still break on >260 even with it, so shortening is the real fix and costs nothing since everything is being regenerated.)
-- **HISTORICAL TRACK-EOV FIXES 2026-07-14; count priors superseded 2026-07-15.** The first fix restored healthy-track states by allowing zero ballast patches and hanging-sleeper groups. The second moved non-transition hanging groups and ballast patches from a bridge-only window to the full modeled track and unified the pad window. At that date, count priors and the pad snapshot interpretation were unresolved. The later implemented contract uses Poisson window-scaled counts and **pad snapshot probability `p=0.02`**, an inferred modeling prior distinct from the 0.5%/yr annual incidence anchor. The old 0.83-pads/100 m calculation and use of annual incidence as a snapshot probability are superseded.
+- **HISTORICAL TRACK-EOV FIXES 2026-07-14; count priors superseded 2026-07-15.** The first fix restored healthy-track states by allowing zero ballast patches and hanging-sleeper groups. The second moved non-transition hanging groups and ballast patches from a bridge-only window to the full modeled track and unified the pad window. At that date, count priors and the pad snapshot interpretation were unresolved. The later implemented contract uses Poisson window-scaled counts and **pad snapshot probability `p=0.02`**. **Correction 2026-07-31:** no audited primary supports the alleged 0.5%/yr anchor, so `p=0.02` is an author-chosen stress prior; the old 0.83-pads/100 m calculation and all incidence-to-snapshot conversions are unsupported.
 - **NOISE-DOMAIN FINDING 2026-07-13 (user asked: is adding noise before vs after the D01 time→space interpolation the same?). ANSWER: NO — verified numerically (`scratchpad/noise_domain_check.py`, MC over 400 realizations, representative 2.22× upsampling).** D01 adds multiplicative noise in the TIME domain then `interp1`-resamples to space; the load-time injector adds it in the SPACE domain (post-interpolation). Because `interp1` is linear, baked-noise = interp(white) = a LOW-PASS-SMOOTHED, band-limited, SPEED-DEPENDENT process, not white: measured lag-1 autocorrelation +0.77 (vs 0.00 for load-time white); variance 0.67× (interpolation averages neighbours); and — counterintuitively — 1.46× MORE noise energy SURVIVES PAA-512 (the coloring concentrates energy at low spatial frequencies, exactly what PAA's averaging preserves; white noise's high-frequency energy is averaged away). So same nominal 5% ⇒ materially different perturbation. IMPLICATIONS: (1) `legacy_wheel` load-time mode APPROXIMATES but does NOT bit-reproduce the Stage-0/1 baked noise (docstring corrected); fine as a robustness knob, and the noise-A/B GATE conclusion (small-vs-large wheel-row delta) is unaffected since both are representative 5% perturbations. (2) The physically-correct sensor model is an ADDITIVE, signal-INDEPENDENT floor from datasheets (noise-density×√BW), and once additive the multiplicative-coupling domain difference vanishes (only white-in-time-vs-space + interpolation-variance remain, both 2nd-order and PAA-attenuated). (3) Acquisition noise is physically white-in-TIME (sensor+ADC sample in time); load-time injection is white-in-space — a standard, minor simplification to state explicitly in the paper. Recommendation ADOPTED: keep load-time noise; document the domain caveat; prefer additive-datasheet floor for the robustness arm.
 - **DECK-MASS / FUNDAMENTAL-FREQUENCY DEFECT FOUND 2026-07-13, RESOLVED 2026-07-15.** `A03_Bridge.m` had `Beam.Prop.rho=9.6` while `B43_ModelGeometry.m` sets `Beam.Prop.A=1` m², yielding only 9.6 kg/m and an unphysical ≈131 Hz first deck mode. The literature/model value is 9600 kg/m for the adopted section, now implemented as `Beam.Prop.rho=9600`; the corrected model gives approximately 4.18 Hz for L60 and 2.75 Hz for L99.6. `A00_Run.m` records `beam_f1_Hz` in every state so the value is visible in dataset evidence. Every pre-fix dataset is invalid, and the R11 source/provenance contract requires all ten rungs to be regenerated.
 - **STAGE-0/1 REGENERATION QUESTION 2026-07-13 (user asked "re-run even Stage 0?") — DECISION: gate on a zero-cost noise A/B, do not regenerate yet.** Facts: Stage-0/1 DATA carries the legacy wheel-only multiplicative noise BAKED IN at D01 processing (not removable without full MATLAB regeneration); re-running only the ablation changes nothing. Why regeneration is NOT urgent: (a) Stage-0's two binding decisions — architecture selection (all arms saw identical data) and the localisation gate/champion pair (sprung channels, never noisy) — are insensitive to wheel noise; (b) every stage re-runs the full 8-sensor sweep, so a noise-free L60 sensor ranking arrives automatically with stage1_crack; (c) the only noise-touched claim is "wheels 20–50× worse" (needs a one-line caveat at worst). THE GATE (zero generation cost): when stage1_crack data lands, ablate its wheel singles TWICE — `SENSOR_NOISE=None` vs `{'mode':'legacy_wheel','desvio':0.05}` (same data, only noise differs; study names now separate automatically via `_nz-` suffix) — the wheel-row delta is the PURE noise effect. Small delta ⇒ Stage-0/1 stand as published with the caveat sentence; large delta ⇒ queue noise-free Stage-0/1 regeneration at the END (after Stage 3) for full chain uniformity.
 - **🔴 EXTERNAL AUDIT VERIFIED + FIXED 2026-07-17 (ChatGPT Codex review of the MATLAB damage models; every claim independently re-verified against the code before acting; all fixes landed BEFORE any post-mass-fix data was generated).** Seven confirmed defects and their fixes, in severity order:
-  (1) **Speed/temp LHS transposed** — `A00` called `lhsdesign(2, Npass)` (2 samples in Npass dims): each LHS column stratifies its 2 values into opposite halves ⇒ speed–temperature correlation **−0.75 exactly** (−0.78 under the default maximin criterion) and the (slow,cold)/(fast,hot) quadrants NEVER sampled, invisible in marginals. Affected every rung, every passage. FIX: `lhsdesign(Npass,2)'` + an in-loop corr/quadrant guard that errors on a degenerate draw.
+  (1) **Speed/temp LHS transposed** — `A00` called `lhsdesign(2, Npass)` (2 samples in Npass dims): each LHS column stratifies its 2 values into opposite halves ⇒ speed–temperature correlation **−0.75 exactly** (−0.78 under the default maximin criterion) and the (slow,cold)/(fast,hot) quadrants NEVER sampled, invisible in marginals. Affected every rung, every passage. FIX: `lhsdesign(Npass,2)'` plus deterministic `2 × Npass` shape and exact marginal-stratification guards. A former correlation/quadrant hard-abort was removed on 2026-07-30 because it rejected 16/450 mathematically valid draws at `Npass=10`; correlation and quadrant occupancy remain ensemble smoke diagnostics, not per-state validity criteria.
   (2) **Track-layer damage landed off-deck with probability 1 (L60)** — descriptors were sampled in a [0,120] m window assuming the deck at [30,90], but B54 consumes GLOBAL sleeper coordinates and under `redux=0` the deck starts at `L_Aw = L_Approach + max_TL` = **123.0 m** (L60; [123,222.6] at L99.6, where the first ~37 m could still be hit). So s15/s16/s23's on-deck/transition confounders never existed; the defects acted as an approach-only EOV. FIX: descriptors are now declared BRIDGE-LOCAL (`Tk.x_bridge_local`); B54 shifts its sleeper axis by `num_app·spacing − x_bridge_local` before selection (legacy global descriptors still read bit-identically), returns placement diagnostics (`Model.TrackDmgDbg`), and `smoke_stage3.m` asserts the patch/hang/pad-failure land on/around the real deck.
   (3) **FRA PSD unit mismatch** — B19's axis is cycles/m but A04 fed the corner `Ω_c = 0.8245 rad/m` unconverted (the A_v conversion `1e-4/(2π)` was already correct — the bug was one constant): ~**16×** too much PSD at the 1.524 m cutoff, acceleration-weighted variance ~8.5× high, displacement RMS almost unchanged (+1.6% — why it looked fine in elevation plots). FIX: `inputs(3)=0.8245/(2π)` cycles/m; `smoke_audit.m` asserts implemented ≡ reference (rad/m form, consistently converted) across the band.
   (4) **0.5 mm per-passage white profile perturbation removed** — it misread EN 13848-2 (measuring-system repeatability, not physical track change; the repo even cited the same number for the phase-lock and as a physical delta), and being WHITE on a profile band-limited at λ≥1.524 m it contributed ~0 in-band while injecting 100% fictitious short-wavelength roughness (~125 g-equivalent hdd forcing to the solver Nyquist, loading precisely the wheel channels central to the sensor-placement finding; even self-inconsistent: implies 1.39 mm pass-to-pass @95% vs the cited 0.5). FIX: `profile_jitter_sd_mm = 0`; the dormant hook is not an approved future model. Any physical pass-to-pass evolution model requires independent field/lifecycle evidence, band limitation, validation and a behavior/schema version change. EN 13848 may define an assessment wavelength band, but not the physical evolution amplitude. Measurement noise stays load-time (existing policy).
@@ -263,7 +275,7 @@ The probe (low mass, locked low speed) is a *different operating condition* than
     - **Coordinated R8 bump:** gen_schema `audit-2026-07-19-r8` (A00 + `_EXPECTED_GEN_SCHEMA`), `SCHEMA_TAG` `gs5a20260719r8`, cache tag `_gs4`→`_gs5`. FULL suite re-run at r8: check_protocol_hash / check_loader_provenance (41) / check_cache_provenance (13) / check_split_grouping (18) / check_familytable_roundtrip / parfor_lint / checkcode / smoke_audit / driver-import smoke — **ALL PASS**. Single clean commit + all 10 bundles rebuilt from the working tree.
     - ~~Still pending on the training PC~~ **ALL REMAINING SMOKES RUN LOCALLY same day (user authorized; MATLAB R2025b + py3.13/optuna on this PC):**
       - `smoke_geometry` ALL PASS (contact clean on every config incl. L99.6 @3 speeds, pure compression −7.8e4 N, crop 9960); `smoke_stage3` ALL PASS (healthy parity, track damage on-deck in the global frame, zero tension).
-      - **MICRO END-TO-END GENERATION** (new `make_micro_smoke.py`, committed): the REAL A00 text-patched to 17 states × 3 passages (3 healthy + 2 piers×2 levels×2 reps + 6 joint), full parfor run 14 min 52 s on 32 workers → 17/17 + digests + marker. **Real finding:** at Npass≤3 the LHS anti-transposition guard fires spuriously (|corr|≡1 with 2 points; 4-quadrant occupancy impossible with 3) — the guard is CORRECT at campaign Npass=50 (its design point, P(fail)<1e-5); the micro smoke bypasses it below Npass=10 and the incident is recorded so nobody ever "fixes" the guard the wrong way.
+      - **MICRO END-TO-END GENERATION** (new `make_micro_smoke.py`, committed): the REAL A00 text-patched to 17 states × 3 passages (3 healthy + 2 piers×2 levels×2 reps + 6 joint), full parfor run 14 min 52 s on 32 workers → 17/17 + digests + marker. **Real finding:** the original correlation/quadrant anti-transposition guard fires spuriously at small `Npass` (|corr|≡1 with 2 points; four-quadrant occupancy is impossible with 3). The initial micro harness bypassed it below 10. The 2026-07-30 audit then found 16/450 false aborts even at `Npass=10`, so production now checks only deterministic defining invariants (shape and exact marginal strata); the smoke retains correlation/quadrant ensemble diagnostics.
       - On the REAL generated dataset: `smoke_raw_parity`→`check_raw_parity` **PARITY PASS (2×10⁻¹³)**; Python loader accepts it (per-file SHA + family checks live), family table reads {healthy 3, scour_only 8, joint 6}, stratified split populates ALL THREE partitions with every family + writes/verifies `split_manifest.json`.
       - **RESUME exercises on real data:** (i) delete 0005.mat → rerun validates 16 files through the FULL payload scan, regenerates ONLY state 5, rewrites digests+marker; (ii) tamper 0003.mat's scour_vector with provenance strings intact → resume ABORTS with the exact "scour_vector ≠ DamageStates row" diagnostic (and the marker was already deleted pre-scan, so the folder cannot pose as complete). Restored + re-certified 17/17.
       - **ABLATION DRY-RUN with real optuna** (driver text-patched to N_TRIALS=2/EPOCHS=2/1 seed): the ENTIRE s0 pipeline executed — 24 single-DOF studies → champion arch → 28-pair sweep → strict summarize (52-model inner-val leaderboard, pair-matrix gate, winner on inner-val, outer test touched ONCE for winner + pre-registered comparator) → leaderboards/parity plot/`frozen_selection.json`/`protocol_descriptor.json` → champion manifest `_champion_arch_gs5a20260719r8_ph-<core12>.json` with both protocol hashes. Numbers meaningless at toy budget, by design.
@@ -273,7 +285,7 @@ The probe (low mass, locked low speed) is a *different operating condition* than
     - **Fix: TWO-TIER gate, both sides identical.** TOLERATED + logged: peak tension ≤ **12 kN (10% of the ~118 kN static wheel load)** AND tension on ≤ **0.2% of path samples**. FATAL: beyond either bound, or non-finite. Applied to the A00 per-passage gate (+ per-state tolerated-tier note), the A00 resume validation, and the Python loader (`_CONTACT_F_TOL_N`=12e3 + new `_CONTACT_FRAC_TOL`=0.002); the loader now also prints a dataset-wide **micro-tension incidence summary** (count / worst F / worst frac) — the paper reports this as the scope of the bilateral-contact approximation on severe-EOV rungs. Both thresholds entered PREPROC_PROTOCOL → the protocol hash moves (no studies exist; nothing orphaned that matters).
     - **Resume compatibility (deliberate):** the tolerances are NOT in fp_cfg — a stricter-gate dataset is a strict subset of what the recalibrated gate accepts, so the user's partial s23 folder (states generated pre-patch all passed the stricter gate) RESUMES seamlessly under the patched A00. **Proven with real artifacts**: the patched generator resumed the pre-patch 17-state micro dataset 17/17-validated, fingerprint identical.
     - TESTS: `check_loader_provenance` extended to **43** (sustained-tension frac violation REJECTED; the real 6.4 kN / 4.2e-4 event ACCEPTED in the tolerated tier + summarised); all other suites re-run green; checkcode 41 benign / 0 blocking. Watch item: if a full rung aborts again on a materially larger event (≥ tens of kN or sustained), the tail is heavier than believed → revisit (unilateral-contact solver work vs censor-with-report), do NOT just raise the thresholds again.
-  - **GPR BALLAST PRIOR REVIEWED — 2026-07-19 (full Q&A + citations in `docs/research_brief_gpr_fouling.md`).** The baseline **λ=1.2 patches/100 m** was retained as an inferred conservative-representative prior. The non-citable Slideshare “FI>30 on 10–20% of route” anchor was retired; the replacement envelope combines a national defect-rate proxy, a regional GPR survey and official/industry corroboration with their differing semantics preserved. Patch length `U(5,20) m` gained cited support. A proposed **λ ∈ {0.6, 1.2, 2.4} sensitivity sweep has not been implemented or run**; the current campaign uses λ=1.2 only. The prior wording called that future sweep an “honesty mechanism,” but no sensitivity result may be claimed until runnable code and outputs exist.
+  - **GPR BALLAST PRIOR REVIEWED — 2026-07-19; evidentiary status corrected 2026-07-31 (full Q&A in `docs/research_brief_gpr_fouling.md`).** The exact “FI>30 on 10–20% of route” anchor is not supported by an audited primary, and heterogeneous defect-rate/route-fraction reports cannot fit the campaign count law. Therefore **λ=1.2 patches/100 m is an author-chosen design rate**, not an inferred population estimate or generically conservative value. Published fouled-zone lengths provide context for the 5–20 m bounds, but do not fit the exact `U(5,20) m` law, which is also author-chosen. A proposed **λ ∈ {0.6, 1.2, 2.4} sensitivity sweep has not been implemented or run**; the current campaign uses λ=1.2 only, so no sensitivity result may be claimed.
 
 - **🔬 SUSPENSION-DAMAGE EOV — DEEP RESEARCH RECEIVED + RECIPE ADOPTED (pending implementation) 2026-07-22** (report `papers/Railway Suspension Degradation Simulation.{md,docx}` from `docs/deep_research_prompt_suspension_damage.md`; motivated by the 2026-07-21 methodology review: train-side damage = wheel OOR only, yet suspension faults alter the very suspension filtering that decides which channels see the bridge — could shift the sensor ranking). **Decision (user, in principle): ONE new isolated rung on L60; NOT blocking the current dispatch.**
   - **Adopted randomization recipe (A00 knobs, when the rung is built).** Per-passage independent Bernoulli per fault family (faults travel with the VEHICLE — different fleet member each passage, same policy as wheel OOR; report endorses this explicitly); affected bogie drawn at random (front–rear asymmetry is representable in 2-D and excites pitch — keep it). Families, sub-alarm multipliers, standing prevalence:
@@ -303,7 +315,7 @@ The probe (low mass, locked low speed) is a *different operating condition* than
   - **HISTORICAL R3 FINDING, SUPERSEDED BY THE GLOBAL R11 REGENERATION RULE — CONFIRMED + FIXED (MATLAB; affected track rungs):** (7) **hanging↔fouling coupling was 9:1, not the documented ×3** (A00 rejection weights compounded to mult²; the ballast-transition block next to it had the correct pattern) → fixed to acceptance odds 3:1. (8) **Overlapping ballast patches multiplied** their η (stacked draws could leave the documented per-patch band) → governing-patch rule: largest |log η_k| wins and supplies BOTH η_k and η_c (wet/dry coherence); B54 + Python mirror in lockstep. (9) **B66 on-track mask had no upper bound** (post-exit F≡0 samples inflated the frac denominator → sustained-tension gate read laxer than pre-registered) → mask now [0, Calc.Profile.L], both solver branches; applies forward, saved logs unaffected (all passed with >3× margin). At R3 this invalidated s15/s16/s23 while other then-current rungs stood; that historical disposition is no longer operative. R11 globally orphans every earlier dataset and requires all ten rungs to be regenerated. checkcode: A00 at the 41-benign baseline, B54/B66 0 findings; smoke_audit ALL PASS.
   - **Provenance hardening (Codex #8, subset):** missing best-trial weights now **FATAL** at study finish (was a WARNING); `RUN_TAG` joins SUMMARY_DIR (tagged re-runs no longer share/overwrite the untagged summary); cache provenance block now pins `file_digests.mat` + `damage_states.mat` SHAs (a digest-chain-consistent tamper invalidates the cache; residual accepted + recorded: an inconsistent same-size NNNN.mat edit is *ignored* while a cache exists — cache holds pre-edit bytes — and is caught at rebuild; full per-file re-hash on reuse = queued); bundle builder writes **`bundle_sha256.txt`** manifest.
   - **Codex audit qualifications, corrected for the record:** the objection that the printed ladder is not linearly one-factor was valid. The retained L60 estimands are the branched edge contrasts `s0→s11→s13` and `s0→s12→s13→s14→s15→s16`; L99.6 is blockwise scale/stress. Per-rung re-tuning is part of the exploratory deployment estimand, not evidence of a linear causal ladder. Other qualifications remain: “rename PAA or lose Fernandes comparability” was a false dilemma because implementing true PAA addresses the issue; the 24 kN contact threshold was post-hoc calibration and still requires the adopted Δt-refinement closure; the talk `.bib` exists while the paper bibliography remains pending.
-  - **✅ QUEUED (recorded commitments, not yet implemented):** contact-closure study (rerun the two flagged states — s23#24, s15#244 — at Δt=1/0.5/0.25 ms, compare gates 0/12/24 kN, then freeze the criterion permanently); statistical-inference upgrades for finalists (repeated stratified grouped CV; hierarchical state→seed bootstrap; paired per-state contrasts; larger nuisance_only counts at the next full regen — 6 states leave ~1–2 in test); additive datasheet noise arm; full per-file SHA verify on cache reuse; A00-side digest coverage of damage_states.mat/case_info.mat; study.user_attr protocol dump; env lockfile; settlement/profile-dip as a separate EOV (current voids = stiffness removal, honestly documented — Codex wanted the geometric pathway too); FRA-4 wording conditioned per 49 CFR §213.9 (Class 3 is passenger-legal at 70–90 km/h and rougher — FRA-4 is a benchmark choice, not the legal roughest; fix in paper1_methodology purge); terminology sweep (support-stiffness loss / nominal fixity DOE / damaged-element crack / "all modeled vertical-pathway EOVs" / "selection under the simulated design distribution").
+  - **✅ HISTORICAL QUEUE (recorded at R3; later sections supersede implemented items):** the then-proposed contact-closure study selected two state indices, s23#24 and s15#244, for Δt=1/0.5/0.25 ms. Those indices are not a valid R11 closure design after the family reordering and are explicitly superseded by the exhaustive authenticated s15/s16/s23 gate in §8.2a. The remaining recorded queue was: statistical-inference upgrades for finalists (repeated stratified grouped CV; hierarchical state→seed bootstrap; paired per-state contrasts; larger nuisance_only counts at the next full regen — 6 states leave ~1–2 in test); additive datasheet noise arm; full per-file SHA verify on cache reuse; A00-side digest coverage of damage_states.mat/case_info.mat; study.user_attr protocol dump; env lockfile; settlement/profile-dip as a separate EOV (current voids = stiffness removal, honestly documented — Codex wanted the geometric pathway too); FRA-4 wording conditioned per 49 CFR §213.9 (Class 3 is passenger-legal at 70–90 km/h and rougher — FRA-4 is a benchmark choice, not the legal roughest; fix in paper1_methodology purge); terminology sweep (support-stiffness loss / nominal fixity DOE / damaged-element crack / "all modeled vertical-pathway EOVs" / "selection under the simulated design distribution").
   - **🔧 FOLLOW-UP 2026-07-23 — `gen_rule_ver` added to the fingerprint (caught while planning the 3-PC dispatch; would have silently corrupted it).** The r3 MATLAB fixes changed generation RULES while leaving every knob VALUE untouched (`hang_foul_mult` is still 3.0; only the odds arithmetic changed) — so `gen_fingerprint` and `gen_schema` were both UNCHANGED across the fix. Consequence: extracting the new bundle over a pre-fix partial folder (e.g. the user's s15 stopped at state 244) would pass the resume guard and continue, mixing 9:1-drawn states 1–243 with 3:1-drawn states 244+ under indistinguishable recorded contracts. FIX: `gen_rule_ver = 'r3-2026-07-22-hangodds3to1-patchgovern-b66bounded'` added to the fingerprint config (and to case_info for the human record) → the fingerprint now moves with that recorded behavior version, so any pre-fix partial folder ABORTS on resume. This guards declared contract/version changes; it is not a general source-byte digest. **Rule going forward: bump `gen_rule_ver` whenever generation behaviour changes without a knob value changing.** Deliberately NOT a `gen_schema` bump: that is the global data contract and would invalidate every COMPLETE pre-fix dataset (s0/s11–s14/s21/s22 are provably unaffected in their SIGNALS — the track rules never fire without track EOV, and the B66 mask touches only the logged contact diagnostics, which passed with >3× margin). Complete datasets keep loading (the loader reads the stored fingerprint, never recomputes it); only RESUME of a partial folder is blocked. **Dispatch consequence: every not-yet-COMPLETE folder on every PC must restart in a fresh folder, regardless of rung**; complete datasets stand.
   - Checks after all fixes: py_compile all edited files OK; check_paa 18/18; check_loader_provenance 45/45; check_protocol_hash ALL PASS; check_cache_provenance ALL PASS; check_split_grouping ALL PASS; MATLAB smoke_audit ALL PASS; smoke_stage3/smoke_geometry rerun in progress; bundles rebuilt from the committed tree with SHA manifest (see commit).
 
@@ -448,7 +460,7 @@ The probe (low mass, locked low speed) is a *different operating condition* than
   `gs7a20260727r10`. Its release rules replace every R9 rule above. The
   remaining qualification work **will run** on clean commit A; only a later
   report-only commit B may authorize dispatch.
-  - **One exact production release:** all ten campaign rungs are locked to
+  - **One exact production release:** all four Paper-1 blocks are locked to
     **MATLAB R2025b**. A00, the Python loader, cache provenance and protocol
     preflight enforce that same value. Cross-release numerical equivalence is
     useful qualification evidence, but it does not widen this campaign or
@@ -460,6 +472,8 @@ The probe (low mass, locked low speed) is a *different operating condition* than
     reduced script with the literal set to true, limits the run to at most 64
     states and five passages, and segregates output below
     `Results/release_qualification/<source-hash>/<environment-hash>/R<release>/`.
+    The former no-argument and `--dryrun` paths are retired and fail closed;
+    ignored legacy `micro_A00*.m` files are nonqualifying artifacts.
     The environment component prevents two different Update/library stacks
     within the same MATLAB release family from colliding on one filesystem.
     Qualification
@@ -495,10 +509,9 @@ The probe (low mass, locked low speed) is a *different operating condition* than
     solver-derived floating outputs. Required signal fields and nonzero
     semantic/signal comparison counts make the old false-pass route impossible.
   - **Coverage required for any cross-release claim:** generate matching
-    qualification fixtures for at least `s0_scour`, `s16_all` and `s23_all4`
-    on both releases and compare each matching pair. These three fixtures cover
-    the fixed-profile baseline, all L60 damage/EOV branches and the four-span
-    geometry. A single s0 comparison cannot qualify the full generator.
+    qualification fixtures for all four `F40-S`, `F40-M`, `L99-S`, and `L99-M`
+    blocks on both releases and compare each matching pair. A single-block
+    comparison cannot qualify the full Paper-1 generator.
   - **Numerical equivalence is never implicit:** a
     `NUMERICALLY-EQUIVALENT` result exits nonzero pending review. Acceptance
     requires `--accept-numerical --receipt <new-file>`; the comparator refuses
@@ -516,7 +529,7 @@ The probe (low mass, locked low speed) is a *different operating condition* than
 - **HISTORICAL PRE-CONVERGENCE R11 CHECKPOINT — FULL NUMERICAL-STACK AND
   SOURCE-BYTE CONTRACT (2026-07-27).** This checkpoint introduced the R11
   environment/source firewall but predates the fixed state universe,
-  semantic-UID CRN inference, execution-block-local HPO policy, and final
+  semantic-UID CRN derivation, execution-block-local HPO policy, and final
   behavior-version changes recorded in the current section below. Its literal
   version strings are historical and must not be used to reconstruct the
   campaign.
@@ -585,6 +598,15 @@ valuable as an audit trail, but it is not an executable protocol. No R11
 production generation or ablation had started at this snapshot; all bundle
 ZIPs and all pre-R11 data/results then present were stale.
 
+**Reopened qualification record (2026-07-28):** candidate commit
+`865728f801c83a642b06a223f2a22b33f2b429b7` is not commit A. Its heavy
+benchmark was deliberately stopped after 32 of 100 useful anchor trials when
+new provenance and qualification defects were found. That partial run is
+non-qualifying and cannot be resumed, reused, or cited for authorization or
+timing. Source convergence must produce a fresh candidate A, and the genuine
+100-trial benchmark plus its single clean finalist-CV refit must start afresh
+against that candidate.
+
 ### 8.1 Fixed state universes and UID-named common random numbers
 
 - **Decision:** every rung in one geometry carries the same complete semantic
@@ -609,16 +631,32 @@ ZIPs and all pre-R11 data/results then present were stale.
   generated state is the analysis and resampling cluster relative to passages.
   The controlled anchors are fixed and the joint population is one registered
   LHS realization, so the states are not an iid field sample.
+- **Profile contrast:** all registered modes are generated through one
+  executable FRA-v2 class-4 spectrum with identical amplitude and wavelength
+  cutoffs. `fixed` uses seed `20260728` for one realization shared by all
+  states; `psd_fra` uses the named `profile-phase` seed for one persistent
+  realization per state. Thus `s13→s14` changes phase-realization distribution
+  only. The legacy Type-2 stored synthetic asset is not used by any registered
+  rung.
+- **Pad contrast:** pad service condition is represented by one author-chosen
+  global state-wise Weibull stiffness multiplier and one global uniform damping
+  multiplier. Each unique
+  0.6-m sleeper-lattice position receives one independent Bernoulli(`p=0.02`)
+  failure draw. The campaign has no temporal aging law or sleeper-wise ARIMA
+  field,
+  joint-adjacent clustering, or maximum-consecutive-failure rule.
 
 ### 8.2 Two independent execution, HPO, and reference blocks
 
 - **L60 anchor:** `s0_scour`.
 - **L99 anchor:** `s21_scour4`.
-- Each block has its own authenticated physical execution receipt, CUDA
+- Each block has its own source/runtime-bound execution receipt with
+  self-reported hardware diagnostics, CUDA
   capacity receipt, full-array HPO manifest, and reference architecture/pair
   manifest. The L60 champion or receipt is never copied to L99. The two blocks
   can use different machines only through their separately authenticated
-  block records; L60 same-edge inference requires one exact L60 block receipt.
+  block records; the L60 same-edge paired sensitivity analysis requires one
+  exact L60 block receipt.
 - All seven L60 Python ablations must use one exact physical host, GPU, and
   registered runtime. All three L99 Python ablations must likewise use one
   exact host/GPU/runtime, which may differ from L60. MATLAB generation may be
@@ -646,9 +684,8 @@ ZIPs and all pre-R11 data/results then present were stale.
 
 - Every PC intended to generate production MATLAB data must first receive a
   stable unique `TTBI_QUALIFICATION_HOST_ID` and execute fresh qualification
-  micros generated from clean commit A. The minimum stage set is `s0_scour`,
-  `s16_all`, and `s23_all4`, covering the fixed-profile baseline, all L60
-  nuisance branches, and the four-span geometry.
+  micros generated from clean commit A. Every host must run all four blocks:
+  `F40-S`, `F40-M`, `L99-S`, and `L99-M`.
 - `make_micro_smoke.py --qualification --stage <stage>` emits a transient
   executable derived from the reviewed `A00_Run.m`. It must be regenerated on
   each qualification round from the converged commit; the exact source-bound
@@ -660,23 +697,52 @@ ZIPs and all pre-R11 data/results then present were stale.
   thread diagnostic, and computer architecture. The receipt is bound to the
   actual MATLAB-environment digest, canonical qualification-source digest, and
   exact executed-script digest.
-- Corresponding stage outputs for the required host/environment pairs are
-  compared with `compare_generation_releases.py`. Accepted evidence uses schema
-  `matlab-environment-qualification-receipt-v4` and authenticates both host
-  sidecars. Numerical equivalence is not self-authorizing: it requires explicit
-  review and a new acceptance receipt.
+- For \(H\) intended generation hosts, qualification is the complete
+  undirected host graph at every stage, not a chain or a selected set of
+  comparisons: all \(4\binom{H}{2}\) host-pair comparisons across
+  `F40-S`, `F40-M`, `L99-S`, and `L99-M` are required. Corresponding outputs are
+  compared with `compare_generation_releases.py`; every accepted pairwise
+  receipt uses schema `matlab-environment-qualification-receipt-v4` and
+  authenticates both host sidecars.
+- Receipt semantics are explicit. A `SEMANTICALLY-BIT-IDENTICAL` verdict must
+  record `numerical_equivalence_explicitly_accepted=false`; a numerically
+  equivalent but non-exact comparison is non-authorizing until reviewed and
+  must record `numerical_equivalence_explicitly_accepted=true` in its accepted
+  receipt. An aggregate qualification-inventory receipt must then authenticate
+  the complete, duplicate-free \(4\binom{H}{2}\) graph; loose collections of
+  pairwise receipts do not authorize dispatch.
+- Every endpoint in that graph must independently match the exact locked
+  MATLAB numerical-stack descriptor. The same declared host ID must carry one
+  stable self-attested diagnostic/environment descriptor across all four
+  stages. Inconsistent declared descriptors are fatal; ensuring that an ID
+  maps to one actual physical machine is an operator responsibility that this
+  evidence does not authenticate.
 - CPU equality is deliberately **not** required. Equal MATLAB-environment
-  digests are allowed only when the authenticated declared host IDs are
+  digests are allowed only when the validated declared host IDs are
   distinct. Host identity does not enter production `gen_schema` or
   `gen_fingerprint`; qualification independence and scientific dataset identity
   are separate concerns.
-- **Evidence at this pre-A snapshot was incomplete:** one real `s0_scour` micro
+- Before production dispatch, one designated exact-stack reference host must
+  also pass an exhaustive same-host contact-closure qualification over
+  authenticated `F40-S`, `F40-M`, `L99-S`, and `L99-M` micro datasets,
+  including every saved passage and time-step refinement. Its prospectively
+  source-locked acceptance thresholds are
+  engineering tolerances for this finite numerical design; they are not
+  validated physical wheel-rail separation criteria and do not convert the
+  bilateral contact model into a physical loss-of-contact model. In the
+  current contract, every positive bilateral reaction is reported as a
+  tensile-demand artifact rather than interpreted as a simulated separation
+  event. This current claim boundary supersedes the stronger physical
+  interpretations attached to the historical 6.4/13.4-kN calibration events
+  earlier in this chronology.
+- **Historical evidence at this pre-A snapshot was incomplete and is now
+  nonqualifying:** one real `s0_scour` micro
   on this laptop
   completed 35 states × 3 passages (105 passages) in 27 min 32 s and validated.
   It predates source convergence. No second independent host has run, so this
   is one-host integration/timing evidence only and cross-host qualification
-  remains pending. Every intended host must still run all three required stages
-  from commit A; corresponding stage outputs require distinct authenticated
+  remains pending. Every intended host must still run all four current blocks
+  from commit A; corresponding block outputs require distinct authenticated
   host IDs and accepted v4 comparison receipts.
 
 ### 8.3 Full-array calibration, then exact singleton candidates
@@ -714,10 +780,11 @@ ZIPs and all pre-R11 data/results then present were stale.
   non-qualifying interrupted refit, authorization requires a clean first
   attempt with `attempt_count=1`, `prior_unaccepted_attempt_count=0`,
   `timing_complete=true`, and `memory_complete=true`. The
-  heavy run had not yet been executed at this pre-A snapshot; its timing,
-  provenance, hardware,
-  terminal-state accounting, and immutable artifacts must be bound to clean
-  commit A.
+  pre-A snapshot preceded any run. A later run against invalidated candidate
+  `865728f801c83a642b06a223f2a22b33f2b429b7` was stopped after 32 of 100
+  useful trials and is permanently non-qualifying. The fresh run's timing,
+  provenance, hardware, terminal-state accounting, and immutable artifacts
+  must be bound to the new clean commit A.
 - The defensible selection statement is conditional: “best among the
   registered architectures/two-channel response subsets under the registered
   full-array-calibrated policy, split, finite seed set, realized finite anchor
@@ -729,7 +796,8 @@ ZIPs and all pre-R11 data/results then present were stale.
   selection.
   Every candidate remains a frozen singleton from its own block anchor. The
   exploratory manifests never overwrite the L60/L99 references and their
-  winners cannot replace the carried L60 reference in primary edge inference.
+  winners cannot replace the carried L60 reference in the primary edge
+  paired sensitivity analysis.
 - Only `s0`, `s16`, `s21`, and `s23` run finalist-only 5-fold × 2-repeat
   state-grouped CV on development states. After deduplication, its fixed
   comparator set is the inner-validation winner, the top five
@@ -738,18 +806,19 @@ ZIPs and all pre-R11 data/results then present were stale.
   same-channel-pair, designed, carried-reference, and full-array controls. This
   is diagnostic and cannot re-rank the canonical winner or replace the outer
   test.
-- Within-rung finalist MSE intervals and paired MSE contrasts use 2,000
+- Within-rung finalist MSE finite-design resampling summaries and paired MSE
+  contrasts use 2,000
   state-first bootstrap draws with seed 42. Most-damaged-pier localisation is
   only a passage-level point estimate for passages whose maximum true scour is
   strictly greater than 5 percentage points; no state-level localisation
-  interval is registered.
+  interval is source-locked.
 
-### 8.4 Registered L60 inference
+### 8.4 Source-locked L60 finite-design analysis
 
 - The seven primary edges are exactly `s0→s11`, `s0→s12`, `s11→s13`,
   `s12→s13`, `s13→s14`, `s14→s15`, and `s15→s16`.
-- The primary population is the exact common outer-test subset of the
-  250-state joint master population. Controlled families are diagnostics.
+- The primary analysis set is the exact common outer-test subset of the
+  250-state joint master finite design. Controlled families are diagnostics.
   Every outer `StateUID × training-seed` cell must exist exactly once at both
   endpoints.
 - Models are independently refit at each rung using paired seeds; the L60
@@ -757,22 +826,28 @@ ZIPs and all pre-R11 data/results then present were stale.
   hyperparameters remain frozen. Consequently, an edge is a change in
   **achievable rung-specific performance under retraining**, not zero-shot OOD
   robustness.
-- Uncertainty uses **100,000** paired state-first bootstrap replicates. Seeds
-  are the fixed registered set and are not resampled. Each edge reports a
-  pointwise 95% interval and a Bonferroni familywise interval over exactly
-  seven primary edges; only the latter can support an across-ladder sign claim.
-  The bearing×crack difference-in-differences is secondary/exploratory. These
-  percentile bands are empirical finite-design state-resampling uncertainty
-  conditional on the exact registered anchor/LHS design—not field-population
-  or design-superpopulation coverage. The latter would require an LHS-aware
-  variance method or independent replicated designs.
+- Sensitivity analysis uses **100,000** paired state-first bootstrap
+  replicates. Seeds are the fixed source-locked set and are not resampled.
+  Each edge reports a pointwise central-95% finite-design resampling
+  sensitivity interval and a seven-edge alpha/7-tail-adjusted finite-design
+  resampling sensitivity envelope. Neither is a confidence interval, a
+  familywise-error-controlled hypothesis test, a significance/superiority
+  decision, or a joint-sign guarantee. The bearing×crack
+  difference-in-differences is secondary/exploratory. These percentile bands
+  are conditional sensitivity summaries of the exact source-locked anchor/LHS
+  finite design—not field-population or design-superpopulation coverage. The
+  latter would require an LHS-aware variance method or independent replicated
+  designs.
 - The analyzer requires canonical external regular files for the L60 HPO
   manifest and execution receipt, plus the champion manifest and all seven
   exact summary directories. It recomputes their hashes and rejects an
   unauthenticated embedded copy.
 - Interpretation is exact: `s0→s11` and `s12→s13` add bearing physics **and**
   bearing heads/range-normalized multi-task learning. `s13→s14` replaces the
-  common fixed baseline profile with a per-state FRA-4 phase distribution.
+  common fixed-phase realization with a per-state phase distribution while
+  retaining exactly the same FRA-v2 class-4 PSD law, amplitude, and cutoffs.
+  These are source-locked simulator intervention/task contrasts, not isolated
+  physical causal effects.
   L99.6 remains a separate blockwise scale/stress analysis and does not join the
   seven-edge family.
 
@@ -786,12 +861,18 @@ ZIPs and all pre-R11 data/results then present were stale.
   model and not crack depth.
 - **Hanging sleepers:** linear support-removal fallback without gap closure,
   impact, settlement-profile, or void-depth nonlinearity.
+- **Rail profile:** generated FRA-v2 class-4 benchmark, not a measured track
+  record. The source-locked profile edge is phase-randomization, not degradation
+  in roughness class or amplitude.
+- **Rail pads:** author-chosen global state-wise service-condition scalars plus
+  independent lattice failures; no temporal aging law, ARIMA spatial field, or
+  consecutive-failure cap.
 - **“All” rungs:** all modeled vertical-pathway mechanisms only; wheel flats
   remain disabled.
 - **`all_mult`:** symmetric pointwise relative-noise stress on all selected
   channels, keyed by global DOF for paired channel-subset comparisons. It is not
   an accelerometer datasheet or EN 61373 hardware model. The claim is therefore
-  modeled response-channel/DOF performance under this registered stress. The
+  modeled response-channel/DOF performance under this source-locked stress. The
   experiment does not identify physical transducer count, packages, mounts, or
   hardware placement.
 - There is no binary decision threshold. Sensitivity, specificity, POD,
@@ -802,9 +883,13 @@ ZIPs and all pre-R11 data/results then present were stale.
 
 The source must converge on a clean commit A. Every intended MATLAB generation
 host must complete the fresh three-stage qualification in §8.2a, and the
-required corresponding host/environment pairs must receive accepted v4
-comparison receipts. R11 MATLAB/Python qualification, the fast suites, mutation
-campaigns, exact environment/source checks, capacity preflight, the
+complete \(3\binom{H}{2}\) host-pair graph must receive accepted v4 comparison
+receipts with correct exact-versus-numerical acceptance semantics and a passing
+aggregate inventory receipt. Every endpoint must match the exact locked MATLAB
+stack and retain one stable physical identity across stages. The exhaustive
+same-host reference contact-closure and time-step-refinement qualification in
+§8.2a is also mandatory. R11 MATLAB/Python qualification, the fast suites,
+mutation campaigns, exact environment/source checks, capacity preflight, the
 implemented and contract-guarded genuine current-shape eight-channel benchmark
   in §8.3 must all pass against A, with exactly 100 anchor trials, zero Optuna
   `FAIL`/OOM, and no Optuna-trial retry or replacement. The one accepted shared
@@ -818,10 +903,743 @@ publication until that condition is true, and bundles must then be rebuilt as
 one complete commit-bound ten-ZIP set. No current-shape benchmark value or
 cross-host qualification completion is claimed here before those gates pass.
 
+### 8.7 R11 re-audit hardening (2026-07-29)
+
+Decisions recorded from the second Codex re-audit round (all pre-commit-A,
+no production data exist):
+
+1. **Qualification endpoints are reopened, not trusted.** Pair receipts are
+   unsigned JSON, so the aggregate inventory and the dispatch gate now
+   re-authenticate the underlying dataset directories: every unique
+   (host, stage) endpoint recorded in a receipt is reopened and its full
+   evidence (per-file SHA-256 digest table, completion marker, host receipt,
+   per-state provenance) recomputed from disk and required equal to the
+   retained block; at dispatch authorization every pair edge additionally
+   reruns the full directory comparator and must reproduce the retained
+   verdict and statistics. Rationale: "source-locked" must mean publication
+   reopens every underlying artifact; a coherent forged graph or a
+   later-mutated dataset must fail closed.
+2. **The contact-closure refinement window equals the registered crop
+   span.** The study window is 10 m + bridge + 18.30 m (1830 post-deck grid
+   intervals), replacing the off-by-one 18.31 m; a short signal now errors
+   instead of silently shrinking the acceptance support, and the independent
+   checker pins the formula per stage. The D01 crop bytes remain frozen
+   (author option b); comments state the ~0.20 m early-open/early-close
+   truth.
+3. **GAP arm is an equal-budget control family, not a pooling ablation.**
+   The multi-rate family searches its pooling-rate key; the GAP family does
+   not, so the search spaces are not identical and no isolated-module
+   attribution is made (supersedes the "direct pooling-ablation control"
+   wording in the 8.x history above and in earlier §-notes).
+4. **Edges are simulator-intervention contrasts.** All remaining
+   "mechanism contrast/edge/resolved" shorthand in the paper and
+   authoritative docs was replaced: a bearing edge changes physics, heads,
+   loss/task, and retraining jointly.
+5. **Three-way track-prior binding.** `check_track_prior_stats.py` now
+   parses every live A00 track-EOV constant with uniqueness-checked
+   patterns, binds sleeper spacing from the TrackProp sources, checks the
+   `sample_pad_failures.m` structural contract, and regenerates each guarded
+   numeric as a template phrase that must appear verbatim in
+   `docs/track_eov_sampling_spec.md` (which now also states p_wet = 0.5 and
+   the hanging transition-selection probability 0.6 as author-chosen
+   assumptions).
+6. **Modularity is a pre-freeze requirement.** The new critical path
+   (contact gate/study MATLAB, qualification/dispatch Python, and their
+   checkers) is split by responsibility — policy, dataset/seed
+   reconstruction, solver execution, acceptance metrics, durable
+   publication; schema parsing, retained-endpoint revalidation, graph
+   validation, manifest publication, fixtures — with identity surfaces
+   (harness hash, checker hash, policy source lists, bundle manifest)
+   extended to cover the new files. `A00_Run.m` restructuring is
+   deliberately deferred: it is the long-validated generation driver, its
+   content is pinned by multiple live source guards, and restructuring it
+   now would churn the validated generation identity for zero scientific
+   gain before the campaign runs.
+
+#### 8.7.7 Executing the split's verification (2026-07-29, later)
+
+Items 1 and 6 above were implemented but **unverified** when the previous
+session ended (environment failure mid-run). Running them produced evidence
+and three real defects, all in the *verification* layer rather than the
+verified physics — which is the expected failure mode of a modularity split,
+and precisely why green suites are not accepted as proven until each guard has
+been shown to go red.
+
+7. **A mutation probe must be proven non-vacuous, not assumed.** The
+   contact-gate self-tests mutated the profile-phase seed with
+   `str.replace(literal, ..., 1)`. The split had added a rationale header to
+   `contact_study_reconstruction.m` that quotes the guarded assignment
+   verbatim, so the *first* occurrence is a comment; the guard evaluates its
+   pins on comment-stripped statements, so the "mutation" changed nothing the
+   guard could see and the suite reported the guard as broken. The guard was
+   in fact correct. Fix: `_mutated_statement_source` rewrites executable
+   statement lines only, asserts the rewritten-occurrence count, and asserts
+   the comment-stripped source actually changed — a probe now fails at
+   construction instead of masquerading as a guard failure. All four
+   source-contract probes were rewired to it, and two permanent probes assert
+   the helper itself rejects a comment-only target and a wrong occurrence
+   count. Rationale: the general lesson of R4's mutation-testing method is
+   that an *unexercised* guard and a *broken* guard are indistinguishable
+   from a green log; a probe that silently edits documentation is the same
+   failure wearing a passing badge. Severity was not cosmetic: the probe sits
+   early in the driver, so the checker aborted after **13** assertions where it
+   now completes **81 (71 rejected mutations)** — the entire 327-case synthetic
+   gate, the create-once/TOCTOU/ABA receipt and snapshot probes, and both the
+   case-evidence and summary/inventory mutation matrices had not executed since
+   the split. (`check_generation_contract` and `check_profile_pad_contract`
+   were audited for the same defect and are immune: their `_replace_once`
+   helpers already assert an exact occurrence count.)
+8. **Cross-language guards must mirror each other exactly.**
+   `smoke_contact_closure.m` counted raw-text occurrences of the same seed
+   literal and so read 2 where the authoritative Python guard reads 1 — the
+   MATLAB and Python halves of one contract disagreed by construction. Fix:
+   `local_matlab_statements` in the smoke mirrors `_matlab_statements`
+   (whole-line `%` comments and `%{ %}` blocks dropped; the final empty
+   element of a newline-terminated split discarded to match
+   `str.splitlines()`). Parity is not asserted by inspection: SHA-256 over
+   the stripped text of all seven study files is **byte-identical** between
+   the MATLAB and Python implementations. Preferred over rewording the
+   comment, because deleting evidence to satisfy a checker inverts the
+   relationship.
+9. **Relocated code silently disarms mutation suites.** The split moved
+   receipt-schema parsing into `qualification_receipt_schema.py`, but two
+   `check_r4_mutation_guards.py` entries still declared
+   `qualification_receipt_inventory.py` as target, so the harness aborted on
+   the first missing anchor after ~21 min and the leaf-class and
+   worst-path guards had been untested since the split. Both were retargeted,
+   and `_validate_anchor_inventory` now resolves **every** anchor up front and
+   reports all stale ones together with the module that currently holds each,
+   so the next refactor yields a mechanical retarget instead of a serial
+   archaeology loop. This is the modularity tax made visible: responsibility
+   splits are only safe if the identity surfaces that *point at* the moved
+   code move with it.
+10. **`run_self_tests` now lives in `contact_gate_selftests.py`.** The
+    checker's argument-free branch dispatches through a deliberately lazy
+    import, so no real-authorization path loads the synthetic modules
+    (verified: importing `check_contact_closure_gate` leaves neither
+    `contact_gate_selftests` nor `contact_gate_fixtures` in `sys.modules`).
+    The checker drops 4467 → 3144 lines and the duplicated fixture builders
+    that had been copied into `contact_gate_fixtures.py` without being removed
+    from the checker are gone. `contact_gate_selftests.py` is registered in
+    `bundle_source_files.txt` and `check_campaign_controls.required_new`.
+    Completeness was proven mechanically rather than by review: an AST diff
+    against the pre-split file accounts for all **79** top-level definitions
+    with **none lost** — **65** stayed in the checker byte-identical, **1**
+    stayed but changed (`main`, which gains the lazy import), **11** moved
+    byte-identical, and **2** moved with intended edits (`run_self_tests` gains
+    the rewired probes; `_build_synthetic_gate` inherits the fixture module's
+    JSON round-trip in place of `deepcopy`). 65 + 1 + 11 + 2 = 79. The three
+    files now hold 80 definitions: those 79 plus the new
+    `_mutated_statement_source`. (An earlier revision of this paragraph
+    reported "63 unchanged … 3 changed", which sums to 77; the reporting
+    script had subtracted all three changed definitions from the stayed
+    bucket when only one of them had stayed.)
+    Deliberately NOT added to `dispatch_manifest.POLICY_SOURCE_FILES`, which
+    binds the chain whose bytes decide a dispatch: the self-tests are a
+    development-time assurance outside the authorization path, exactly as
+    `contact_gate_fixtures.py` already is. Their bytes are still covered,
+    one layer out, by `python_runtime_source_root_sha256` through the reviewed
+    bundle manifest.
+
+Evidence executed on this host — **29 Python checkers, 26 PASS, 0 unexpected
+failures** in one uninterrupted working-tree run (2906 s; NOT a clean
+commit-bound run, which is only possible at commit A), with
+`check_r4_mutation_guards` reporting
+**29/29 mutations caught, 0 missed** after its anchor inventory resolves all 29
+anchors (the two retargeted entries are caught at 26/29 and 27/29, so both
+previously-untested guards are now proven live).
+
+The qualification inventory checker runs on **synthetic comparator-genuine
+micro fixtures** — deliberately NOT real host qualification output. They are
+written by SciPy from Python and merely satisfy every rule the production
+comparator enforces: one on-disk micro dataset per (host, stage), with every
+pair receipt emitted by actually running `compare_directories`. Over a complete
+3-stage C(3,2) = 9-edge graph it rejects 35 receipt-level forgeries plus 7
+endpoint-level attacks — missing, moved, mutated **between invocations**,
+coherently forged root, substituted real directory, digest-table-laundered, and
+symlink/junction indirection. Scope limit, stated because the test name
+invites overreading: that mutation-between-runs case proves the endpoint is
+reopened on every invocation; it does NOT prove intra-invocation atomicity
+between hashing a file and parsing it, which remains OPEN (P1-1 of the late
+2026-07-29 Codex re-review in `paper1/ISSUES_FOUND.md`).
+`smoke_contact_closure`, `smoke_audit` and `smoke_r11_provenance_serialization`
+pass against the split chain; `checkcode` over the twelve split contact
+modules reports only cosmetic notices (retired `%#ok` suppressions,
+preallocation advice), and `A00_Run.m` reconfirms its **41-benign** baseline
+(56 messages minus 15 `MSNU` "suppression no longer needed" notices, an
+artifact of the newer analyzer, not new findings).
+
+#### 8.7.8 Late 2026-07-29 Codex re-review: claim scope and execution closure
+
+Verdict was NOT PASS with no P0 and five P1 items. Every technical claim was
+re-derived here before acting; two of the P2 findings were against §8.7.7 above
+and were correct (the 63/11/3 accounting that sums to 77, and calling synthetic
+SciPy fixtures "real datasets") and are fixed in place.
+
+11. **Host evidence is self-attested; the claims now say so.** Qualification
+    host identity is a self-report covered by a SHA-256 over its own
+    descriptor - no pre-registered key, no hardware or remote attestation, no
+    independent witness. The repository's own fixture builder writes acceptable
+    host receipts and datasets from Python and the graph validates, so the
+    honest claim is **retained-artifact integrity and internal consistency
+    under a trusted-operator threat model**, and the previous "a coherently
+    fabricated execution cannot pass" is withdrawn. Narrowed in
+    `README_CAMPAIGN.md`, `docs/paper1_methodology.md`,
+    `paper1/sections/data_processing.tex` and the module headers of
+    `compare_generation_releases`, `qualification_receipt_inventory` and
+    `qualification_receipt_schema`. Rationale for narrowing rather than
+    building a signing boundary: the realistic failure modes of a three-PC
+    academic campaign are drift, staleness, partial runs, copied receipts and
+    silent substitution - all of which this chain does catch - and no result in
+    the paper depends on an anti-fraud guarantee. Overclaiming costs more than
+    the missing mechanism.
+12. **The executed MATLAB closure is now declared, checked, and probed.** The
+    35-module solver inventory omitted two files that run on every case of
+    every gate stage: `TrainProp_ObrienCalibrate` (called per vehicle by
+    `A01_Train`) and `TrackProp_Zhai_et_al_WithBallastOnBridge` (executed by
+    `A02_Track`). The inventory is now 37, the study executable set is
+    transitively closed at 11 (the four always-executed provenance helpers
+    joined it), and the gate chain gained its own
+    `gate_execution_root_sha256`, computed MATLAB-side over `which`-resolved
+    paths and recomputed independently in Python - previously the modules that
+    DECIDE acceptance were pinned only by source text, which reads reviewed
+    repository bytes rather than what MATLAB resolved. Both new roots agree
+    byte-for-byte across the two languages, and one shared
+    `local_resolved_module_root` implements the resolution rule for both sets
+    so they cannot drift apart the way the study and gate chains did before the
+    split.
+
+    The important part is not the two files; it is **why they were missable**.
+    MATLAB's own dependency analysis finds `TrainProp_ObrienCalibrate` but
+    cannot find the TrackProp file, because `A02_Track` invokes it as
+    `run([Track.Load.path, 'TrackProp_...'])` and a variable-prefixed target is
+    invisible to static analysis. So the fix is two-layered rather than two
+    entries: `smoke_contact_closure` now recomputes the static closure and
+    fails if any reviewed-directory dependency is absent from a declared
+    inventory (this was proven red by deleting one member, and proven blind to
+    the dynamic call by deleting the TrackProp entry - the completeness guard
+    passed at 52 declared while the shadow probe failed, which is exactly the
+    division of labour claimed here), and the Python source contract forbids
+    any new dynamic dispatch in the contact chain while pinning that one
+    reviewed `run` target and forbidding the NoBallastOnBridge variant, so the
+    blind spot cannot grow.
+
+    Shadow rejection is probed per resolution class rather than per member: all
+    53 members are resolved by the same three lines of their inventory's loop,
+    so per-member repetition would re-test identical code. Each probe asserts
+    the impostor actually won name resolution before asserting the guard fires.
+    That non-vacuity assertion earned its place immediately: the first version
+    passed emptily because MATLAB resolves the current folder BEFORE the search
+    path, and the smoke runs inside the reviewed directory. The probes now run
+    from a neutral temporary folder with the reviewed directory on the path -
+    the production configuration, and the only one in which shadowing is
+    reachable at all.
+13. **Endpoint revalidation is atomic: the bytes parsed are the bytes hashed.**
+    `_validate_dataset_header` hashed each member by pathname and
+    `_validated_payload` then re-opened the same pathnames to parse them - two
+    reads of a mutable directory, so a folder being synchronised, copied over,
+    or edited during a long validation could yield a verdict describing a
+    mixture of pre- and post-change content while the evidence quoted digests
+    that were never parsed. No adversary is needed for this.
+
+    Two bindings now close the two windows. `_verified_mat` reads each digested
+    member ONCE, hashes that buffer, requires the digest to match the dataset's
+    own table, and parses the same buffer through `BytesIO`; the digest table is
+    read first so `case_info.mat` is covered too. `_reassert_endpoint_digests`
+    then re-reads the table and re-hashes every member, requiring the recomputed
+    content root to equal the root validated earlier - called for both endpoints
+    inside `compare_directories` **before any verdict is returned**, and again
+    at the end of `revalidate_endpoint`.
+
+    Both are proven load-bearing by mutation, and the first attempt was not.
+    The probes wrap the comparator's own entry points so the mutation lands
+    mid-invocation (mutating between two calls, as the inventory checker's
+    stale-endpoint case does, proves only that the endpoint is reopened per
+    invocation). Deleting the end-of-run reassertion turned its probe red
+    immediately. Deleting the per-member binding did NOT: the same mutation was
+    still caught by the reassertion, so the probe passed while the binding it
+    was written for was gone. The bindings overlap by design, so "something
+    raised" is not evidence about which one worked; both probes now pin the
+    diagnostic of their own guard through `_expect_invalid_from`, and each goes
+    red when its own binding is removed. The intermediate observation is worth
+    keeping: with the parse-time binding removed, the mutation was caught by the
+    state payload's own embedded provenance digest - real defence in depth, but
+    a content check rather than a byte-level binding, so it would not catch a
+    mutation that preserved those fields.
+14. **`+ttbi` package: one function, one file (P1-4, stage 1).** The author's
+    requirement is code a reader can follow - responsibilities in separate
+    files - and `A00_Run.m` was the main offender. Its 14 local functions now
+    live in `scour_MATLAB/+ttbi/`, one per file with a one-line purpose header,
+    called as `ttbi.state_uid(...)`. A00 drops 2571 -> 2270 lines and defines
+    no functions at all. A MATLAB package (not loose .m files, not the
+    handle-struct factory) because the qualified call site says at a glance
+    that the callee is reviewed project code, and package members are still
+    `which`-resolvable, so the R11 executed-module inventories keep working.
+
+    **It removed a real duplication hazard.** The seed/UID derivation existed
+    in THREE textually divergent copies - `A00_Run.m`, `smoke_familytable.m`
+    and `smoke_crn_state_design.m` (variable renames, `assert` vs `error`, one
+    inlined-vs-helper difference). Not yet a defect, but the smokes could have
+    validated a rule the generator had stopped using. All three now call the
+    package, 7 duplicate definitions are gone, and both smokes still pass -
+    which is the proof the copies were equivalent.
+
+    **Equivalence is proven on real generated data, not asserted.**
+    `compare_directories` cannot serve as the oracle here: it requires both
+    inputs to declare equal `generator_source_root_sha256`/`gen_fingerprint`,
+    and any refactor moves those by construction. So a 35-state x 3-passage
+    micro campaign was generated before and after (1 h 29 m / 1 h 21 m) and
+    compared value by value over raw bytes: **0 unexpected differences**. Of
+    the 104 keys in `generation_config_json` exactly ONE differs -
+    `generator_source_root_sha256` - with `DamageStates`, `BearingFixity`,
+    `CrackOn`, `LatentCrackOn` and every other scientific setting identical.
+    The oracle parses that JSON rather than exempting it, so a changed damage
+    prior hiding inside the same blob would still be reported.
+
+    Three lessons were paid for in this stage and are recorded so the next
+    split does not repeat them: (a) the guard rewrite first read package
+    sources FROM DISK, which made them invisible to the mutation harness - it
+    reported `mutation escaped: semantic state UID made row-dependent`, and the
+    fix was to slice blocks out of the supplied (mutated) text through an
+    injected marker; (b) the old guards sliced from a function header to END OF
+    FILE, so per-file blocks are strictly tighter and legitimately failed on
+    tokens owned by sibling functions (`replace_unique_bytes`, `seed32`), which
+    are now bound to the functions that own the rule; (c) the completeness
+    guard's boundary test had to learn about `+pkg` directories BEFORE the
+    package existed, or every package member would have been skipped as
+    "outside the reviewed directory" - silently unhashed, exactly the blind
+    spot item 12 closed.
+15. **Superseded for the isolated F25 experiment: `Calc.ProfileData15_05.mat`.**
+    The four Paper-1 production blocks still cannot reach Type 2, but the
+    source-backed `F25-R` reconstruction deliberately revives Fernandes's
+    stored-profile path through the exact `f25_stored_type2` configuration.
+    The asset is a reviewed entry in `bundle_source_files.txt`, so its exact
+    bytes participate in `generator_source_root_sha256`; the F25 configuration
+    additionally pins SHA-256
+    `71c69d9923bdc184a2c8448e0e0e6debb1670302908e093b758f57c36147465d` and
+    fails closed on drift. `B19_GenerateProfile` continues to load elevation
+    only onto live geometry. No main-campaign profile rule changed.
+
+Two suites remain red **by design** until commit A, and are not defects:
+`check_campaign_controls` (every required runtime/test file must be a tracked
+Git blob — the new modules are still untracked) and
+`check_training_policy_mutation_guards` (requires one clean commit-bound
+source tree). `check_raw_parity` is a CLI that needs a real generated dataset
+plus `smoke_raw_parity.m` output and is therefore N/A until generation runs.
+
+#### 8.7.9 Final pre-commit-A hardening and evidence correction (2026-07-31)
+
+This entry supersedes the implementation status in §8.7.8; it does not declare
+the campaign ready. Commit A remains blocked until the manuscript, immutable
+protocol record, exact-stack qualification, contact closure, and heavy
+benchmark conditions below are actually satisfied.
+
+16. **The generation driver now exposes responsibilities instead of hiding
+    them in one script.** `A00_Run.m` is approximately 330 lines, defines no
+    local functions, and reads as an orchestration sequence. The `+ttbi`
+    package contains 98 one-function-per-file helpers with purpose headers;
+    the state design, mechanism sampling, worker execution, validation, and
+    publication boundaries are separate. The contact verifier entry point is
+    likewise a small orchestrator over responsibility-specific Python modules.
+    Generated qualification scripts and development mutation harnesses remain
+    longer artifacts; they are not the production orchestration API.
+
+17. **Source identity now covers what the workers execute, not only what the
+    client inspected.** The reviewed manifest is canonical and closes the
+    MATLAB production inventory (292 authenticated manifest entries in this
+    convergence pass). There are 298 physical `.m` files below
+    `scour_MATLAB`: the other six are four generated `micro_A00_*` scripts and
+    two retained `Results/**/qualification_executed.m` artifacts, all
+    explicitly excluded from production source identity. Source authentication rejects symlinks,
+    junctions, hard-link aliases, unmanifested MATLAB shadows, and unexpected
+    `which` resolution; it takes two stable byte/inventory snapshots. A00
+    rechecks this root around dispatch. When work is missing, the runner never
+    reuses an existing pool: it creates a fresh bounded process pool, constructs
+    one source-root attestation on every worker that is actually used, and
+    requires that root/digest-lines/file-count proof before each state enters
+    the solver. A fully resumed run does not disturb an unrelated user pool.
+    This closes practical stale-cache and worker-shadow drift. It does not claim
+    mathematical exclusion of a malicious exact transient swap-and-restore
+    between every finite fence; that would require execution from an immutable
+    snapshot.
+
+18. **Dataset completion is fail-closed and independently consumable.** The
+    publisher revokes the marker, digest table, and both temporary credentials
+    before any return or error path. It validates the exact state inventory,
+    both sidecars, the full closed schemas, and stable artifact digests; a final
+    source fence occurs after the last semantic/artifact revalidation and just
+    before the same-directory marker rename. Marker bytes are written and
+    authenticated before publication. Producer and MATLAB/Python consumers
+    reject linked artifacts and require the marker, digest root, sidecars, and
+    state payloads to agree. Missing/corrupt states or sidecars therefore cannot
+    leave an older credential that looks current. The output root is created
+    one component at a time below an authenticated real `Results` directory;
+    its canonical path and filesystem identity are propagated to workers and
+    reasserted around state writes, sidecar writes, credential revocation, and
+    publication. A junction/symlink output root is rejected before the
+    revoker can touch any credential in its target.
+
+19. **Python retained-evidence boundaries bind bytes to interpretation.**
+    Source provenance parses the exact captured bytes, resolves relative and
+    literal dynamic imports (including explicit aliases), rejects indirect
+    loader factories/reflection outside its reviewed audit-harness exception,
+    and reasserts the manifest, inventory, and every selected file at the end.
+    This is a static reviewed import-closure boundary, not a Python sandbox.
+    Qualification
+    comparison parses each MAT member from the same bytes whose digest it
+    checked, preserves MATLAB `uint32` seed storage despite SciPy scalar
+    simplification, enforces the exact 19-field damage catalogue and state
+    schemas, then reopens all members and sidecars before any verdict/receipt.
+    Aggregate qualification reruns every retained pair comparison. Dispatch and
+    receipt publication use exclusive create-once writes and never unlink a
+    mutable final pathname after a failed post-publication check; a failed
+    artifact is retained only as forensic evidence and supplies no success
+    return. Host claims remain self-attested under the trusted-operator threat
+    model of item 11. The MATLAB contact study and frozen gate likewise parse
+    `case_info`, `damage_states`, numbered states, digest manifest, completion
+    marker, and qualification evidence from stable captured byte buffers. The
+    gate retains lightweight file-identity/SHA receipts and reasserts every
+    dataset both after each stage and globally after the complete three-stage
+    selection; report hashes therefore describe the bytes actually parsed.
+
+20. **Direct primary-source reading changed evidentiary labels, not frozen
+    numerical priors.** Williams et al. (2014) is a lateral-load/insulator
+    study and contains no 0.5% annual pad-failure incidence; `p=0.02` is wholly
+    author-chosen. Lundqvist and Dahlberg report +70% adjacent sleeper–ballast
+    force and +40% adjacent-sleeper displacement for one modeled 1 mm gap.
+    RAILCON separately summarizes up to 80% wheel–rail-force increase and does
+    not fit `DU{1,…,5}`. Shi et al. model 0–5 consecutively voided sleepers
+    at 80 km/h; their wheel–rail contact-force comparison reports four of
+    those cases (0, 1, 3, 5) and finds three to be
+    the worst case; five is not a universal critical limit.
+    Consequently crack activation `p=0.25`, the hanging/ballast count laws,
+    exact group/patch laws, transition and coupling odds, pad service-condition
+    Weibull, failure rate, and OOR triplet are explicit author-chosen stress priors or narrowly
+    contextualized engineering proxies, not fitted population estimates and
+    not generically conservative. The 1 kHz solver also cannot support claims
+    about the 800–1200 Hz pinned–pinned band.
+
+21. **What still blocks commit A.** *(Controlling rewrite 2026-08-03.)*
+    P1-S4 remains closed without an external registry deposit, and the source
+    intake is sufficient to proceed. Commit A is deliberately last, after:
+    (a) correcting the manuscript's stale universal 0.3 m mesh, blanket
+    two-rail-summing statement, and wheelset-channel interpretation;
+    (b) resolving or prospectively sensitivity-testing the Zhai per-rail-seat
+    scaling, 0.545-to-0.600 m \(M_b/K_b/K_f\) transfer, inherited 0.1% rail
+    Rayleigh target, and state-specific versus fixed-healthy Rayleigh closure;
+    (c) completing coupled response mesh/time refinement, one upstream
+    reproduction, the other eight deterministic mechanism signatures and the
+    registered passage studies, the authenticated dry-ballast-arm evaluation,
+    and the robustness/reporting items in
+    `docs/shm_reviewer_readiness_plan.md`; and (d) running the settled-source
+    qualification/provenance suite. P1-R1 then requires deliberate disposition
+    of every tracked/untracked path, a clean commit, new source roots, and a
+    green tracked-blob gate. Working-tree smokes are foundation evidence, not
+    substitutes for commit-bound qualification artifacts.
+
+21a. **Superseded 2026-08-02 queue (historical; do not execute).** *(The original
+    entry's manuscript demands — pad-"aging"/conservatism language, semantic
+    bibliography closure — are executed and under Codex review, and the
+    OSF/Zenodo deposit an earlier version required is dropped, P1-S4 closed
+    by claim withdrawal; see §8.8–§8.10.)* Remaining pre-A, in order —
+    this list was then called canonical and mirrored verbatim in
+    `paper1/NOTES_FOR_AUTHOR.md` and the round-5 wishlist: (a) Codex's
+    final pass over the R12/R13/R14 corrections; (b) the scheduled tier-1
+    primary verification (2026-08-03: Garg & Dukkipati FRA-PSD constants →
+    restore that citation; Zhai 2004 track values; O'Brien 2018 vehicle
+    values and the source model's own DOF count) — this upgrades the
+    generator-file attributions to direct content verification and removes
+    the manuscript's "not independently re-verified" caveat; if a paper
+    proves unobtainable, the caveat stands and the sub-item closes as
+    documented; (c) P1-R1 — and note the
+    commit-A input is NOT produced by `git add`-ing the 261 required
+    untracked files alone: the tree also carries ~74 tracked modifications
+    that must be staged, and every untracked path beyond the required 261
+    must be explicitly dispositioned (added or ignored) so the tree is
+    clean; verify with the campaign-controls tracked-blob gate going green
+    after the commit. The
+    converged tree
+    must then pass the quiescent mutation/regression suite; the designated host
+    must run the exact locked R2025b Update 5 qualification/contact gate, and
+    the genuine 100-trial benchmark plus complete cross-host receipt graph must
+    be retained before dispatch. No earlier smoke or working-tree run is a
+    substitute for those commit-bound artifacts.
+
+22. **Windows cloud-backed source identity is explicit and fail-closed.** On
+    this OneDrive-backed NTFS tree, Java NIO legitimately returns an empty
+    `basic:fileKey`. The MATLAB generation and contact boundaries now fall back
+    to `fsutil file queryfileid`, launched through a shell-free
+    `ProcessBuilder` with a ten-second timeout. They accept one exact 64- or
+    128-bit file ID, normalize it to 128 bits, reject sentinel IDs, and bind it
+    to the native `volume:vsn` captured before and after the query. Hard-link
+    counts use the same bounded runner. This restores stable identity without
+    weakening the link/alias checks. It does not qualify the present host: its
+    installed `VersionInfo.xml` reports MATLAB 25.2.0.3312555 (R2025b) Update
+    6, while the frozen campaign remains locked to 25.2.0.3177638 Update 5.
+    The lock must not be silently retargeted merely to make this host pass.
+
+### 8.8 Semantic-source closure and prior declassification (2026-08-01)
+
+The R11 re-review returned NOT PASS on five P1s. Three are scientific or
+archival rather than technical, and this entry records how they were resolved
+and why the chosen wording is the defensible one.
+
+**Why a blanket "modeling priors assembled from field evidence" sentence was
+not enough.** That formulation is true of the *collection* and false of nearly
+every *member*. A reviewer who checks any single value — say the `U(5,20)` m
+patch length — finds no fitting dataset behind it, and the collective sentence
+then reads as an attempt to borrow credibility from adjacent literature. The
+manuscript therefore now classifies each value individually into three named
+classes (anchored-with-scope-caveat, contradicted-but-retained, author-chosen)
+and opens by stating that *none* was fitted. Being explicit about which values
+are ours costs nothing scientifically — the campaign is a stress-test design,
+not a population study — and it removes the single largest attack surface.
+
+**Method: adversarial double reading.** Every source was read page-anchored,
+then re-read by an independent pass instructed to *refute* the first verdict.
+Five `SUPPORTS` verdicts fell to `PARTIAL` under that second reading
+(Wangtawesap stiffness and damping, Esmaeili damping, Oregui softening, RIVAS
+incidence). The lesson generalizes: a single careful read reliably overstates
+support, because the reader is looking to confirm a number they already have.
+Only two anchors survived, and both are transfers across a scope boundary that
+the text now names.
+
+**Declassifications that changed the manuscript, not the campaign.** No frozen
+value moved. What changed is what the paper claims about them:
+
+- the dry-fouling *stiffness* band `[1.2, 2.0]` is contradicted by the nearest
+  measurement (Esmaeili's box tests soften: the quoted 54.7 to 46.6 kN/mm
+  pair is the 5 wt% tire-derived-aggregate case; the plain-ballast change
+  ≈82 to 64 kN/mm is back-calculated from the stated percentage drops, with
+  Fig. 14 printing those bars as 0.08227→0.06441 under an MN/m caption — a
+  ×1000 unit inconsistency, disclosed not resolved). It is retained
+  as a compaction-dominated scenario with the sign disagreement declared. That
+  is preferable to quietly dropping either the citation or the band;
+- `DU{1,...,5}` does not bracket a worst case: Shi et al. (2024) find the
+  response non-monotonic and worst at *three* (104.5 kN vs 90.8 kN at five);
+- `P(OOR) = 0.30` has no support at all — the nearest figures, RIVAS's 5% and
+  7% above 1.0 mm, come from two UK classes whose tread problems the report
+  describes, with no stated sampling frame or selection rationale;
+- the pad Weibull has no basis in any audited pad paper, and the aging
+  *direction* is contested (field-worn pads soften; fatigue tests stiffen), so
+  the scalar is now framed as service-condition variability with no time axis.
+
+**Removing six citations was the right trade.** Five of them
+(`sadeghi2018gpr`, `selig1994track`, `chrismer2018fouling`, `husoy2024defects`,
+`musgrave2024ballast`) supported exactly one sentence claiming the patch-extent
+prior was "anchored to" GPR surveys — a claim that was simply false. Deleting
+the sentence deleted the need for them, and the surviving extent context now
+comes from two sources held locally. The sixth, `garg1984dynamics`, is a
+deliberate judgement call: no local copy exists to verify the FRA class-4
+constants against, and nothing in `papers/` reproduces the parameterization, so
+the manuscript attributes those constants to the TTB-2D generator source
+instead. A citation the author cannot check is worth less than an attribution
+the reader can.
+
+**On the word "conservative".** A wider interval is not a conservative one. The
+seven-edge tail adjustment borrows a Bonferroni *width rule* without inheriting
+any error-rate control, because the underlying quantities are resampling
+summaries of one fixed finite design rather than test statistics. Calling the
+result conservative would imply a guarantee the design cannot deliver, so the
+word is gone and the width rule is described as exactly what it is. The same
+applies to the prior family: without an outcome-specific sensitivity result, a
+"deliberately conservative" prior is an unproved claim about a direction of
+error, not a property of the design.
+
+**Protocol registration was dropped (author decision, 2026-08-01).** An
+earlier version of this entry kept the deposit open by design; the author then
+reversed course, and P1-S4 was closed by *withdrawing the claim that required
+it*: the manuscript no longer invokes preregistration, defines "registered"
+locally as prospectively fixed, versioned, hash-identified source, and states
+explicitly that no external registry deposit was made. Preregistration is not
+a norm in structural engineering or SHM venues — their expectation is
+data/code availability plus an archived artifact at publication, which remains
+planned. `docs/protocol_deposit.md` is retained as a wholly historical
+specification in case a venue or co-author later asks for a deposit; nothing
+in the pre-A queue depends on it. Codex R12 reviewed and accepted this closure.
+
+### 8.9 R12 semantic corrections (2026-08-02)
+
+Codex R12 returned NOT PASS on P1-S1/S2/S3 plus cross-document consistency.
+The fixes are wording-level; no frozen campaign value moved and no hashed
+source file was touched. The decisions worth recording:
+
+- **The implemented vehicle is six-DOF, not ten-DOF.** The manuscript had
+  inherited the cited O'Brien model's ten-DOF description, but TTB-2D's
+  implemented formulation carries six generalized coordinates (vertical +
+  pitch of car body and both bogies; `scour_MATLAB/B18_TrainVehEq.m` builds a
+  6×6 mass matrix), with wheelsets as unsprung masses following the rail
+  through the bilateral contact. **Correction 2026-08-03:** the two additional
+  monitored rows are not derived wheelset accelerations either. They sample
+  the Eulerian rail FE nodal-acceleration field at moving wheel coordinates
+  and omit the convective terms retained separately in B66. The six-DOF
+  correction stands; the earlier channel interpretation does not.
+- **The descriptor window is a prior like any other.** The 30 m approach +
+  deck + 30 m exit sampling domain scales both Poisson means, so leaving it
+  unclassified silently privileged it. It is now enumerated as author-chosen
+  everywhere the rates are.
+- **The prior taxonomy has three classes, not two.** Scope-caveated proxy,
+  contradicted-and-retained (the dry-fouling stiffness band), and
+  author-chosen. The methodology doc had collapsed the middle class away.
+- **Averaging is not a resolution bound.** Guo's 2.4 m smoothing window is an
+  averaging choice; inferring "cannot resolve shorter features" (or calling
+  it a "minimum feature") overclaimed. Same discipline as the "conservative"
+  purge: state what the source did, not what it implies at its strongest.
+- **CRN benefits are intent, not theorem.** "Reduce edge variance and make
+  exact paired inference possible" overstated a fixed-design sensitivity
+  device; variance reduction depends on the induced covariance and no
+  diagnostic is registered.
+- **Scope caveats travel with their numbers.** Lundqvist +70%/+40% is one
+  smooth-track case (1 mm void, adjacent sleeper, 90 m/s, speed-dependent);
+  Oregui's ≈40% softening is at 12–18 kN preload (over half at 6 kN);
+  Esmaeili's 54.7→46.6 kN/mm pair is 5 wt% tire-derived-aggregate specimens
+  (its Fig. 14 also reports the plain-ballast pair, ≈82→64 kN/mm — see §8.10);
+  Shi models 0–5 consecutive voids at 80 km/h with the wheel–rail force
+  comparison reported for 0/1/3/5 (worst at three); FRA's
+  extent range is open-ended and conditioned on class-5-limit-crossing sites;
+  RIVAS states no sampling frame; 2.5 mm vs the 10–120 µm clip is exactly
+  20.8–250× (1.3–2.4 orders), and the ~0.9 mm developed-polygonization and
+  ~2.5 mm lathe-removal figures are distinct scopes.
+
+### 8.10 R13 corrections — including two reviewer-error withdrawals (2026-08-02)
+
+Codex R13 confirmed most R12 repairs but found residual defects — and, notably,
+withdrew two of its own R12 claims after re-reading the primaries. Both
+directions of error are worth recording:
+
+- **Wangtawesap "no damping rise below ~15 cm" — reviewer error, withdrawn by
+  Codex, propagated by us.** Thesis Table 4.17 (condensed sleeper–ballast
+  parameters): C_con = 1.85/1.90/1.85/2.37/2.44/2.51/2.53/5.19 ×10⁴ N·s/m at
+  0/5/10/15/20/25/30/35 cm. The rise is gradual — ≈unchanged at 5–10 cm,
+  +28% already at 15 cm, ×2.8 only at full submergence — and the thesis
+  states no threshold. All four repo sites now carry the exact table values.
+  Lesson: a reviewer's numerical characterization is a claim like any other;
+  we transcribed R12's "15 cm threshold" without re-deriving it.
+- **Esmaeili "no plain-ballast pair" — my over-correction, flagged by Codex.**
+  Fig. 14 labels the plain-ballast (T0) stiffness bars 0.08227→0.06441 under
+  an MN/m caption — a ×1000 unit inconsistency with the prose's kN/mm that
+  is disclosed, not resolved; back-calculating the text's stated
+  33.5%/27.6% TDA-induced drops gives ≈82→64 kN/mm (×0.78). The quoted
+  54.7→46.6 kN/mm pair is the T5 (5 wt% TDA) case. The correct
+  statement is stronger for us: plain-ballast softening is stated in the
+  study's own text, and the figure corroborates it up to the disclosed unit
+  inconsistency.
+- **Shi 0–5 modeled / 0/1/3/5 force-reported** — Codex accepted the
+  distinction and withdrew its R12 "no 0–5 sweep" statement.
+- **"Cross-rung inference" heading** renamed to "cross-rung paired
+  sensitivity analysis" in the methodology doc; the hashed module names
+  (`core/cross_rung_inference.py`) are historical and stay, with an explicit
+  note that "inference" there is a file name, not a statistical claim. The
+  track spec's "Separable? Yes, per the sources" is corrected to an
+  evaluation expectation, not a source-established property.
+- **Crack-law labels**: severity band U(0.05, 0.30), ±17.5% window, and
+  10–90% clamp now individually labeled author-chosen in the methodology
+  table and track spec, matching the manuscript.
+- **Closure boundary made precise**: model-parameter values (track, vehicle,
+  FRA PSD) are manuscript-attributed to the generator's hash-locked property
+  files, which name their sources (`TrainProp_ObrienCalibrate.m` prints the
+  O'Brien DOI in its header); the round-5 fetch list upgrades attribution to
+  direct verification and is not a closure hole. The commit-A recipe was
+  also corrected: staging the 261 required untracked files alone is not
+  sufficient — the ~74 tracked modifications and all remaining untracked
+  paths must be dispositioned too.
+
+### 8.11 Numerical-verification corrections (2026-08-03)
+
+This entry supersedes the historical statement in item 1 that deterministic
+support snapping was harmless when used consistently. Consistency prevents a
+state-dependent confound; it does not make the wrong geometry numerically
+negligible. The independent Euler--Bernoulli oracle found that replacing the
+historical L60 bridge grid (`h=0.30 m`, supports realized at 20.1/39.9 m) with
+the support-aligned grid (`h=0.20 m`, supports at 20/40 m) changes the first
+five diagnostic frequencies by as much as about 0.75% and increases a fixed
+point-load deflection magnitude by about 2.16%. Production now selects
+bridge/rail elements per sleeper bay of 3/2 for L60 and 2/2 for L99.6;
+`B02_BoundaryConditions` rejects positive-spring support snapping. The
+prospective refinement sequence is geometry-specific and retains bridge and
+rail spacings separately.
+
+The corrected deck property set still carries a distinct validation boundary:
+its \(E,I,\rho A\), and 3% damping values originate from the Fernandes
+two-by-20 m example. Reusing them for L60 and the four-by-24.9 m L99.6 bridge
+is an idealized geometry/scale stress transfer, not calibration of those
+longer configurations. Numerical convergence can verify the transferred model
+without validating that physical extrapolation.
+
+That correction exposed and resolved a numerical mass-invariance defect while
+leaving the physical scope explicit. Zhai et al. (2004), Eq. (5) and Table 1,
+support a 531.4 kg independent vibrating ballast mass at each rail support
+point. The inherited B54 bridge topology is different: it has no on-bridge
+ballast DOF and condenses one retained value onto every deck DOF under a
+support-aligned sleeper, rather than distributing it over all bridge nodes.
+Full lumps at both bridge endpoints are an inherited author-chosen domain
+partition. Under those declared conventions the totals are 53,671.4 kg for
+L60 and 88,743.8 kg for L99.6 at every registered mesh level; the coupled
+preflight isolates this addition from the bridge mass matrix and rejects a
+different pattern or total. This establishes inventory invariance, not
+physical validation of the deck condensation.
+
+Zhai's complete five-parameter ballast topology also couples adjacent
+independent ballast masses through \(K_w,C_w\). Its no-shear comparison
+overpredicts measured ballast acceleration by 12%, and the paper concludes
+that the shear effect is necessary for track dynamics. The repository omits
+that shear branch on the approach, bridge, and exit. This inherited topology
+is therefore a separate P1 model-form sensitivity; it is not closed by the
+per-seat value check or by reproducing the upstream TTB-2D result.
+
+The same primary-source check exposed a separate, still-open parameter-scope
+question. Zhai's Table 1 values are stated per rail seat. The inherited planar
+track-property function doubles rail inertia/mass and the half-sleeper mass,
+but does not double pad, ballast, or sub-ballast mass/stiffness/damping. That
+may represent a one-seat line model or an incomplete two-rail equivalence. It
+must be resolved through an upstream benchmark or a prospective scaling
+sensitivity, not by silently changing the nominal parameters.
+
+A second source-scope transfer is independent of the rail-seat question.
+Zhai's tabulated parameter set uses 0.545 m support spacing, whereas the
+generator uses 0.600 m and retains the source's \(M_b\), \(K_b\), and \(K_f\)
+values without re-evaluating their spacing-dependent expressions. The damping
+values are not equation-derived from spacing; their scope issue is the
+per-rail-seat transfer above. The current nominal model is thus a
+proxy-informed hybrid, not a spacing-consistent reproduction of Zhai. Resolve
+it through an upstream benchmark or a prospective parameter-consistency
+sensitivity before physical-validation claims; do not tune the values after
+examining response outcomes.
+
+The adjacent `Track.Rail.Damping.per = 0.1%` assignment is not reported by
+Zhai and is explicitly classified as an inherited author-chosen rail Rayleigh
+target. It must be reported separately from the Zhai property lineage and
+included in the damping-sensitivity ledger.
+
+The response audit also withdrew the interpretation of `acc_under` as a
+wheelset acceleration. B17 computes the rail FE nodal-acceleration field
+interpolated at the instantaneous wheel coordinate. B66 carries the spatial
+convective terms separately when reconstructing contact force. Therefore the
+stored `AcelRodaPrimVag` and display name `Wheel*_Vert` are legacy identifiers,
+not the physical meaning of a total moving-contact or wheelset acceleration.
+Active non-manuscript documentation and code labels are being corrected; the
+remaining `.tex` wording is a pre-A scientific correction, not a cosmetic one.
+
+Finally, structural stiffness interventions are not fixed-damping dynamic
+counterfactuals. Scour, bearing fixity, and crack directly alter `K`, after
+which B24 recalibrates Rayleigh coefficients from each state's modes and B00
+uses the bridge frequencies for rail damping. The assembled `C` matrix thus
+changes broadly. This is a deterministic constant-target-modal-damping closure,
+not damage-dependent damping evidence, and a fixed-healthy-Rayleigh sensitivity
+is required before interpreting response changes as pure stiffness effects.
+
+The first numerical-V&V package validator was itself rejected by adversarial
+review: it could accept a fabricated self-authored PASS package. Both current
+validators now accept only explicitly nonqualifying micro packages and refuse
+every qualification request. A future qualifying receipt must be produced by
+an independent source-bound scientific verifier; artifact self-attestation is
+not evidence.
+
 ---
 
 ## Reference shortlist
-- Kamariotis et al. (2024) — value of SHM; gradual + shock scour; € costs; CNN drive-by scour detection (5–10% stiffness loss).
+- Kamariotis et al. (2023) — value of SHM and a generic illustrative
+  gradual-plus-shock deterioration model; not a scour-calibration source.
 - Torzoni et al. (2024, 2026) — DT decision frameworks (DBN; active inference).
 - Chadha et al. (2023); Ames et al. (2025) — risk-aware / risk-sensitive SHM decisions.
 - Fernandes et al. (2024–2026) — drive-by railway-bridge damage / scour.

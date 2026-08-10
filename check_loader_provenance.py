@@ -22,6 +22,7 @@ import scipy.io as sio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.dataset import (                                            # noqa: E402
+    _EXPECTED_CHANNEL_SCHEMA_ID,
     _EXPECTED_GENERATION_BEHAVIOR_VERSION,
     _EXPECTED_GEN_SCHEMA,
     _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
@@ -30,12 +31,15 @@ from core.dataset import (                                            # noqa: E4
     _load_multi_output,
     _read_manifest_generation_metadata,
 )
+from core.campaign_contract import (                                  # noqa: E402
+    EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
+    EXPECTED_RAIL_END_CLEARANCE_M,
+)
 from core.source_provenance import generator_source_root              # noqa: E402
 
-_DOF_SOURCE = {0: ('AcelPrimVag', 0), 1: ('AcelPrimVag', 1), 2: ('AcelPrimVag', 2),
-               3: ('AcelRodaPrimVag', 0), 4: ('AcelRodaPrimVag', 1),
-               5: ('PitchPrimVag', 0), 6: ('PitchPrimVag', 1), 7: ('PitchPrimVag', 2)}
 NST, NP, L = 3, 4, 64          # 3 states, 4 passages, length 64
+BRIDGE_LENGTH_M = 0.01
+DIM_SPACE = 1001
 fails = 0
 _GENERATOR = generator_source_root(Path(__file__).resolve().parent)
 _QUALIFICATION_SHA = "a" * 64
@@ -69,6 +73,8 @@ def _generation_config_json():
     return json.dumps(
         {
             "schema": _EXPECTED_GEN_SCHEMA,
+            "channel_schema_id": _EXPECTED_CHANNEL_SCHEMA_ID,
+            "state_design_kind": "five-family-multidamage-v2",
             "generation_behavior_version":
                 _EXPECTED_GENERATION_BEHAVIOR_VERSION,
             "campaign_matlab_release": _EXPECTED_MATLAB_RELEASE,
@@ -80,6 +86,9 @@ def _generation_config_json():
             "n_states": NST,
             "Npass": NP,
             "damage_seed": DAMAGE_SEED,
+            "rail_end_clearance_m": EXPECTED_RAIL_END_CLEARANCE_M,
+            "rail_end_clearance_decision_id":
+                EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -125,6 +134,7 @@ def _nested_provenance(*, matlab_release=_EXPECTED_MATLAB_RELEASE,
     return {
         'gen_schema': _EXPECTED_GEN_SCHEMA,
         'gen_fingerprint': FP,
+        'channel_schema_id': _EXPECTED_CHANNEL_SCHEMA_ID,
         'matlab_release': matlab_release,
         'campaign_matlab_release': _EXPECTED_MATLAB_RELEASE,
         'actual_matlab_environment_descriptor':
@@ -168,8 +178,9 @@ def _top_level_provenance(nested):
 
 
 def _save_state(path, idx, data, *, nested_overrides=None, nested_drop=(),
-                top_overrides=None, top_drop=()):
-    nested = _nested_provenance()
+                top_overrides=None, top_drop=(), defaults_npass=NP):
+    nested = _complete_payload_defaults(defaults_npass)
+    nested.update(_nested_provenance())
     nested.update(_state_identity(idx))
     nested.update(data)
     nested.update(nested_overrides or {})
@@ -200,15 +211,56 @@ def _cellrow(nrows, npass=NP, nan_passage=None):
     return a
 
 
+def _offset_cellrow(nrows, offset, npass=NP):
+    values = _cellrow(nrows, npass)
+    for passage in range(npass):
+        values[0, passage] = values[0, passage] + float(offset)
+    return values
+
+
 def _raw_meta(npass=NP):
-    # RAW-format metadata (mandatory in r7): identity space map, full-window crop.
-    # All SIX fields A00 writes; integer-valued crop/dim, finite bridge params.
-    return {'DimSpace': np.full((1, npass), float(L)),
+    # Exact generator equations, with a deliberately tiny bridge for a compact
+    # behavioral fixture.
+    bridge_samp = round(100 * BRIDGE_LENGTH_M)
+    velocity = DIM_SPACE * 10.0 / L
+    crop_start = 1001
+    crop_end = min(crop_start - 1 + bridge_samp + 1831, DIM_SPACE)
+    return {'DimSpace': np.full((1, npass), float(DIM_SPACE)),
             'DimAcel':  np.full((1, npass), float(L)),
-            'crop_start': np.ones((1, npass)),
-            'crop_end':   np.full((1, npass), float(L)),
-            'bridge_samp': np.full((1, npass), float(L)),
-            'L_bridge_eff': np.full((1, npass), 60.0)}
+            'crop_start': np.full((1, npass), float(crop_start)),
+            'crop_end':   np.full((1, npass), float(crop_end)),
+            'bridge_samp': np.full((1, npass), float(bridge_samp)),
+            'L_bridge_eff': np.full((1, npass), BRIDGE_LENGTH_M),
+            'Velocidade': np.full((1, npass), velocity)}
+
+
+def _complete_payload_defaults(npass=NP):
+    """One valid instance of the exact closed MATLAB state contract."""
+    return {
+        'AcelPrimVag': _cellrow(3, npass),
+        'AcelRodaPrimVag': _offset_cellrow(4, 1000, npass),
+        'AcelWheelsetPrimVag': _offset_cellrow(4, 2000, npass),
+        'PitchPrimVag': _cellrow(3, npass),
+        'Dano': 0.2,
+        'Temperatura': np.full((1, npass), 20.0),
+        'VehiclesProps': np.ones((5, 3)),
+        'beam_f1_Hz': 4.0,
+        'bearing_vector': np.zeros((1, 2)),
+        'crack_log': np.zeros((npass, 3)),
+        'profile_mode': 'fixed',
+        'profile_log': np.ones((1, npass)),
+        'track_log': np.zeros((1, npass)),
+        'oor_log': np.zeros((1, npass)),
+        'contact_log': np.column_stack([
+            np.zeros(npass),
+            np.zeros(npass),
+            np.zeros(npass),
+            -1.0e5 * np.ones(npass),
+        ]),
+        'scour_vector': np.array([[0.0, 0.1, 0.2, 0.0]]),
+        'state_family': 'joint',
+        **_raw_meta(npass),
+    }
 
 
 def _finalize(path):
@@ -284,6 +336,10 @@ def _write_state(path, idx, schema=_EXPECTED_GEN_SCHEMA, fp=FP,
         **(nested_overrides or {}),
     }
     drops = set(nested_drop)
+    if drop_clog:
+        drops.add('contact_log')
+    if drop_family:
+        drops.add('state_family')
     if drop_fp:
         drops.add('gen_fingerprint')
     if drop_release:
@@ -296,6 +352,7 @@ def _write_state(path, idx, schema=_EXPECTED_GEN_SCHEMA, fp=FP,
         nested_drop=drops,
         top_overrides=top_overrides,
         top_drop=top_drop,
+        defaults_npass=npass,
     )
 
 
@@ -354,11 +411,16 @@ def _write_manifest(path, n_states=NST, npass=NP, schema=_EXPECTED_GEN_SCHEMA,
                     drop_dano=False):
     ci = {'n_states': n_states, 'passages_per_state': npass,
           'gen_schema': schema, 'gen_fingerprint': fp,
+          'channel_schema_id': _EXPECTED_CHANNEL_SCHEMA_ID,
+          'state_design_kind': 'five-family-multidamage-v2',
           'generation_config_json': GENERATION_CONFIG_JSON,
           'case_name': 'fixture_dataset',
           'stage': 'fixture_stage',
           'damage_mode': 'multi_scour',
-          'L_bridge_m': 60.0,
+          'rail_end_clearance_m': EXPECTED_RAIL_END_CLEARANCE_M,
+          'rail_end_clearance_decision_id':
+              EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
+          'L_bridge_m': BRIDGE_LENGTH_M,
           'num_spans': 3,
           'num_supports': 4,
           'scour_supports': '[2 3]',
@@ -439,7 +501,7 @@ def _build(path, manifest=True, complete=True, state_table=True, **state_kw):
 
 
 def _load(path):
-    return _load_multi_output(path, [0], 200, [2, 3], _DOF_SOURCE)
+    return _load_multi_output(path, [0], 200, [2, 3])
 
 
 def check(name, fn, should_raise):
@@ -461,6 +523,72 @@ try:
     # 0. VALID dataset loads
     p = os.path.join(root, "valid"); _build(p)
     check("valid dataset loads", lambda: _load(p), should_raise=False)
+
+    def _physical_dofs_are_deployed():
+        X, _, _ = _load_multi_output(p, [3, 4], 200, [2, 3])
+        if X.shape[1] != 2 or not np.all(X > 1000.0):
+            raise AssertionError(
+                "DOFs 3-4 did not come from the offset AcelWheelset fixture"
+            )
+
+    check("physical8_v1 maps DOFs 3-4 to AcelWheelsetPrimVag",
+          _physical_dofs_are_deployed, should_raise=False)
+
+    p = os.path.join(root, "missingchannelschema"); _build(p)
+    _write_manifest(p, metadata_drop=("channel_schema_id",))
+    check("missing manifest channel schema rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "wrongchannelschema"); _build(p)
+    _write_manifest(
+        p, metadata_overrides={"channel_schema_id": "legacy_virtual8"}
+    )
+    check("foreign manifest channel schema rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "missingclearance"); _build(p)
+    _write_manifest(p, metadata_drop=("rail_end_clearance_m",))
+    check("missing explicit rail-end clearance rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "wrongclearance"); _build(p)
+    _write_manifest(p, metadata_overrides={"rail_end_clearance_m": 15.0})
+    check("wrong rail-end clearance rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "missingclearanceid"); _build(p)
+    _write_manifest(p, metadata_drop=("rail_end_clearance_decision_id",))
+    check("missing clearance decision identity rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "wrongclearanceid"); _build(p)
+    _write_manifest(
+        p,
+        metadata_overrides={
+            "rail_end_clearance_decision_id":
+                "paper1-rail-domain-clearance-c15-v1"
+        },
+    )
+    check("wrong clearance decision identity rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "missingstatechannelschema"); _build(p)
+    _write_state(p, 2, nested_drop=("channel_schema_id",))
+    check("missing per-state channel schema rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "mixedstatechannelschema"); _build(p)
+    _write_state(
+        p, 2,
+        nested_overrides={"channel_schema_id": "legacy_virtual8"},
+    )
+    check("mixed per-state channel schema rejected", lambda: _load(p),
+          should_raise=True)
+
+    p = os.path.join(root, "missingwheelsetpayload"); _build(p)
+    _write_state(p, 2, nested_drop=("AcelWheelsetPrimVag",))
+    check("missing physical wheelset payload rejected", lambda: _load(p),
+          should_raise=True)
 
     # Strict scalar/canonical manifest grammar: no int() truncation, no [0]
     # selection from arrays, and no non-SHA provenance aliases.
@@ -677,16 +805,17 @@ try:
     check("wheel channel count mismatch rejected", lambda: _load(p), should_raise=True)
 
     # ── audit R7.1 P5: RAW mandatory, crop validity, dano_max, full-vector ranges ──
-    def _write_bare(path, idx, d):     # write WITHOUT auto RAW metadata
+    def _write_bare(path, idx, d, *, missing=()):
         d.setdefault('state_family', 'joint')
-        _save_state(path, idx, d)
+        _save_state(path, idx, d, nested_drop=missing)
 
     # 24. Missing RAW field (no DimSpace) -> reject (r7 requires the raw format)
     p = os.path.join(root, "noraw"); _build(p)
     _write_bare(p, 2, {'scour_vector': np.array([[0.0, 0.1, 0.2, 0.0]]),
                        'gen_schema': _EXPECTED_GEN_SCHEMA, 'gen_fingerprint': FP,
                        'AcelPrimVag': _cellrow(3), 'AcelRodaPrimVag': _cellrow(4),
-                       'PitchPrimVag': _cellrow(3), 'contact_log': _good_clog()})
+                       'PitchPrimVag': _cellrow(3), 'contact_log': _good_clog()},
+                missing=('DimSpace',))
     check("missing RAW field (DimSpace) rejected", lambda: _load(p), should_raise=True)
 
     # 25. crop_end < crop_start -> reject (zero-length signal)
@@ -719,7 +848,8 @@ try:
     _write_bare(p, 2, {'scour_vector': np.array([[0.0, 0.1, 0.2, 0.0]]),
                        'gen_schema': _EXPECTED_GEN_SCHEMA, 'gen_fingerprint': FP,
                        'AcelPrimVag': _cellrow(3), 'AcelRodaPrimVag': _cellrow(4),
-                       'contact_log': _good_clog(), **_raw_meta()})
+                       'contact_log': _good_clog(), **_raw_meta()},
+                missing=('PitchPrimVag',))
     check("missing PitchPrimVag rejected", lambda: _load(p), should_raise=True)
 
     # 30. 80% scour in an UN-selected support (index 0) -> reject (full-vector range)
@@ -736,7 +866,7 @@ try:
          'gen_fingerprint': FP, 'AcelPrimVag': _cellrow(3), 'AcelRodaPrimVag': _cellrow(4),
          'PitchPrimVag': _cellrow(3), 'contact_log': _good_clog(), **_raw_meta()}
     del d['bridge_samp']
-    _write_bare(p, 2, d)
+    _write_bare(p, 2, d, missing=('bridge_samp',))
     check("missing bridge_samp rejected", lambda: _load(p), should_raise=True)
 
     # 32. Fractional crop_start (1.5) -> reject (integrality; would be int()-truncated)

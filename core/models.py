@@ -19,24 +19,38 @@ from core.task import n_outputs as _task_n_outputs
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. Spatial Embedding Module
+# 1. Time2Vec-style Spatial-Coordinate Encoding
 # ──────────────────────────────────────────────────────────────────────────────
 
-class Space2Vec(nn.Module):
+class Time2VecPositionEncoding(nn.Module):
     """
-    Learnable spatial embedding layer (adapted from Time2Vec).
+    Time2Vec-style encoding of a normalized spatial coordinate.
 
-    Grounds the vibration signal to physical coordinates on the bridge
-    by concatenating a linear and a set of periodic position features
-    to the raw channel tensor before the CNN layers.
+    The input coordinate is position along the sampled response, not clock
+    time. The module borrows Time2Vec's one-linear-plus-periodic functional
+    form and concatenates the resulting coordinate features to the response
+    channels before the CNN. It has no sequence-length-dependent parameters.
 
     Args:
-        seq_len (int): Length of the input sequence (number of spatial samples).
+        seq_len (int | None): Deprecated compatibility metadata. It does not
+            affect parameters or the accepted input length.
         out_features (int): Total embedding dimension (1 linear + out_features-1 periodic).
     """
 
-    def __init__(self, seq_len: int, out_features: int = 8):
+    def __init__(self, seq_len: int | None = None, out_features: int = 8):
         super().__init__()
+        if seq_len is not None and (
+            isinstance(seq_len, bool) or int(seq_len) != seq_len or seq_len < 1
+        ):
+            raise ValueError("seq_len must be a positive integer when supplied")
+        if (
+            isinstance(out_features, bool)
+            or int(out_features) != out_features
+            or out_features < 1
+        ):
+            raise ValueError("out_features must be a positive integer")
+        seq_len = None if seq_len is None else int(seq_len)
+        out_features = int(out_features)
         self.seq_len = seq_len
         self.out_features = out_features
 
@@ -53,9 +67,19 @@ class Space2Vec(nn.Module):
         Returns:
             (Batch, out_features, Sequence_Length)
         """
+        if x_space.ndim != 3 or x_space.size(1) != 1:
+            raise ValueError(
+                "x_space must have shape (batch, 1, sequence_length)"
+            )
         linear   = self.w_linear   * x_space + self.p_linear
         periodic = torch.sin(self.w_periodic * x_space + self.p_periodic)
         return torch.cat([linear, periodic], dim=1)
+
+
+# Historical configs and checkpoint metadata use ``Space2Vec`` and the
+# ``space2vec.*`` state-dict prefix. Retain the import alias and module
+# attribute name, but keep the implementation and documentation truthful.
+Space2Vec = Time2VecPositionEncoding
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -64,29 +88,57 @@ class Space2Vec(nn.Module):
 
 class MultiRatePooling1D(nn.Module):
     """
-    Extracts features at multiple temporal resolutions by sub-sampling
-    the sequence at different pooling rates, then concatenating all views.
+    Fixed-width adaptive temporal-pyramid max pooling.
+
+    Each configured level produces exactly that many temporal bins, regardless
+    of the input sequence length. Concatenating the levels therefore yields
+    ``channels * sum(pool_rates)`` features for both RAW and PAA inputs. The
+    historical ``pool_rates`` name is retained for configuration compatibility;
+    its values now denote adaptive pyramid bin counts, not stride factors.
 
     Args:
-        pool_rates (tuple[int]): Downsampling factors, e.g. (1, 2, 4).
-                                 Rate 1 = no pooling (full resolution).
+        pool_rates (tuple[int]): Positive adaptive output-bin counts, e.g.
+                                 (1, 2, 4).
     """
 
     def __init__(self, pool_rates: tuple = (1, 2, 4)):
         super().__init__()
-        self.pool_rates = pool_rates
+        try:
+            levels = tuple(pool_rates)
+        except TypeError as exc:
+            raise ValueError("pool_rates must be a non-empty sequence") from exc
+        if not levels:
+            raise ValueError("pool_rates must be a non-empty sequence")
+        if any(
+            isinstance(level, bool)
+            or not isinstance(level, int)
+            or level < 1
+            for level in levels
+        ):
+            raise ValueError(
+                "every adaptive pyramid bin count must be a positive integer"
+            )
+        if len(set(levels)) != len(levels):
+            raise ValueError("adaptive pyramid bin counts must be distinct")
+        self.pool_rates = levels
+        self.pyramid_bins = levels
+        self.output_bins = sum(levels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: (Batch, Features, Sequence_Length)
         Returns:
-            (Batch, sum_of_pooled_features)  - flat 2-D tensor.
+            (Batch, Features * sum(pool_rates)) - fixed-width 2-D tensor.
         """
+        if x.ndim != 3 or x.size(-1) < 1:
+            raise ValueError(
+                "x must have shape (batch, features, non-empty sequence_length)"
+            )
         pooled_outputs = []
-        for rate in self.pool_rates:
-            pooled = F.max_pool1d(x, kernel_size=rate, stride=rate) if rate > 1 else x
-            pooled_outputs.append(pooled.flatten(start_dim=1))
+        for output_bins in self.pyramid_bins:
+            pooled = F.adaptive_max_pool1d(x, output_size=output_bins)
+            pooled_outputs.append(pooled.reshape(x.size(0), -1))
         return torch.cat(pooled_outputs, dim=1)
 
 
@@ -96,11 +148,11 @@ class MultiRatePooling1D(nn.Module):
 
 class SpaceAwareModularNetwork(nn.Module):
     """
-    Fully modular architecture supporting dynamic insertion of Space2Vec,
-    LSTM, and N-HiTS blocks for physical ablation studies.
+    Fully modular architecture supporting dynamic insertion of a Time2Vec-style
+    spatial-coordinate encoding, LSTM, and multi-rate pooling blocks.
 
     Architecture flags (all bool, all default False):
-        use_space2vec  - prepend spatial embedding before CNN.
+        use_space2vec  - prepend spatial-coordinate encoding before CNN.
         use_lstm       - insert a unidirectional LSTM after CNN.
         use_nhits      - replace global-average-pool with multi-rate pool.
 
@@ -109,10 +161,10 @@ class SpaceAwareModularNetwork(nn.Module):
         n_classes  (int):   Number of damage classes.
         in_channels (int):  Number of active DOFs (input channels).
         params (dict):      Hyperparameter dict from Optuna or a saved study.
-        use_space2vec (bool): Include Space2Vec layer.
+        use_space2vec (bool): Include Time2Vec-style position encoding.
         use_lstm      (bool): Include LSTM layer.
         use_nhits     (bool): Use multi-rate pooling instead of GAP.
-        s2v_features  (int):  Output dimension of Space2Vec embedding.
+        s2v_features  (int):  Output dimension of the position encoding.
     """
 
     def __init__(
@@ -133,16 +185,17 @@ class SpaceAwareModularNetwork(nn.Module):
         self.use_nhits     = use_nhits
         self.n_segments    = n_segments
 
-        # ── 1. Space2Vec ──────────────────────────────────────────────────────
+        # ── 1. Position encoding (legacy state key: space2vec) ────────────────
         if self.use_space2vec:
-            self.space2vec   = Space2Vec(seq_len=n_segments, out_features=s2v_features)
+            self.space2vec   = Time2VecPositionEncoding(
+                seq_len=n_segments, out_features=s2v_features
+            )
             cnn_in_channels  = in_channels + s2v_features
         else:
             cnn_in_channels  = in_channels
 
         # ── 2. Dynamic CNN layers ─────────────────────────────────────────────
         self.cnn_layers    = nn.ModuleList()
-        current_seq_len    = n_segments
         n_conv_layers      = params.get('n_conv_layers', 2)
 
         for i in range(n_conv_layers):
@@ -152,7 +205,6 @@ class SpaceAwareModularNetwork(nn.Module):
             self.cnn_layers.append(nn.ReLU())
             if params.get(f'pooling_l{i}', False):
                 self.cnn_layers.append(nn.MaxPool1d(kernel_size=2, stride=2))
-                current_seq_len //= 2
             cnn_in_channels = out_ch
 
         # ── 3. Optional LSTM ──────────────────────────────────────────────────
@@ -175,9 +227,7 @@ class SpaceAwareModularNetwork(nn.Module):
         if self.use_nhits:
             pool_rates           = params.get('nhits_pool_rates', (1, 2, 4))
             self.multi_rate_pool = MultiRatePooling1D(pool_rates=pool_rates)
-            flattened_size = sum(
-                current_features * (current_seq_len // rate) for rate in pool_rates
-            )
+            flattened_size = current_features * self.multi_rate_pool.output_bins
         else:
             flattened_size = current_features  # global-average-pool -> scalar per channel
 
@@ -206,9 +256,12 @@ class SpaceAwareModularNetwork(nn.Module):
         """
         batch_size = x.size(0)
 
-        # 1. Spatial embedding
+        # 1. Spatial-coordinate encoding. Use the live sequence length so one
+        # fixed parameterization accepts both RAW and PAA representations.
         if self.use_space2vec:
-            space_vec = torch.linspace(0, 1, steps=self.n_segments, device=x.device)
+            space_vec = torch.linspace(
+                0, 1, steps=x.size(-1), device=x.device, dtype=x.dtype
+            )
             space_vec = space_vec.view(1, 1, -1).expand(batch_size, 1, -1)
             x = torch.cat([x, self.space2vec(space_vec)], dim=1)
 
@@ -315,7 +368,7 @@ class Simple2DCNN(nn.Module):
 # 5. Factory function
 # ──────────────────────────────────────────────────────────────────────────────
 
-# N-HiTS pool-rate string -> tuple, for Optuna's categorical storage format.
+# Legacy N-HiTS key -> adaptive pyramid-bin tuple for Optuna categorical storage.
 _POOL_RATE_MAP: dict[str, tuple] = {
     "1_2_4":   (1, 2, 4),
     "1_4_8":   (1, 4, 8),
@@ -348,7 +401,7 @@ def build_model(
         supports (continuous heads) for a regression config (config['task']).
         The architecture is identical either way; only the head size changes.
     """
-    # Resolve N-HiTS string key back to a tuple (Optuna stores it as a string).
+    # Resolve the legacy string key to adaptive pyramid bin counts.
     if 'nhits_pool_rates_key' in params:
         params = dict(params)   # don't mutate the caller's dict
         params['nhits_pool_rates'] = _POOL_RATE_MAP[params['nhits_pool_rates_key']]

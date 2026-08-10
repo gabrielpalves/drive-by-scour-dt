@@ -1,8 +1,9 @@
 function Beam = A03_Bridge(Beam)
 % Bridge model definition
 
-% Not a function.
-% Defines the content of the variable Beam.
+% A FUNCTION (converted from the upstream TTB-2D script): completes the Beam
+% struct in place. It takes a seed Beam so the caller supplies the geometry
+% (span length, span count) that varies across the rung ladder.
 
 % *************************************************************************
 % *** Script part of TTB-2D tool for Matlab environment.                ***

@@ -17,8 +17,10 @@ A folder of MATLAB files, one per damage state, each holding several passages:
     held_out/
         0001.mat, 0002.mat, ...        # one file per damage state
     mat['data'][0,0] has fields AcelPrimVag, AcelRodaPrimVag, PitchPrimVag,
-    each shaped (1, n_passages) of cells; cell p is (rows, L) with the DOF on
-    the row (see _DOF_SOURCE below).
+    each shaped (1, n_passages) of cells; cell p is (rows, L) with the response
+    channel on the row (see _DOF_SOURCE below). AcelRodaPrimVag is a frozen
+    legacy key for Eulerian rail FE acceleration evaluated at moving wheel
+    coordinates, not wheelset/axle-box acceleration.
 
 Damage values: integer 0..60 % by file index by default (file k -> k %), OR pass
 `damage_values` for a continuous grid (e.g. [0.0, 0.67, 1.39, ...]) — continuous
@@ -38,7 +40,9 @@ import os
 import numpy as np
 import scipy.io as sio
 
-# DOF index -> (MATLAB field, row) — mirrors core.dataset.load_ttbi_dataset.
+# Channel index -> (MATLAB field, row), preserving legacy schema identifiers.
+# Indices 3/4 mean N(x_w).T @ A_rail at moving wheel coordinates; they are
+# neither wheelset acceleration nor total moving-contact acceleration.
 _DOF_SOURCE = {
     0: ("AcelPrimVag", 0), 1: ("AcelPrimVag", 1), 2: ("AcelPrimVag", 2),
     3: ("AcelRodaPrimVag", 0), 4: ("AcelRodaPrimVag", 1),
@@ -49,7 +53,8 @@ _DOF_SOURCE = {
 class SignalLibrary:
     """A pool of drive-by passages indexed by true damage state (%).
 
-    Stores full 8-channel signals so DigitalAsset can select its active DOFs.
+    Stores full 8-channel signals so DigitalAsset can select active channel
+    indices (called DOFs only in the frozen compatibility schema).
     Signals may have different lengths (speed varies) — kept as a list per state.
     """
 

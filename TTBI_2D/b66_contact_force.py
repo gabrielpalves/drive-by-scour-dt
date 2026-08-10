@@ -24,7 +24,17 @@ def b66_contact_force(Sol, Track, Calc, Train):
         for v in range(len(Train.Veh)):
 
             # Boolean mask converted to float for mathematical multiplication
-            ind = (Calc.Veh[v].x_path >= 0).astype(float)
+            # AUDIT 2026-08-09: the solver's own condition is elexj > 0 (B65
+            # assembles every coupling and profile contribution inside
+            # `if ele_num > 0`). x_path >= 0 excludes pre-entry samples but NOT
+            # post-exit ones, so profile terms stayed active after the wheel
+            # left the rail domain. Mirrors
+            # scour_MATLAB/+ttbi/wheel_contact_kinematics.m.
+            # INDEXING: MATLAB elexj is 1-based and uses 0 for "no element",
+            # so its test is `> 0`. b50_element_num_of_force.py stores 0-based
+            # indices with -1 for before-start/out-of-bounds, so the equivalent
+            # Python test is `>= 0`. Do NOT copy `> 0` across languages here.
+            ind = (Calc.Veh[v].elexj >= 0).astype(float)
             
             # Extract variables for clean equations
             N2w = Train.Veh[v].Wheels.N2w
@@ -44,8 +54,17 @@ def b66_contact_force(Sol, Track, Calc, Train):
             # Damping term
             term_c = ( (N2w @ V) - Sol.Veh[v].vel_under - (Sol.Veh[v].def_under_p * vel) - (Calc.Veh[v].hd_path * ind) ) * c
             
-            # Inertial term
-            term_m1 = -(Sol.Veh[v].acc_under + (Sol.Veh[v].def_under_pp * vel**2) + (2 * Sol.Veh[v].vel_under_p * vel)) * m
+            # Inertial term. acc_under is only the Eulerian rail FE field
+            # N(x_w).T @ A_rail; the next two terms supply the convective
+            # contributions to acceleration following the moving coordinate,
+            # and hdd_path supplies profile inertia, completing
+            #     z_w,tt = u_tt + 2*v*u_xt + v**2*u_xx + h_tt .
+            # AUDIT 2026-08-09: hdd_path was missing here, mirroring the same
+            # defect fixed in B66_ContactForce.m. UNVERIFIED on this path: the
+            # Python TTBI mirror stays nonqualifying until damaged-response
+            # parity is closed, and `Calc.Veh[v].elexj` has not been confirmed
+            # to exist with MATLAB semantics here.
+            term_m1 = -(Sol.Veh[v].acc_under + (Sol.Veh[v].def_under_pp * vel**2) + (2 * Sol.Veh[v].vel_under_p * vel) + (Calc.Veh[v].hdd_path * ind)) * m
             
             # Static gravity term
             term_m2 = m * grav

@@ -13,7 +13,10 @@ import hashlib
 import json
 import os
 
-from core.execution_environment import validate_execution_runtime
+from core.execution_environment import (
+    execution_block_for_stage,
+    validate_execution_runtime,
+)
 from core.protocol import protocol_hash
 
 
@@ -60,6 +63,8 @@ def verify_standalone_dt_package(
         "campaign_run_tag",
         "execution_receipt_sha256",
         "block_reference_manifest_sha256",
+        "selection_artifact_sha256",
+        "selection_slot",
     )
     missing = [key for key in required if key not in metadata]
     if missing:
@@ -112,6 +117,19 @@ def verify_standalone_dt_package(
         raise RuntimeError("DT protocol rung lacks its stage.")
     if not isinstance(anchor, str) or not anchor:
         raise RuntimeError("DT protocol rung lacks its execution anchor.")
+    try:
+        registered_block, registered_anchor = execution_block_for_stage(stage)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "DT protocol rung carries an unregistered production stage."
+        ) from exc
+    if (rung.get("execution_block"), anchor) != (
+        registered_block,
+        registered_anchor,
+    ):
+        raise RuntimeError(
+            "DT protocol rung disagrees with the registered execution block."
+        )
     if stage == anchor:
         if block_reference_sha is not None:
             raise RuntimeError(
@@ -136,4 +154,22 @@ def verify_standalone_dt_package(
                 "DT block-reference manifest SHA-256 differs from the "
                 "independently supplied expectation."
             )
+    selection_sha = metadata["selection_artifact_sha256"]
+    selection_slot = metadata["selection_slot"]
+    if metadata.get("hyperparameter_mode") == "selected_pair_hpo":
+        if not _is_sha256(selection_sha):
+            raise RuntimeError(
+                "selected-pair DT package lacks its selection artefact SHA-256."
+            )
+        if selection_slot not in {
+            "f40s_best_raw",
+            "f40s_best_paa",
+            "raw_cnn_gap_baseline",
+            "paa_cnn_gap_baseline",
+        }:
+            raise RuntimeError("selected-pair DT package has a foreign slot.")
+    elif selection_sha is not None or selection_slot is not None:
+        raise RuntimeError(
+            "non-selected-pair DT package carries selection artefact lineage."
+        )
     return metadata

@@ -110,8 +110,42 @@ if Calc.Profile.extra_L > 0
     Calc.Profile.extra_L = Track.Sleeper.spacing - Calc.Profile.extra_L;
 end % if Calc.Profile.extra_L > 0
 
-% Additional number of sleepers behind the vehicle at start and end
-Track.Rail.Options.num_add_sleepers = 10;
+% Additional number of sleepers behind the vehicle at start and end.
+%
+% The inherited ten-bay (6 m) fallback is retained strictly for noncampaign
+% upstream/standalone compatibility.  Production supplies an explicit reviewed
+% request through Calc.Profile.rail_end_clearance_m; numerical rail-domain
+% studies may request other margins.  Every request must lie exactly on the
+% sleeper lattice: no rounding is allowed because a silently rounded domain
+% would invalidate the 6/15/30 m comparison.
+legacy_num_add_sleepers = 10;
+legacy_clearance_m = legacy_num_add_sleepers*Track.Sleeper.spacing;
+if isfield(Calc.Profile,'rail_end_clearance_m') && ...
+        ~isempty(Calc.Profile.rail_end_clearance_m)
+    requested_clearance_m = Calc.Profile.rail_end_clearance_m;
+    if ~isnumeric(requested_clearance_m) || ...
+            ~isreal(requested_clearance_m) || ...
+            ~isscalar(requested_clearance_m) || ...
+            ~isfinite(requested_clearance_m) || ...
+            requested_clearance_m < 0
+        error('B43_ModelGeometry:InvalidRailEndClearance', ...
+            ['Calc.Profile.rail_end_clearance_m must be one finite ' ...
+             'nonnegative real scalar [m].']);
+    end
+    requested_bays = requested_clearance_m/Track.Sleeper.spacing;
+    requested_bays_integer = round(requested_bays);
+    lattice_tolerance = 256*eps(max(abs(requested_bays),1));
+    if abs(requested_bays-requested_bays_integer) > lattice_tolerance
+        error('B43_ModelGeometry:RailEndClearanceOffLattice', ...
+            ['Requested rail-end clearance %.17g m is not an exact ' ...
+             'multiple of the %.17g m sleeper spacing.'], ...
+            requested_clearance_m,Track.Sleeper.spacing);
+    end
+    Track.Rail.Options.num_add_sleepers = requested_bays_integer;
+else
+    requested_clearance_m = legacy_clearance_m;
+    Track.Rail.Options.num_add_sleepers = legacy_num_add_sleepers;
+end
 
 % Additional length not needed when working with the redux model
 if Calc.Options.redux == 1
@@ -120,6 +154,19 @@ end % if Calc.Options.redux == 1
 
 % Additional length to remove the influence of the track ends
 Calc.Profile.extra_L2 = Track.Rail.Options.num_add_sleepers*Track.Sleeper.spacing;
+
+% Increasing the finite domain extends BOTH rail ends.  Translate the deck
+% and the complete wheel path together by the left-end increment so that the
+% leading-wheel travel to the deck, solve duration, time grid, and D01 crop
+% are invariant across clearance arms.  At the default 6 m this is exactly
+% zero, preserving the historical geometry and arithmetic path.
+Calc.Profile.rail_domain_translation_m = ...
+    Calc.Profile.extra_L2-legacy_clearance_m;
+Calc.Profile.rail_end_clearance_requested_m = requested_clearance_m;
+Calc.Profile.rail_end_clearance_realized_m = Calc.Profile.extra_L2;
+Calc.Profile.rail_end_clearance_default_m = legacy_clearance_m;
+Calc.Profile.rail_end_clearance_num_sleeper_bays = ...
+    Track.Rail.Options.num_add_sleepers;
 
 % Minimum total length of profile
 Calc.Profile.L = 2*Calc.Profile.max_TL*Calc.Options.redux_factor ...
@@ -135,5 +182,7 @@ Calc.Position.x_start_end = ...
 
 % Length of approach + Train total length (Used for plotting)
 Calc.Profile.L_Aw = Calc.Profile.L_Approach + Calc.Profile.max_TL*Calc.Options.redux_factor;
+Calc.Profile.L_Aw = Calc.Profile.L_Aw + ...
+    Calc.Profile.rail_domain_translation_m*Calc.Options.redux_factor;
 
 % ---- End of function ----

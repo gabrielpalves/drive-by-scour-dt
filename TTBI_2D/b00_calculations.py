@@ -100,7 +100,7 @@ def b00_calculations(Calc, Train, Track, Beam, Damage):
 
     # ---- Complete Model ----
     # System matrices (Damage carries the per-passage TRACK-LAYER descriptors —
-    # Damage.track: ballast patches / hanging sleepers / pad aging+failures)
+    # Damage.track: ballast patches / hanging sleepers / pad condition+failures)
     print('Building model system matrices ...', end='', flush=True)
     Model = b54_model_matrices(Beam, Track, Calc, Damage)
     # Model boundary conditions

@@ -33,7 +33,7 @@ class GroupedFold:
 
 
 def finalist_cv_strata(strata_by_state: Sequence[str]) -> list[str]:
-    """Return the pre-registered coarsening used by finalist repeated CV.
+    """Return the prospectively source-locked coarsening used by finalist CV.
 
     The canonical R11 outer split uses
     ``joint|latentcrack{0,1}|scoursev{0,1,2}`` strata.  Repeated CV preserves
@@ -566,7 +566,7 @@ def mcse_family_size_recommendations(
 
     For a family mean, ``MCSE = sample_SD / sqrt(n)``.  The returned total-state
     recommendation ensures the designated evaluation fraction contains at least
-    both ``ceil((SD/target_mcse)^2)`` states and the pre-registered design floor.
+    both ``ceil((SD/target_mcse)^2)`` states and the source-locked design floor.
     It is a planning diagnostic, not a post-hoc change to the current campaign.
     """
 

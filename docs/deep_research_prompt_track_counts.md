@@ -2,7 +2,10 @@
 
 > **HISTORICAL RESEARCH PROMPT.** Current R11 evaluates empirical robustness
 > under the simulated nuisance distribution; it does not assume or claim
-> mathematical invariance.
+> mathematical invariance. A later direct-PDF audit also found that the prompt's
+> alleged 0.5%/year pad-failure rate was not present in Williams et al. (2014)
+> or the other audited pad/fastening primaries. `p=0.02` is now correctly
+> classified as an author-chosen snapshot stress prior.
 
 Paste the block below into NotebookLM Deep Research (notebook: "Probabilistic Graphical
 Models for Predictive Digital Twins at Scale" — it already holds the Track-Layer Deep

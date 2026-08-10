@@ -85,12 +85,35 @@ check("fixed-seed trainer moves criterion to DEVICE",
       'TRAIN_PROTOCOL["loss"]' in robust_src
       and "task.make_criterion(" in robust_src
       and ".to(DEVICE)" in robust_src)
+check("trainer consumes the protocol-hashed objective mapping",
+      "task.objective_value(" in train_src
+      and 'TRAIN_PROTOCOL["objective"],' in train_src)
 
 cfg = {
     "task": "regression",
     "target_supports": [2, 3],
     "bearing_targets": ["left", "right"],
 }
+objective_policy = trainer.TRAIN_PROTOCOL["objective"]
+objective_metrics = {"mse": 9.0, "scour_mse": 2.0}
+check("objective is SCOUR-primary when bearing heads exist",
+      task.objective_value(objective_metrics, cfg, objective_policy) == 2.0)
+check("objective defaults to aggregate MSE without bearing heads",
+      task.objective_value(
+          objective_metrics,
+          {"task": "regression", "target_supports": [2, 3]},
+          objective_policy,
+      ) == 9.0)
+try:
+    trainer.resolve_trial_seed({}, trainer.TRAIN_PROTOCOL["trial_seed"])
+except KeyError:
+    check("missing trial seed fails closed", True)
+else:
+    check("missing trial seed fails closed", False)
+check("registered trial seed is returned exactly",
+      trainer.resolve_trial_seed(
+          {"seed": 2026}, trainer.TRAIN_PROTOCOL["trial_seed"]
+      ) == 2026)
 device = trainer.DEVICE
 model = torch.nn.Linear(5, 4).to(device)
 loss_policy = trainer.TRAIN_PROTOCOL["loss"]

@@ -1,11 +1,35 @@
 # Drive-by Digital Twin for Railway-Bridge Scour
 
+> **Paper 1 status (2026-08-09): DISPATCH BLOCKED.** The current production
+> campaign is the four-block `F40-S`/`F40-M`/`L99-S`/`L99-M` design using
+> `physical8_v1` and an explicit 6 m rail-end clearance. Implementation is
+> complete, but clean commit A and the external benchmark, qualification,
+> contact, and authorization gates remain. Historical model names, metrics,
+> plots, datasets, and ZIPs are nonqualifying and must not be used as evidence
+> or deployment assets. See [README_CAMPAIGN.md](README_CAMPAIGN.md) for the
+> concise operator guide, [docs/paper1_campaign_plan.md](docs/paper1_campaign_plan.md)
+> for the controlling specification, and
+> [docs/audit_r5_results.md](docs/audit_r5_results.md) for the sole dispatch
+> verdict.
+>
+> In current Paper 1 documentation, “registered” means prospectively specified in
+> versioned, hash-identified repository source. It denotes no external registry
+> deposit and must not be described as externally preregistered. No OSF/Zenodo
+> protocol deposit is required or planned for this numerical SHM study.
+
+> **Dispatch-ZIP boundary.** Production dispatch ZIPs are execution subsets,
+> not repository snapshots: only paths listed in `bundle_source_files.txt` are
+> shipped. Paper-2 digital-twin code, archival/source-audit material, held
+> literature, and repository-only checks cited below remain available only in
+> the full source repository and are not bundle commands.
+
 A physics-informed **Digital Twin (DT)** that monitors **scour** (and, later,
 bearing/crack) damage on railway bridges from **drive-by** vibration — sensors on
 the *passing train*, not on the structure. Two parts:
 
-1. **Ablation study** *(Paper 1, complete)* — which neural architecture and which
-   vehicle sensors best classify scour from drive-by signals.
+1. **Ablation study** *(Paper 1, dispatch pending)* — compares registered
+   neural architectures and simulated response channels for continuous
+   support-stiffness-loss estimation and conditional localisation.
 2. **DT framework** *(Paper 2, in progress)* — evolve the bridge over its life
    (gradual + flood-shock scour), estimate its state each passage, and choose
    maintenance actions to minimise the expected **monetary** life-cycle cost
@@ -23,11 +47,11 @@ switch, *what it does*, *where it is implemented*, and *how to verify it*.
 ## Pipeline at a glance
 
 ```
- TTBI-2D physics  ──►  champion classifier  ──►  Bayes belief filter  ──►  planner  ──►  € cost
- (damaged bridge)      (PAA + N-HiTS, 2 DOF)     (transparent discrete)    (decision)    (Value-of-SHM)
+ TTBI-2D physics  ──►  audited estimator  ──►  Bayes belief filter  ──►  planner  ──►  € cost
+ (damaged bridge)      (Paper 1 selection pending) (transparent discrete)    (decision)    (Value-of-SHM)
         ▲                     ▲                          ▲                     ▲
         │              sensor health              risk perception        cost model
-        └──── scour evolution (Kamariotis gradual + flood shock) ◄────────────┘
+        └──── support-loss scenario (gradual + flood shock; calibration pending) ◄────┘
 ```
 
 In production the classifier does **not** run live TTBI — it samples a pre-built
@@ -54,12 +78,19 @@ the online loop is cheap and free of train/serve skew.
 | Path | What it is |
 |------|------------|
 | `TTBI_2D/` | Train–Track–Bridge Interaction physics engine (Cantero 2022, Python port). |
-| `TTBI_2D/damage_config.py` | **Single toggle point** for bridge geometry + all damage types (scour/bearing/crack/profile). |
-| `scour_MATLAB/` | MATLAB generator of the held-out observation dataset (`A00_Run.m`). |
+| `TTBI_2D/damage_config.py` | Development builder for the nonqualifying Python TTBI mirror; not the Paper 1 campaign authority. |
+| `scour_MATLAB/` | Authoritative MATLAB generator of the Paper 1 observation dataset (`A00_Run.m`). |
+| `README_CAMPAIGN.md` | Current four-block production and authorization guide. |
+| `docs/paper1_campaign_plan.md` | Controlling Paper 1 scientific and compute contract. |
+| `docs/audit_r5_results.md` | Legacy-filename, fail-closed dispatch report; pending until report-only commit B. |
+| `docs/damage_model_reference.md` | Canonical damage/EOV map: priors, units, function path, exact `M/C/K/f` effect, logs, limitations, and tests. |
+| `docs/shm_reviewer_readiness_plan.md` | Active scientific V&V and reviewer-readiness queue. |
+| `docs/numerical_vv_protocol.md` | Prospective code-, mesh-, time-step-, contact-, upstream-, and mechanism-level V&V protocol. |
+| `docs/dry_ballast_stiffness_sign_sensitivity.md` | Deferred track/train paired sign-sensitivity contract; transform retained, Paper-1 generation disabled. |
 | `core/` | Model builder, preprocessing (PAA/CWT/…), dataset/scaler utilities, DOF names. |
 | `core/task.py` | Classification vs multi-output-regression task switch (head size, loss, label dtype, metrics). |
 | `training/` | Offline ablation pipeline (Optuna HPO, champion export); regression-capable via `core/task.py`. |
-| `comprehensive_ablation_multidamage.py` | Stage-0 multi-damage ablation entry point (multi-output regression, reduced grid). |
+| `comprehensive_ablation_multidamage.py` | Manifest-gated Paper 1 training entry point; executes one assigned job through `training/paper1_executor.py`. |
 | `plotting/aggregate_ablation.py` | Master tables + winner-only ablation figures. |
 | `digital_twin/assets.py` | `ScourModel` (gradual + flood shock), `PhysicalAsset`, `DigitalAsset` (the classifier). |
 | `digital_twin/scour_multi.py` | `MultiScourModel` — correlated multi-foundation scour (Gaussian copula). |
@@ -82,14 +113,39 @@ the online loop is cheap and free of train/serve skew.
 Heavy / local-only artefacts (`PC7/`, `PC11/`, `Torzoni*/`, `data/`, `results/`,
 `ablation_analysis/`, `presentation/`) are **git-ignored**.
 
-### Committed models
+### Exact TTB-2D provenance
+
+The MATLAB engine is a modified derivative of Daniel Cantero's **TTB-2D
+SoftwareX v1** release:
+
+- upstream repository:
+  `ElsevierSoftwareX/SOFTX-D-22-00221`;
+- upstream commit:
+  `28d35528ac6624200a881bcd6130382b81579a01` (2022-10-11);
+- publication: Cantero, *SoftwareX* 20 (2022), 101253,
+  <https://doi.org/10.1016/j.softx.2022.101253>;
+- local import commit:
+  `4530bf1238b45d442da5071b8d02559913164dab` (2026-06-14).
+
+At that local import, 41 common upstream files were byte-identical and 16 had
+already been adapted for this project. Subsequent damage, provenance, raw-data,
+and qualification changes are repository-local modifications and must not be
+attributed to the upstream author. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+and [LICENSE](LICENSE).
+
+### Historical committed models (not Paper 1-qualified)
+
+The following packages and values predate the current Paper 1 generation and
+evaluation contracts. They are retained only for software-development
+continuity; none is a production champion, current scientific result, or
+dispatch-authorized digital-twin asset.
 
 | Folder | DOFs | Role |
 |--------|------|------|
-| `champion_PAA_NHiTS_2sensor_RBvert_CBpitch` | 2, 5 | **Production champion** — RearBogie_Vert + CarBody_Pitch (best 2-sensor pair, median MSE 0.41 ≈ full-8DOF 0.39). |
-| `fallback_PAA_NHiTS_1sensor_RBvert` | 2 | Sensor-health fallback when CarBody_Pitch fails. |
-| `fallback_PAA_NHiTS_1sensor_CBpitch` | 5 | Sensor-health fallback when RearBogie_Vert fails. |
-| `champion_PAA_NHiTS_full8dof` | 0–7 | All-sensors reference baseline. |
+| `champion_PAA_NHiTS_2sensor_RBvert_CBpitch` | 2, 5 | Legacy development package; selection and metric invalidated for Paper 1. |
+| `fallback_PAA_NHiTS_1sensor_RBvert` | 2 | Legacy development fallback; not Paper 1-qualified. |
+| `fallback_PAA_NHiTS_1sensor_CBpitch` | 5 | Legacy development fallback; not Paper 1-qualified. |
+| `champion_PAA_NHiTS_full8dof` | 0–7 | Legacy development reference; not Paper 1-qualified. |
 
 Each folder holds `DT_champion_weights.pth`, `DT_metadata.json` (architecture +
 `active_dofs` + `discretization`/`n_classes`), `DT_scaler.pkl`, `DT_conf_matrix.npy`
@@ -120,13 +176,15 @@ Each folder holds `DT_champion_weights.pth`, `DT_metadata.json` (architecture +
 | `MODE` | Truth | Observation | Speed | Use |
 |--------|-------|-------------|-------|-----|
 | `mock` | `MultiScourModel` | banded confusion matrix | instant | develop/sanity-check policies |
-| `library` | `MultiScourModel` | **real** held-out `.mat` signals + champion | fast | **production** Value-of-SHM (no skew) |
-| `live` | `PhysicalAsset` (TTBI) | live passage + champion | ~min/passage | one-off end-to-end checks |
+| `library` | `MultiScourModel` | held-out `.mat` signals + configured estimator | fast | software integration / nonqualifying historical studies |
+| `live` | `PhysicalAsset` (TTBI) | live passage + configured estimator | ~min/passage | one-off software checks; not production-authorized |
 
-`library` mode needs a held-out dataset: generate it with `scour_MATLAB/A00_Run.m`,
-move the run folder into `observations/<case>/`, and set `LIBRARY_DIR` to it
-(see `observations/README.md`). The dataset must use the **same bridge geometry**
-as the champion (40 m / 2-span / central-pier scour) or the classifier mispredicts.
+`library` mode needs a held-out dataset under `observations/<case>/` and a
+matching `LIBRARY_DIR` (see `observations/README.md`). A Paper 1 dataset may enter
+that path only after authorized bundle generation and exact dataset/geometry/
+preprocessing/estimator matching. Direct development runs and the currently
+committed 40 m / two-span packages are nonqualifying fixtures; they do not
+authorize a Paper 1 `library` or `live` deployment.
 
 ---
 
@@ -135,13 +193,15 @@ as the champion (40 m / 2-span / central-pier scour) or the classifier mispredic
 Everything below is set in the `run_dt.py` CONFIG block unless noted. "Where" gives
 the file + symbol; "verify" gives a concrete check.
 
-### Bridge & damage — `TTBI_2D/damage_config.py`
-- **What:** geometry (`configure_bridge`) and every damage type (`make_damage`:
-  per-pier `scour_rates`, `bearing_rot_stiff`, `crack_locs/intensity`,
-  `profile_intensity`). All default to healthy → a feature is "off" at its default.
-- **Where:** `TTBI_2D/damage_config.py` (`configure_bridge`, `make_damage`).
-- **Verify:** the legacy single-foundation 40 m scour-only bridge is reproduced
-  exactly when only `scour_rates` is set on the central pier.
+### Bridge, damage, and nuisance mechanisms
+- **Paper 1 authority:** `scour_MATLAB/+ttbi/campaign_setup.m` defines the
+  campaign configuration; the mechanism-specific samplers and TTBI mutation
+  path are indexed in `docs/damage_model_reference.md`.
+- **Python development mirror:** `TTBI_2D/damage_config.py` provides
+  `configure_bridge` and `make_damage` for local parity/debug work only. It is
+  not a production campaign toggle or qualifying scientific data source.
+- **Verify:** use the mechanism-level checks named in the canonical reference;
+  do not infer validation from a combined all-damage run alone.
 
 ### Observation mode & models
 - **What:** `MODE`, `CHAMPION_DIR`, `FALLBACK_DIRS`, `LIBRARY_DIR`.
@@ -196,9 +256,10 @@ the file + symbol; "verify" gives a concrete check.
 ### Sensor health — `SENSOR_HEALTH` (+ `FALLBACK_DIRS`)
 - **What:** drive-by sensors become fallible (WORKING/DEGRADED/DEAD; transient
   burst / degraded noise / dead-zeros; fault & noise scale carbody<bogie<wheel). A
-  dead sensor falls back to the surviving single-DOF champion **and its wider
-  confusion matrix**, so the belief automatically distrusts it; sensor maintenance
-  is costed. All fault rates are **placeholders** in `SensorHealthParams`.
+  dead sensor can fall back to a configured single-DOF development model and its
+  wider confusion matrix, so the belief automatically discounts it; sensor
+  maintenance is costed. No Paper 1-qualified fallback has yet been selected. All fault rates
+  are **placeholders** in `SensorHealthParams`.
 - **Where:** `digital_twin/sensor_health.py` (`SensorHealthModel`,
   `HealthAwareClassifier`); consumed in `digital_twin/simulation.py`
   (`DTSimulator.step`, the `(label, likelihood)` / `None` handling + `sensor_health`
@@ -216,9 +277,11 @@ the file + symbol; "verify" gives a concrete check.
   shows the planner ranking is *not* robust to it (so we report it swept).
 
 ### Scour evolution & clock — `ENABLE_SHOCK`, `P_ADVANCE`, `DT_YEARS`, `N_STEPS`
-- **What:** Kamariotis gradual deterioration + optional Compound-Poisson **flood
-  shocks**; `P_ADVANCE` is the belief-filter deterioration prior; the clock is
-  monthly by default (30 yr).
+- **What:** an author-chosen support-stiffness-loss scenario with a gradual
+  process and optional Compound-Poisson **flood shocks**; `P_ADVANCE` is the
+  belief-filter deterioration prior; the clock is monthly by default (30 yr).
+  The flood rate/jump defaults remain placeholders pending primary-source or
+  site-specific calibration, so this is not a validated hydraulic scour law.
 - **Where:** `digital_twin/assets.py:ScourModel.evolve`;
   `digital_twin/scour_multi.py` for correlated multi-foundation scour.
 - **Verify:** `P_ADVANCE` is calibrated by `digital_twin/calibrate.py:estimate_p_advance`
@@ -234,25 +297,28 @@ the file + symbol; "verify" gives a concrete check.
 
 ## Scientific basis & decision log
 
-Every modelling choice — what we did, **why**, and the **references** that back it —
-is recorded in **[docs/framework_rationale.md](docs/framework_rationale.md)**, kept
-up to date as the framework evolves. It is the source for the paper's methodology
-justification (champion choice, scour evolution, cost/fragility, risk perception,
-sensor health, monitoring cadence, flood logic), with an "open items" list of what
-still needs research or a decision. Source documents (Gemini deep-research reports +
-their references) live in `papers/` (git-ignored).
+The current mechanism-to-equation-to-code contract is
+**[docs/damage_model_reference.md](docs/damage_model_reference.md)**, and the
+scientific V&V queue is
+**[docs/shm_reviewer_readiness_plan.md](docs/shm_reviewer_readiness_plan.md)**.
+The chronological rationale remains in
+**[docs/framework_rationale.md](docs/framework_rationale.md)**; its historical
+entries are not automatically current evidence.
 
 ## Status & known limitations
 
-- **Ablation (Paper 1):** complete and analysed.
-- **DT framework:** the full loop runs and is validated in `mock` **and** `library`
-  mode; planners, scour evolution (incl. floods), copula multi-foundation scour, €
-  accounting, **risk perception**, and **sensor health** all work and are
-  step-size-invariant. `neutral` risk + `SENSOR_HEALTH=False` reproduce the prior
-  baseline exactly.
-- **Train/serve skew (resolved):** the champion mispredicts on *live* re-simulated
-  signals, so production uses `library` mode (held-out `.mat` from the training
-  pipeline), where it scores ~78–79 % exact / ~100 % within ±1.
+- **Ablation (Paper 1):** authorized generation and training have not started; no
+  current champion, sensor-channel recommendation, or performance estimate
+  exists yet.
+- **DT framework:** the full loop has software-integration checks in `mock` and
+  `library` modes. That is not physical validation of the deterioration law,
+  flood parameters, fragility, or damaged-response signatures. The live Python
+  TTBI path remains nonqualifying for Paper 1 until current MATLAB/Python
+  damaged-response parity is demonstrated under the current production source.
+- **Historical train/serve observation:** the legacy package behaved
+  differently on live and held-out-library signals. Its quoted historical
+  scores are not Paper 1 evidence; the authorized campaign must re-estimate this
+  behavior before any production claim.
 - **Sensor-health fault rates are placeholders** in `SensorHealthParams` — replace
   with vendor MTBF / field data; the model and wiring are final.
 - **Risk perception:** with a cheap, sharp `inspect` available, risk-aversion buys
@@ -260,7 +326,7 @@ their references) live in `papers/` (git-ignored).
   irreducible by policy) — an honest Value-of-SHM finding, robust across observation
   noise. Without inspect, risk-aversion repairs earlier.
   (`plotting/risk_perception_figure.py`.)
-- **Flood branch:** the major-flood decision branch is built and validated end-to-end
+- **Flood branch:** the major-flood decision software path is integrated and checked end-to-end
   (probabilistic trigger, belief widening, probe/inspect/interrupt by VoI, sensor-
   corruption escalation). The probe confusion is an **assumed** wider matrix until a
   measured low-mass/low-speed MATLAB batch is supplied (`probe_dir`); `s_major`,
@@ -273,7 +339,9 @@ their references) live in `papers/` (git-ignored).
 
 ## Key references
 - **Cantero (2022)** — TTBI / VEqMon2D vehicle–bridge interaction.
-- **Kamariotis et al. (2024)** — quantifying the value of SHM; gradual + shock scour; € costs.
+- **Kamariotis et al. (2023)** — value-of-SHM framework, a generic empirical
+  gradual-plus-shock deterioration example, and the cited cost inputs. The
+  paper does not calibrate this repository's lifecycle process to scour.
 - **Torzoni et al. (2024, 2026)** — DT decision frameworks (DBN; active inference).
 - **Chadha et al. (2023), Ames et al. (2025)** — risk-aware / risk-sensitive SHM decision-making.
 - **Fernandes et al. (2024–2026)** — drive-by railway-bridge damage / multi-damage / scour.

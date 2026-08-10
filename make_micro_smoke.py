@@ -4,28 +4,97 @@ The generated MATLAB scripts are guarded text patches of the real
 ``scour_MATLAB/A00_Run.m``.  They therefore exercise the reviewed generator
 rather than reimplementing it.
 
-Default integration smoke
--------------------------
-``python make_micro_smoke.py`` emits ``scour_MATLAB/micro_A00_smoke.m`` with
-35 s0 states and three passages.  The historical ``--dryrun [SCRATCH]`` mode
-continues to build the toy Python ablation from that completed s0 dataset.
+Supported release qualification
+-------------------------------
+The only supported invocation is
+``python make_micro_smoke.py --qualification --stage STAGE``.  The former
+no-argument ``micro_A00_smoke.m`` and ``--dryrun`` paths are retired: their
+reduced counts are intentionally invalid under the production stage-count
+contract, so every public and CLI entry point rejects them before writing.
 
-Release qualification
----------------------
-``python make_micro_smoke.py --qualification --stage STAGE`` additionally:
+Release qualification:
 
-* selects the requested ladder stage;
+* selects one of the four Paper-1 blocks;
 * sets ``qualification_run=true`` explicitly, independent of inherited shell
   environment;
 * segregates output below
   ``Results/release_qualification/<source-hash>/<environment-hash>/R<release>/``.
 
-Generate at least ``s0_scour``, ``s16_all`` and ``s23_all4`` on each release.
-Together these exercise the fixed profile, all L60 nuisance branches, and the
-four-span geometry.  The release comparator still authenticates each generated
-directory independently.
+Generate all four blocks on each intended release/host.  The release comparator
+authenticates each segregated qualification directory independently.
 """
 from __future__ import annotations
+
+import os as _bootstrap_os
+import sys as _bootstrap_sys
+for _unsafe_python_path_variable in ("PYTHONPATH", "PYTHONHOME"):
+    if _unsafe_python_path_variable in _bootstrap_os.environ:
+        raise RuntimeError(
+            f"{_unsafe_python_path_variable} must be absent before evidence "
+            "imports"
+        )
+_bootstrap_source_root = _bootstrap_os.path.abspath(
+    _bootstrap_os.path.dirname(__file__)
+)
+_bootstrap_first_path = _bootstrap_sys.path[0] or _bootstrap_os.getcwd()
+if (
+    _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
+        _bootstrap_first_path
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_first_path
+    ))
+    or _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_first_path
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_source_root
+    ))
+):
+    raise RuntimeError(
+        "reviewed repository root must be the canonical first import path"
+    )
+_bootstrap_guard_dir = _bootstrap_os.path.join(
+    _bootstrap_source_root, "campaign_import_guard"
+)
+_bootstrap_guard_init = _bootstrap_os.path.join(
+    _bootstrap_guard_dir, "__init__.py"
+)
+if (
+    not _bootstrap_os.path.isfile(_bootstrap_guard_init)
+    or _bootstrap_os.path.islink(_bootstrap_guard_init)
+    or _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
+        _bootstrap_guard_dir
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_guard_dir
+    ))
+    or any(
+        entry.casefold().startswith("__init__.")
+        and entry != "__init__.py"
+        for entry in _bootstrap_os.listdir(_bootstrap_guard_dir)
+    )
+):
+    raise RuntimeError(
+        "reviewed campaign import guard package is absent or ambiguous"
+    )
+_bootstrap_loaded_guard = _bootstrap_sys.modules.get("campaign_import_guard")
+if _bootstrap_loaded_guard is not None and (
+    _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        getattr(_bootstrap_loaded_guard, "__file__", "")
+    ))
+    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
+        _bootstrap_guard_init
+    ))
+    or getattr(_bootstrap_loaded_guard, "_BOUNDARY_ENFORCED", False) is not True
+):
+    raise RuntimeError(
+        "preloaded campaign import guard is not the reviewed enforced module"
+    )
+from campaign_import_guard import (  # noqa: E402
+    enforce_import_boundary as _enforce_import_boundary,
+)
+_enforce_import_boundary()
 
 import argparse
 import hashlib
@@ -36,18 +105,12 @@ import sys
 
 
 REPO = os.path.dirname(os.path.abspath(__file__))
-MICRO_DS = "s0_scour_L60_st35"  # fixed latent families: 3+8+8+6+10
+MICRO_DS = "F40-S_L40_st31"  # marked qualification families: 3+4+8+6+10
 QUALIFICATION_STAGES = (
-    "s0_scour",
-    "s11_bear",
-    "s12_crack",
-    "s13_bearcrack",
-    "s14_prof",
-    "s15_track",
-    "s16_all",
-    "s21_scour4",
-    "s22_bearcrack4",
-    "s23_all4",
+    "F40-S",
+    "F40-M",
+    "L99-S",
+    "L99-M",
 )
 _QUALIFICATION_SHA_PLACEHOLDER = "<QUALIFICATION_SOURCE_SHA256>"
 _QUALIFICATION_FOLDER_PLACEHOLDER = "<QUALIFICATION_SOURCE_FOLDER>"
@@ -67,9 +130,14 @@ def _render_micro_template(
     source: str,
     *,
     qualification: bool = False,
-    stage: str = "s0_scour",
+    stage: str = "F40-S",
 ) -> str:
     """Return a guarded micro script, with identity placeholders if qualified."""
+    if not qualification:
+        raise ValueError(
+            "unmarked micro generation is retired; use --qualification "
+            "--stage with one of F40-S, F40-M, L99-S, or L99-M"
+        )
     if stage not in QUALIFICATION_STAGES:
         raise ValueError(
             f"unknown stage {stage!r}; choose one of {QUALIFICATION_STAGES}"
@@ -77,7 +145,7 @@ def _render_micro_template(
 
     patches = (
         (
-            r"^n_states_multi   = 250;.*$",
+            r"^n_states_multi   = 0;.*$",
             "n_states_multi   = 10;     % MICRO-SMOKE",
             "joint-state count",
         ),
@@ -87,12 +155,12 @@ def _render_micro_template(
             "passage count",
         ),
         (
-            r"^n_healthy_states  = 50;.*$",
+            r"^n_healthy_states  = 5;.*$",
             "n_healthy_states  = 3;     % MICRO-SMOKE",
             "healthy-state count",
         ),
         (
-            r"^n_anchor_levels  = 5;.*$",
+            r"^n_anchor_levels  = 60;.*$",
             "n_anchor_levels  = 2;      % MICRO-SMOKE",
             "anchor-level count",
         ),
@@ -102,26 +170,13 @@ def _render_micro_template(
             "anchor-replica count",
         ),
         (
-            r"^n_nuisance_states = 50;.*$",
+            r"^n_nuisance_states = 0;.*$",
             "n_nuisance_states = 6;     % MICRO-SMOKE",
             "nuisance-state count",
-        ),
-        # The production guard is calibrated for Npass≈50. With 2–3 samples,
-        # |corr|=1 and four-quadrant occupancy is impossible.
-        (
-            r"^    if abs\(corr_st_\) > 0\.6 \|\| ~all\(occ_\)",
-            "    if Npass >= 10 && (abs(corr_st_) > 0.6 || ~all(occ_))"
-            "   % MICRO-SMOKE bypass",
-            "small-Npass LHS guard",
         ),
     )
     for pattern, replacement, label in patches:
         source = _patch_once(source, pattern, replacement, label)
-
-    if not qualification:
-        if stage != "s0_scour":
-            raise ValueError("a non-s0 stage requires qualification=True")
-        return source
 
     source = _patch_once(
         source,
@@ -177,7 +232,7 @@ def _render_micro_template(
     )
     source = _patch_once(
         source,
-        r"^run_folder\s*=\s*fullfile\('Results',\s*case_name\);",
+        r"^run_folder\s*=\s*fullfile\(results_root,\s*relative_run_folder\);",
         qualification_folder,
         "run-folder declaration",
     )
@@ -200,9 +255,17 @@ def _qualification_template(
     )
 
 
-def qualification_source_sha256(stage: str) -> str:
-    """Full SHA-256 identity stamped into the current stage's micro script."""
-    template = _qualification_template(stage)
+def qualification_source_sha256(
+    stage: str,
+    source: str | None = None,
+) -> str:
+    """Full SHA-256 stamped into a stage's deterministic micro script.
+
+    Passing ``source`` lets evidence code derive the stamp from the exact
+    authenticated A00 byte snapshot it already owns, without reopening the
+    pathname and accidentally combining two repository states.
+    """
+    template = _qualification_template(stage, source)
     return hashlib.sha256(template.encode("utf-8")).hexdigest()
 
 
@@ -261,17 +324,19 @@ def render_micro_a00(
     source: str,
     *,
     qualification: bool = False,
-    stage: str = "s0_scour",
+    stage: str = "F40-S",
 ) -> str:
     """Return the guarded A00 text patch without writing anything."""
+    if not qualification:
+        raise ValueError(
+            "unmarked micro generation is retired; use qualification=True "
+            "with one of F40-S, F40-M, L99-S, or L99-M"
+        )
     template = _render_micro_template(
         source,
         qualification=qualification,
         stage=stage,
     )
-    if not qualification:
-        return template
-
     source_sha256 = hashlib.sha256(template.encode("utf-8")).hexdigest()
     if template.count(_QUALIFICATION_SHA_PLACEHOLDER) != 1:
         raise RuntimeError(
@@ -297,20 +362,21 @@ def render_micro_a00(
 def write_micro_a00(
     *,
     qualification: bool = False,
-    stage: str = "s0_scour",
+    stage: str = "F40-S",
 ) -> str:
     """Patch A00 size knobs and write one generated MATLAB script."""
+    if not qualification:
+        raise ValueError(
+            "unmarked micro generation is retired; use qualification=True "
+            "with one of F40-S, F40-M, L99-S, or L99-M"
+        )
     source_path = os.path.join(REPO, "scour_MATLAB", "A00_Run.m")
     with open(source_path, encoding="utf-8") as handle:
         source = handle.read()
     source = render_micro_a00(
         source, qualification=qualification, stage=stage
     )
-    filename = (
-        f"micro_A00_qualification_{stage}.m"
-        if qualification
-        else "micro_A00_smoke.m"
-    )
+    filename = f"micro_A00_qualification_{stage}.m"
     output = os.path.join(REPO, "scour_MATLAB", filename)
     with open(output, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(source)
@@ -331,6 +397,10 @@ def render_toy_driver(source: str) -> str:
     cannot enter the registered anchor/frozen HPO path or masquerade as campaign
     output.  The real production policy object is neither mutated nor shadowed.
     """
+    raise RuntimeError(
+        "the legacy toy dry-run is retired; use four-stage release "
+        "qualification evidence instead"
+    )
     source = _patch_once(
         source,
         (
@@ -353,9 +423,9 @@ _micro_read_dataset_provenance = _micro_protocol.read_dataset_provenance
 
 def _read_micro_provenance(dataset_dir, **requested):
     expected = {{
-        "expected_stage": "s0_scour",
+        "expected_stage": "F40-S",
         "expected_dataset": "{MICRO_DS}",
-        "expected_target_supports": [2, 3],
+        "expected_target_supports": [2],
         "expected_bearing_targets": None,
     }}
     if os.path.basename(os.path.normpath(dataset_dir)) != "{MICRO_DS}":
@@ -474,36 +544,12 @@ def run_phase'''
 
 
 def write_dryrun(scratch: str) -> str:
-    """Copy the completed default micro dataset and emit a toy driver."""
-    micro_source = os.path.join(REPO, "scour_MATLAB", "Results", MICRO_DS)
-    if not os.path.exists(
-        os.path.join(micro_source, "_GENERATION_COMPLETE")
-    ):
-        raise RuntimeError(
-            f"micro dataset not complete at {micro_source} — "
-            "run micro_A00_smoke first"
-        )
+    """Reject the retired toy dry-run before reading or writing any path."""
+    raise RuntimeError(
+        "--dryrun is retired because its no-argument micro dataset is not "
+        "valid under the current Paper-1 stage-count contract"
+    )
 
-    dryrun_root = os.path.join(scratch, "dryrun")
-    os.makedirs(os.path.join(dryrun_root, "data"), exist_ok=True)
-    destination = os.path.join(dryrun_root, "data", MICRO_DS)
-    if os.path.exists(destination):
-        shutil.rmtree(destination)
-    shutil.copytree(micro_source, destination)
-
-    # A fresh copy must not inherit the source's split manifest.
-    split_manifest = os.path.join(destination, "split_manifest.json")
-    if os.path.exists(split_manifest):
-        os.remove(split_manifest)
-
-    driver_path = os.path.join(REPO, "comprehensive_ablation_multidamage.py")
-    with open(driver_path, encoding="utf-8") as handle:
-        driver = handle.read()
-    driver = render_toy_driver(driver)
-    output = os.path.join(dryrun_root, "dryrun_driver.py")
-    with open(output, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(driver)
-    return output
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -514,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         const=os.path.join(REPO, "_micro_dryrun_scratch"),
         metavar="SCRATCH",
-        help="emit a toy Python run from the completed default s0 micro dataset",
+        help="retired compatibility option; always rejected",
     )
     mode.add_argument(
         "--qualification",
@@ -524,35 +570,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--stage",
         choices=QUALIFICATION_STAGES,
-        default="s0_scour",
-        help="ladder rung to exercise (non-s0 stages require --qualification)",
+        help="required Paper-1 qualification block",
     )
     args = parser.parse_args(argv)
 
     if args.dryrun is not None:
-        if args.stage != "s0_scour":
-            parser.error("--stage is not applicable to --dryrun")
-        print("dry-run driver ->", write_dryrun(args.dryrun))
-        return 0
-    if not args.qualification and args.stage != "s0_scour":
-        parser.error("--stage requires --qualification")
+        parser.error(
+            "--dryrun is retired; use --qualification --stage with one of "
+            "F40-S, F40-M, L99-S, or L99-M"
+        )
+    if not args.qualification:
+        parser.error(
+            "no-argument micro generation is retired; use --qualification "
+            "--stage with one of F40-S, F40-M, L99-S, or L99-M"
+        )
+    if args.stage is None:
+        parser.error(
+            "--qualification requires --stage with one of F40-S, F40-M, "
+            "L99-S, or L99-M"
+        )
 
     output = write_micro_a00(
         qualification=args.qualification,
         stage=args.stage,
     )
-    label = "qualification micro A00" if args.qualification else "micro A00"
-    print(f"{label} -> {output}")
-    if args.qualification:
-        print(
-            "Run this script in MATLAB. Its manifest and states are explicitly "
-            "marked release_qualification_run=true and are not campaign input."
-        )
-        print(
-            "Before MATLAB, set TTBI_QUALIFICATION_HOST_ID to a stable unique "
-            "label for this PC (for example home-laptop or labpc-01). The run "
-            "fails closed without its authenticated host-diagnostic receipt."
-        )
+    print(f"qualification micro A00 -> {output}")
+    print(
+        "Run this script in MATLAB. Its manifest and states are explicitly "
+        "marked release_qualification_run=true and are not campaign input."
+    )
+    print(
+        "Before MATLAB, set TTBI_QUALIFICATION_HOST_ID to a stable unique "
+        "label for this PC (for example home-laptop or labpc-01). The run "
+        "fails closed without its authenticated host-diagnostic receipt."
+    )
     return 0
 
 

@@ -91,27 +91,20 @@ MUTATIONS = (
         occurrence=1,
     ),
     Mutation(
-        name="outer paired contrast accepts different state keys",
+        name="matched-block inference accepts an incomplete StateUID x seed grid",
         group="statistical",
-        target="comprehensive_ablation_multidamage.py",
-        checker="check_statistical_inference.py",
+        target="core/cross_rung_inference.py",
+        checker="check_cross_rung_inference.py",
         original=(
-            "if not np.array_equal(winner_states, comp_states):\n"
-            "            raise RuntimeError(\n"
-            "                f\"paired contrast state mismatch: "
-            "{winner_key} vs {comparator_key}\"\n"
-            "            )"
+            "        if set(left_cells) != expected_cells or "
+            "set(right_cells) != expected_cells:"
         ),
         mutant=(
-            "if False:  # MUTANT: semantic state-key firewall disabled\n"
-            "            raise RuntimeError(\n"
-            "                f\"paired contrast state mismatch: "
-            "{winner_key} vs {comparator_key}\"\n"
-            "            )"
+            "        if False:  "
+            "# MUTANT: exact paired StateUID x seed grid ignored"
         ),
         evidence=(
-            "[FAIL] outer-test paired contrast rejects differently keyed "
-            "state tensors"
+            "[FAIL] missing L99 StateUID x seed cell is rejected"
         ),
     ),
     Mutation(
@@ -122,8 +115,7 @@ MUTATIONS = (
         original="if missing:",
         mutant="if False:  # MUTANT: required-field guard disabled",
         evidence=(
-            "[FAIL] standalone verifier rejects a missing required "
-            "provenance field"
+            "[FAIL] missing required selection lineage field is rejected"
         ),
     ),
     Mutation(
@@ -136,7 +128,7 @@ MUTATIONS = (
             'metadata["champion_weights_sha256"]:'
         ),
         mutant="if False:  # MUTANT: champion hash guard disabled",
-        evidence="[FAIL] standalone verifier rejects one-byte champion tamper",
+        evidence="[FAIL] one-byte champion tamper is rejected",
     ),
     Mutation(
         name="standalone artifact verifier skips protocol self-hash",
@@ -149,14 +141,14 @@ MUTATIONS = (
         ),
         mutant="if False:  # MUTANT: descriptor/hash guard disabled",
         evidence=(
-            "[FAIL] standalone verifier rejects descriptor/hash disagreement"
+            "[FAIL] protocol descriptor/hash disagreement is rejected"
         ),
     ),
     Mutation(
         name="study-linked artifact verifier suppresses provenance mismatches",
         group="artifact",
         target="training/pipeline.py",
-        checker="check_artifact_provenance.py",
+        checker="check_execution_blocking.py",
         original=(
             "if mismatches:\n"
             "        raise RuntimeError(\n"
@@ -171,7 +163,10 @@ MUTATIONS = (
             "mismatch: \"\n"
             "            f\"{mismatches}\")"
         ),
-        evidence="[FAIL] metadata protocol-descriptor tamper rejected",
+        evidence=(
+            "[FAIL] study-linked verifier guards accumulated provenance "
+            "mismatches"
+        ),
     ),
     Mutation(
         name="standalone artifact verifier ignores the external block-reference pin",
@@ -188,156 +183,97 @@ MUTATIONS = (
             "if False:  # MUTANT: external block-reference expectation ignored"
         ),
         evidence=(
-            "[FAIL] standalone follower package rejects reference B "
-            "for package A"
+            "[FAIL] independent non-null block-reference substitution is "
+            "rejected"
         ),
     ),
     Mutation(
-        name="cross-rung analyzer trusts a coherently substituted internal reference",
+        name="matched-block analyzer ignores exact generated StateUID inventory",
         group="artifact",
         target="core/cross_rung_inference.py",
         checker="check_cross_rung_inference.py",
         original=(
-            "if champion_canonical_sha != expected_reference_sha:"
+            "        or inventory != list(expected_inventory)\n"
         ),
         mutant=(
-            "if False:  # MUTANT: independently retained trust root ignored"
+            "        or False  # MUTANT: generated StateUID inventory ignored\n"
         ),
         evidence=(
-            "[FAIL] coherent champion+frozen+seven-pin substitution still "
-            "fails external root"
+            "[FAIL] missing generated F40 UID is rejected"
         ),
     ),
     Mutation(
-        name="cross-rung analyzer ignores follower frozen-reference lineage",
+        name="matched-block analyzer ignores endpoint pipeline binding",
         group="artifact",
         target="core/cross_rung_inference.py",
         checker="check_cross_rung_inference.py",
         original=(
-            "        or frozen.get(\"block_reference_manifest_sha256\")\n"
-            "        != expected_artifact_reference"
+            "            left[\"pipeline_slot\"] != right[\"pipeline_slot\"]\n"
         ),
         mutant=(
-            "        or False  "
-            "# MUTANT: frozen block-reference lineage ignored"
+            "            False  # MUTANT: endpoint pipeline binding ignored\n"
         ),
         evidence=(
-            "[FAIL] follower frozen selection citing another block reference "
-            "is rejected"
+            "[FAIL] different endpoint pipeline is rejected"
         ),
     ),
     Mutation(
-        name="cross-rung analyzer ignores block-reference lineage on CSV rows",
+        name="matched-block analyzer ignores endpoint partition alignment",
         group="artifact",
         target="core/cross_rung_inference.py",
         checker="check_cross_rung_inference.py",
         original=(
-            "    if any(\n"
-            "        row.get(\"block_reference_manifest_sha256\")\n"
-            "        != expected_csv_reference\n"
-            "        for row in rows\n"
-            "    ):"
+            "            if left[\"partition_by_uid\"][uid] != "
+            "right[\"partition_by_uid\"][uid]:"
         ),
         mutant=(
-            "    if False:  "
-            "# MUTANT: per-row block-reference lineage ignored"
+            "            if False:  "
+            "# MUTANT: endpoint partition alignment ignored"
         ),
         evidence=(
-            "[FAIL] anchor metric row must retain the canonical empty "
-            "anti-cycle reference"
+            "[FAIL] matched F40 partition drift is rejected"
         ),
     ),
     Mutation(
-        name="benchmark restart trusts unvalidated hyperparameter lineage",
+        name="dispatch authorization bypasses the benchmark revalidator",
         group="artifact",
-        target="benchmark_r5_compute.py",
-        checker="check_benchmark_contract.py",
-        original=(
-            "    _validate_benchmark_hyperparameter_execution(\n"
-            "        summary.get(\"hyperparameter_execution\"),"
-        ),
-        mutant=(
-            "    _trust_benchmark_hyperparameter_execution(\n"
-            "        summary.get(\"hyperparameter_execution\"),"
-        ),
+        target="dispatch_authorization.py",
+        checker="check_dispatch_authorization.py",
+        original="        evidence = benchmark.verify_completed_receipt(",
+        mutant="        evidence = benchmark.trust_completed_receipt(",
         evidence=(
-            "[FAIL] live benchmark satisfies every static R11 invariant"
+            "[FAIL] production gate invokes all three authoritative "
+            "revalidators"
         ),
     ),
     Mutation(
-        name="benchmark study receipt regresses to a split stat/hash read",
-        group="artifact",
-        target="benchmark_r5_compute.py",
-        checker="check_benchmark_contract.py",
-        original=(
-            "    captured = _regular_file_snapshot(\n"
-            "        receipt,\n"
-            '        "immutable study receipt",'
-        ),
-        mutant=(
-            "    captured = _unsafe_split_file_snapshot(\n"
-            "        receipt,\n"
-            '        "immutable study receipt",'
-        ),
-        evidence=(
-            "[FAIL] live benchmark satisfies every static R11 invariant"
-        ),
-    ),
-    Mutation(
-        name="champion writer publishes before validating its trust-root payload",
+        name="manifest entrypoint bypasses the exact phase executor",
         group="artifact",
         target="comprehensive_ablation_multidamage.py",
-        checker="check_execution_blocking.py",
+        checker="check_campaign_controls.py",
         original=(
-            "    payload = _validate_reference_payload_for_publication(payload)"
+            "    return execute_manifest_job(job, manifest)"
         ),
         mutant=(
-            "    payload = payload  "
-            "# MUTANT: trust-root publication validator bypassed"
+            "    return manifest  # MUTANT: exact phase executor bypassed"
         ),
         evidence=(
-            "[FAIL] invalid champion payload is rejected before immutable "
-            "publication"
+            "[FAIL] post-freeze phase refuses to open data without a "
+            "deposited freeze"
         ),
     ),
     Mutation(
-        name="protocol updater treats an orphaned lock file as a live writer",
+        name="dispatch JSON parser silently accepts duplicate evidence keys",
         group="artifact",
-        target="comprehensive_ablation_multidamage.py",
-        checker="check_execution_blocking.py",
-        original=(
-            "        descriptor = os.open(\n"
-            "            lock_path,\n"
-            "            os.O_CREAT | os.O_RDWR | "
-            'getattr(os, "O_BINARY", 0),'
-        ),
-        mutant=(
-            "        if lock_path.exists() and lock_path.stat().st_size == 0:\n"
-            "            raise RuntimeError("
-            '"MUTANT: orphaned lock blocks restart")\n'
-            "        descriptor = os.open(\n"
-            "            lock_path,\n"
-            "            os.O_CREAT | os.O_RDWR | "
-            'getattr(os, "O_BINARY", 0),'
-        ),
-        evidence=(
-            "[FAIL] orphaned legacy lock file cannot block a valid crash "
-            "restart"
-        ),
-    ),
-    Mutation(
-        name="campaign JSON snapshot silently accepts duplicate evidence keys",
-        group="artifact",
-        target="comprehensive_ablation_multidamage.py",
-        checker="check_execution_blocking.py",
-        original="            object_pairs_hook=unique_object,",
+        target="dispatch_manifest.py",
+        checker="check_dispatch_authorization.py",
+        original="            object_pairs_hook=unique_pairs,",
         mutant=(
             "            object_pairs_hook=dict,  "
             "# MUTANT: duplicate JSON keys collapse silently"
         ),
         evidence=(
-            "[FAIL] reference publication rejects duplicate frozen-selection "
-            "JSON keys"
+            "[FAIL] duplicate JSON key rejected"
         ),
     ),
     Mutation(
@@ -348,6 +284,7 @@ MUTATIONS = (
         original="if actual != expected:",
         mutant="if False:  # MUTANT: package-version guard disabled",
         evidence="[FAIL] package mismatch hard-fails",
+        occurrence=2,
     ),
     Mutation(
         name="environment verifier accepts cuBLAS determinism drift",
@@ -364,7 +301,7 @@ MUTATIONS = (
         target="core/environment.py",
         checker="check_environment_lock.py",
         original=(
-            'if spec.get("cuda_required") and not cuda_available:'
+            "if not cuda_available:"
         ),
         mutant="if False:  # MUTANT: required-CUDA guard disabled",
         evidence="[FAIL] required CUDA becoming unavailable hard-fails",
@@ -375,7 +312,7 @@ MUTATIONS = (
         target="core/environment.py",
         checker="check_environment_lock.py",
         original=(
-            'if spec.get("schema") != _LOCK_SCHEMA:'
+            'if spec["schema"] != _LOCK_SCHEMA:'
         ),
         mutant="if False:  # MUTANT: lock-schema guard disabled",
         evidence="[FAIL] unsupported environment-lock schema hard-fails",
@@ -410,17 +347,97 @@ MUTATIONS = (
         ),
         evidence="[FAIL] extra MATLAB descriptor field hard-fails",
     ),
+    Mutation(
+        name="qualification inventory ignores exact/tolerant leaf-class drift",
+        group="qualification",
+        # R11 split: receipt-schema parsing moved out of the inventory module.
+        target="qualification_receipt_schema.py",
+        checker="check_qualification_receipt_inventory.py",
+        original=(
+            '            payload["comparison"]["exact_leaves"],\n'
+            '            payload["comparison"]["tolerant_leaves"],'
+        ),
+        mutant=(
+            "            0,  # MUTANT: exact/tolerant classes erased\n"
+            "            0,"
+        ),
+        evidence=(
+            "schema/graph mutation "
+            "'structural-leaf-class-drift-across-pairs' reached the disk "
+            "comparator"
+        ),
+    ),
+    Mutation(
+        name="qualification inventory accepts a forged numerical worst path",
+        group="qualification",
+        # R11 split: receipt-schema parsing moved out of the inventory module.
+        target="qualification_receipt_schema.py",
+        checker="check_qualification_receipt_inventory.py",
+        original=(
+            "        worst_match = _NUMERICAL_WORST_PATH_RE.fullmatch("
+            'value["worst_path"])'
+        ),
+        mutant=(
+            "        worst_match = (\n"
+            "            _NUMERICAL_WORST_PATH_RE.fullmatch("
+            'value["worst_path"])\n'
+            "            or _NUMERICAL_WORST_PATH_RE.fullmatch(\n"
+            '                "0001.mat.data.AcelPrimVag[0]"\n'
+            "            )  # MUTANT: invalid paths inherit a valid identity\n"
+            "        )"
+        ),
+        evidence=(
+            "schema/graph mutation 'forged numerical worst-path prefix' "
+            "reached the disk comparator"
+        ),
+    ),
+    Mutation(
+        name="fixed/profile FRA corner drifts back to radians per metre",
+        group="generation",
+        target="scour_MATLAB/A04_Options.m",
+        checker="check_profile_pad_contract.py",
+        original="Calc.Profile.inputs(3) = 0.8245/(2*pi);",
+        mutant="Calc.Profile.inputs(3) = 0.8245; % MUTANT",
+        evidence="cycles-per-m corner: expected 1, found 0",
+    ),
+    Mutation(
+        name="pad failures stop drawing once per sleeper lattice point",
+        group="generation",
+        target="scour_MATLAB/sample_pad_failures.m",
+        checker="check_profile_pad_contract.py",
+        original="failed = rand(size(lattice)) < failure_probability;",
+        mutant="failed = rand() < failure_probability; % MUTANT",
+        evidence="one helper draw per lattice point: expected 1, found 0",
+    ),
 )
 
 
 BASELINE_EVIDENCE = {
     "check_statistical_inference.py": "STATISTICAL INFERENCE: ALL PASS",
     "check_artifact_provenance.py": "ARTIFACT PROVENANCE: ALL PASS",
-    "check_cross_rung_inference.py": "CROSS-RUNG INFERENCE: ALL PASS",
-    "check_benchmark_contract.py":
-        "R11 COMPUTE BENCHMARK CONTRACT: ALL PASS",
+    "check_campaign_controls.py": "CAMPAIGN CONTROLS: ALL PASS",
+    "check_cross_rung_inference.py": "MATCHED-BLOCK INFERENCE: ALL PASS",
+    "check_dispatch_authorization.py":
+        "DISPATCH AUTHORIZATION CHECKS: ALL PASS",
     "check_execution_blocking.py": "EXECUTION BLOCKING: ALL PASS",
     "check_environment_lock.py": "ENVIRONMENT LOCK: ALL PASS",
+    "check_qualification_receipt_inventory.py":
+        "QUALIFICATION RECEIPT INVENTORY: ALL CHECKS PASSED",
+    "check_profile_pad_contract.py":
+        "PROFILE/PAD CONTRACT: ALL CHECKS PASSED",
+}
+
+# Full source/environment verifiers deliberately authenticate large byte
+# inventories and can exceed the historical three-minute subprocess budget on
+# Windows/OneDrive.  Keep ordinary mutation probes bounded tightly, while giving
+# the measured heavy checkers enough time to finish instead of reporting a
+# harness timeout as a scientific rejection.
+DEFAULT_CHECKER_TIMEOUT_SECONDS = 300
+CHECKER_TIMEOUT_SECONDS = {
+    "check_artifact_provenance.py": 900,
+    "check_dispatch_authorization.py": 900,
+    "check_environment_lock.py": 900,
+    "check_qualification_receipt_inventory.py": 1800,
 }
 
 
@@ -433,7 +450,7 @@ def _sha256(path: Path) -> str:
 
 
 def _source_paths() -> list[Path]:
-    """Return only code/config needed by the three isolated checkers."""
+    """Return code/config needed by the registered isolated checkers."""
 
     paths = set(REPO.glob("*.py"))
     for package in ("core", "training", "plotting", "digital_twin", "TTBI_2D"):
@@ -450,6 +467,14 @@ def _source_paths() -> list[Path]:
         REPO / "environment" / "campaign-py313-cu128.json",
         REPO / "requirements-campaign-py313-cu128.txt",
     })
+    # Qualification/contact checkers authenticate the MATLAB generator root,
+    # so their isolated baseline must contain every reviewed manifest entry,
+    # not merely Python modules. The current manifest is only a few MiB.
+    for line in (REPO / "bundle_source_files.txt").read_text(
+        encoding="utf-8"
+    ).splitlines():
+        if line and not line.startswith("#"):
+            paths.add(REPO.joinpath(*line.split("/")))
     return sorted(
         (path for path in paths if path.is_file()),
         key=lambda path: path.relative_to(REPO).as_posix(),
@@ -492,12 +517,72 @@ def _replace_occurrence(
     return text[:start] + mutant + text[start + len(original):]
 
 
-def _run_checker(root: Path, checker: str, timeout: int = 180) -> tuple[int, str]:
+def _validate_anchor_inventory(
+    selected: list[Mutation],
+    source_paths: list[Path],
+) -> None:
+    """Fail closed, up front, on every mutation whose anchor has moved.
+
+    Refactors relocate code between modules, and a mutation whose ``original``
+    text no longer exists in its declared ``target`` proves nothing: without
+    this pass the harness aborts on the FIRST such anchor deep into the run,
+    reporting only ``anchor ... not found`` with no indication that the guard
+    it was supposed to exercise is now untested.  Reporting all stale anchors
+    at once, together with the module that currently holds each one, makes a
+    post-split retarget mechanical instead of archaeological.
+    """
+    stale: list[str] = []
+    for mutation in selected:
+        target = REPO / mutation.target
+        try:
+            text = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            stale.append(
+                f"{mutation.name}: target {mutation.target} is unreadable "
+                f"({exc})"
+            )
+            continue
+        if text.count(mutation.original) >= mutation.occurrence:
+            continue
+        elsewhere = sorted(
+            path.relative_to(REPO).as_posix()
+            for path in source_paths
+            if path != target
+            and path.suffix == ".py"
+            and mutation.original
+            in path.read_text(encoding="utf-8", errors="replace")
+        )
+        moved = f"; anchor now lives in {elsewhere}" if elsewhere else ""
+        stale.append(
+            f"{mutation.name}: anchor occurrence {mutation.occurrence} "
+            f"absent from {mutation.target}{moved}"
+        )
+    if stale:
+        detail = "\n  ".join(stale)
+        raise RuntimeError(
+            f"{len(stale)} mutation anchor(s) are stale, so the guards they "
+            f"exercise are UNTESTED:\n  {detail}"
+        )
+    print(f"[PASS] all {len(selected)} mutation anchors resolve in their "
+          "declared target module")
+
+
+def _run_checker(
+    root: Path,
+    checker: str,
+    timeout: int | None = None,
+    *,
+    arguments: tuple[str, ...] = (),
+) -> tuple[int, str]:
+    if timeout is None:
+        timeout = CHECKER_TIMEOUT_SECONDS.get(
+            checker, DEFAULT_CHECKER_TIMEOUT_SECONDS
+        )
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     completed = subprocess.run(
-        [sys.executable, checker],
+        [sys.executable, checker, *arguments],
         cwd=root,
         env=env,
         text=True,
@@ -517,7 +602,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--only",
-        choices=("all", "statistical", "artifact", "environment"),
+        choices=(
+            "all",
+            "statistical",
+            "artifact",
+            "environment",
+            "qualification",
+            "generation",
+        ),
         default="all",
         help="limit the mutation family (default: all)",
     )
@@ -532,6 +624,7 @@ def main() -> int:
         REPO / mutation.target for mutation in selected
     })
     real_before = {path: path.read_bytes() for path in real_target_paths}
+    _validate_anchor_inventory(selected, source_paths)
 
     caught = 0
     with tempfile.TemporaryDirectory(prefix="ttbi-r4-mutations-") as tmp:
@@ -567,7 +660,17 @@ def main() -> int:
                     mutation.occurrence,
                 )
                 target.write_bytes(mutated.encode("utf-8"))
-                code, output = _run_checker(isolated, mutation.checker)
+                mutation_arguments = (
+                    ("--static-mutation-smoke",)
+                    if mutation.group == "environment"
+                    and mutation.checker == "check_environment_lock.py"
+                    else ()
+                )
+                code, output = _run_checker(
+                    isolated,
+                    mutation.checker,
+                    arguments=mutation_arguments,
+                )
                 if code == 0 or mutation.evidence not in output:
                     raise RuntimeError(
                         f"mutation was not caught for the intended reason: "

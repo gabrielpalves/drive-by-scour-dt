@@ -105,7 +105,7 @@ class TTBIPreprocessor:
             raise ValueError("PAA cannot transform an empty sequence.")
         # PAA is a dimensionality-reduction transform.  Allowing n > length
         # silently turns it into sample-and-hold upsampling, which is not the
-        # pre-registered method and can hide a crop/configuration regression.
+        # prospectively source-locked method and can hide a crop/configuration regression.
         if n > length:
             raise ValueError(
                 f"PAA n_segments ({n}) cannot exceed input length ({length}).")

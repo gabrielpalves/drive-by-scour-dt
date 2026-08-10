@@ -10,11 +10,11 @@ Public API
                                        showing how each hyperparameter relates
                                        to validation error across all trials.
 
-    plot_stochastic_summary          - cross-model boxplot comparison of the
-                                       30-seed Monte Carlo distributions
-                                       (MSE, MAE, Accuracy) for every model
-                                       in the ablation grid that passed the
-                                       robustness gatekeeper.
+    plot_stochastic_summary          - legacy reader for historical
+                                       robustness_stochastic.json artifacts;
+                                       the current protocol emits distinct
+                                       development-adjudication and post-freeze
+                                       stability artifacts instead.
 
     plot_parametric_summary          - per-hyperparameter line plots showing
                                        how the champion's validation MSE,
@@ -28,8 +28,8 @@ This module always aggregates: across trials (slice plots), across models
 (stochastic summary), or across perturbation multipliers (parametric summary).
 
 Imported by:
-    training/pipeline.py - all three functions, at different points in
-                           execute_ablation_pipeline.
+    training/pipeline.py - Optuna slice plotting only. Legacy summary readers
+                           remain available for archived experiments.
 """
 
 import json
@@ -120,7 +120,7 @@ def generate_optuna_robustness_plots(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. Cross-model stochastic summary
+# 2. Legacy cross-model stochastic summary
 # ──────────────────────────────────────────────────────────────────────────────
 
 def plot_stochastic_summary(
@@ -131,9 +131,12 @@ def plot_stochastic_summary(
     file_prefix:        str = 'stochastic_summary',
 ) -> None:
     """
-    Produce three side-by-side boxplot figures comparing the 30-seed
-    robustness distributions of every model in path_list for which a
-    robustness_stochastic.json file exists.
+    Render archived fixed-split 30-seed artifacts only.
+
+    This compatibility reader is not valid for current development-
+    adjudication or post-freeze-stability artifacts. It produces three
+    side-by-side boxplot figures for historical models in ``path_list`` that
+    still carry ``robustness_stochastic.json``.
 
     Figure 1 - MSE (log scale) with 95 % UCB diamonds.
     Figure 2 - MAE (linear scale).

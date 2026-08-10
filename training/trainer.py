@@ -430,7 +430,7 @@ def train_and_evaluate(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. Fixed-seed single run (robustness evaluation)
+# 2. Fixed-seed single run (legacy parametric diagnostic)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run_single_training(
@@ -446,10 +446,11 @@ def run_single_training(
     """
     Build, train, and evaluate one model with a fixed seed and known params.
 
-    Used by the stochastic and parametric robustness evaluators to measure
-    variance across random initialisations or parameter perturbations.
+    Retained for the legacy one-at-a-time parametric diagnostic. Development
+    adjudication and post-freeze stability use ``fit_predict_fixed_group_fold``
+    so every split has fold-local scaling.
     Data is passed in directly (already memory-mapped) to avoid redundant
-    cache lookups across the 30-seed loop.
+    cache lookups across perturbation runs.
 
     Args:
         config  (dict):       Ablation step config.
@@ -477,9 +478,8 @@ def run_single_training(
     # the init/shuffle varies with `seed`. The scaler in the cache was fit on the
     # seed-42 grouped train partition; varying the split per seed (the old
     # behaviour) let validation groups of some seeds leak into the scaler fit.
-    # Stochastic robustness is meant to measure init/optimisation variance, not
-    # split variance, so this is also the correct estimand. (True split/CV
-    # resampling would need a per-split scaler — a separate analysis.)
+    # New multi-split evaluations do not use this path: they call the explicit
+    # grouped-fold refit below, which fits a scaler on each fold's train_idx.
     train_idx, val_idx = canonical_train_val_split(len(y), groups,
                                                    dataset_name=dataset_name)
 
@@ -530,17 +530,19 @@ def fit_predict_finalist_fold(
     max_epochs: int,
     n_scour_heads: int,
 ) -> dict[str, np.ndarray]:
-    """Fixed-parameter refit and inference on one development-only CV fold.
+    """Fixed-parameter refit and inference on one explicit grouped fold.
 
     This is the single implementation shared by the campaign driver and the
-    compute benchmark. Fold-local scaling is fitted on ``train_idx`` only;
-    validation never chooses a checkpoint or changes hyperparameters.
+    robustness interfaces. Fold-local scaling is fitted on ``train_idx`` only;
+    validation never chooses a checkpoint or changes hyperparameters. RAW and
+    PAA use this same implementation and differ only in their input arrays.
     """
 
-    if str(config.get("method", "")).lower() != "paa":
+    method = str(config.get("method", "")).lower()
+    if method not in {"raw", "paa"}:
         raise RuntimeError(
-            "finalist repeated CV currently requires affine-standardised PAA "
-            "features; add an explicit fold-scaler implementation before using "
+            "fixed grouped-fold refits support RAW and affine-standardised PAA "
+            "features only; add an explicit fold-scaler implementation for "
             f"method={config.get('method')!r}"
         )
     if not task.is_regression(config):
@@ -627,6 +629,11 @@ def fit_predict_finalist_fold(
     )
 
 
+# Truthful public name for new callers. Keep the historical finalist-CV name
+# above because the campaign driver and retained benchmark import it directly.
+fit_predict_fixed_group_fold = fit_predict_finalist_fold
+
+
 class Objective:
     """
     Callable wrapper that binds a fixed config to train_and_evaluate so that
@@ -687,7 +694,8 @@ def _suggest_params(trial, config: dict) -> dict:
     """
     Ask the Optuna trial to suggest all hyperparameters for the current config.
 
-    Gated suggestions (LSTM params, N-HiTS pool rates) are only requested
+    Gated suggestions (LSTM params, adaptive pyramid-bin sets under the legacy
+    N-HiTS key) are only requested
     when the corresponding architecture flag is active, keeping the search
     space minimal and the Optuna DB schema clean across ablation variants.
 

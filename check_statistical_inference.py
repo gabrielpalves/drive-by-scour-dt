@@ -13,6 +13,12 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
+from core.models import (
+    MultiRatePooling1D,
+    Space2Vec,
+    SpaceAwareModularNetwork,
+    Time2VecPositionEncoding,
+)
 from core.statistical_inference import (
     FoldStandardizedDataset,
     assemble_state_repeat_seed_tensor,
@@ -26,6 +32,10 @@ from core.statistical_inference import (
     repeated_stratified_group_folds,
 )
 from training import trainer as campaign_trainer
+from training.robustness import (
+    run_development_adjudication,
+    run_post_freeze_stability,
+)
 
 
 fails = 0
@@ -149,7 +159,7 @@ raises("malformed joint CV stratum rejected",
        lambda: finalist_cv_strata(["joint|scoursev0"]), ValueError)
 
 
-print("\n--- driver firewall and fixed-fold integration ---")
+print("\n--- manifest driver and fixed-fold integration ---")
 driver_path = Path(__file__).with_name("comprehensive_ablation_multidamage.py")
 driver_source = driver_path.read_text(encoding="utf-8")
 driver_tree = ast.parse(driver_source, filename=str(driver_path))
@@ -157,43 +167,35 @@ driver_functions = {
     node.name: node for node in driver_tree.body
     if isinstance(node, ast.FunctionDef)
 }
-summarize_source = ast.get_source_segment(
-    driver_source, driver_functions["summarize"]
+retired_driver_functions = {
+    "summarize",
+    "_run_finalist_repeated_cv",
+    "_fit_predict_finalist_fold",
+    "_records_to_error_tensor",
+    "_outer_test_hierarchical_inference",
+}
+execute_source = ast.get_source_segment(
+    driver_source, driver_functions["execute_registered_job"]
 )
-ordered_tokens = [
-    '"frozen_selection.json"',
-    "_preflight_comparators(comparators)",
-    "_run_finalist_repeated_cv(comparators, winner_key)",
-    "evaluate_champion(",
-    "_outer_test_hierarchical_inference(",
-]
-ordered_positions = [summarize_source.index(token) for token in ordered_tokens]
-check("freeze -> preflight -> CV -> outer prediction -> inference call order",
-      ordered_positions == sorted(ordered_positions))
-cv_source = ast.get_source_segment(
-    driver_source, driver_functions["_run_finalist_repeated_cv"]
+check(
+    "manifest driver delegates exact registered jobs to the phase executor",
+    not retired_driver_functions.intersection(driver_functions)
+    and "from training.paper1_executor import execute_manifest_job"
+    in execute_source
+    and "return execute_manifest_job(job, manifest)" in execute_source,
 )
-check("CV implementation contains no outer prediction/evaluation call",
-      all(token not in cv_source for token in (
-          "_test_loader(", "evaluate_champion(", "_predictions("
-      )))
-check("CV records outer membership as firewall metadata only",
-      "outer_test_observations_accessed" in cv_source
-      and "False" in cv_source
-      and "outer_test_membership_used_only_for_disjointness_assertion"
-      in cv_source)
-check("CV scope is finalist-only pair-search stages",
-      "FINALIST_CV_STAGES = set(PAIR_SEARCH_STAGES)" in driver_source)
-check("statistical policy flows through unified protocol descriptor",
-      "statistical_inference = STATISTICAL_INFERENCE_PROTOCOL"
-      in driver_source)
-
-# The driver remains import-hostile without a complete dataset, so compile its
-# thin wrapper from the AST and prove it delegates every scientific setting to
-# the shared production implementation.
-fit_node = driver_functions["_fit_predict_finalist_fold"]
-fit_module = ast.Module(body=[fit_node], type_ignores=[])
-ast.fix_missing_locations(fit_module)
+inference_descriptor_source = Path(__file__).with_name("core").joinpath(
+    "cross_rung_inference.py"
+).read_text(encoding="utf-8")
+check(
+    "current paired-inference descriptor is external and non-population",
+    "STATISTICAL_INFERENCE_PROTOCOL" not in driver_source
+    and "MATCHED_BLOCK_INFERENCE_POLICY = {" in inference_descriptor_source
+    and '"population_confidence_interval": False'
+    in inference_descriptor_source
+    and '"automatic_superiority_claim": False'
+    in inference_descriptor_source,
+)
 
 
 class TinyRegressor(torch.nn.Module):
@@ -205,29 +207,13 @@ class TinyRegressor(torch.nn.Module):
         return self.linear(x.flatten(1))
 
 
-forwarded = {}
-sentinel = {"state": np.array([99])}
-
-
-def delegation_spy(*args, **kwargs):
-    forwarded["args"] = args
-    forwarded["kwargs"] = kwargs
-    return sentinel
-
-
-fit_namespace = {
-    "fit_predict_finalist_fold": delegation_spy,
-    "EPOCHS": 3,
-    "TARGET_SUPPORTS": [2],
-}
-exec(compile(fit_module, str(driver_path), "exec"), fit_namespace)
-fit_fold = fit_namespace["_fit_predict_finalist_fold"]
 toy_rng = np.random.default_rng(91)
 toy_x = toy_rng.normal(size=(12, 2, 5)).astype(np.float32)
 toy_y = toy_rng.normal(size=(12, 1)).astype(np.float32)
 toy_groups = np.repeat(np.arange(6), 2)
 toy_fold = SimpleNamespace(
     train_idx=np.arange(8), val_idx=np.arange(8, 12),
+    train_states=np.array([0, 1, 2, 3]),
     val_states=np.array([4, 5]),
 )
 toy_config = {
@@ -236,25 +222,6 @@ toy_config = {
     "target_supports": [2],
     "bearing_targets": None,
 }
-wrapper_result = fit_fold(
-    toy_config, {"lr": 1e-3, "weight_decay": 0.0},
-    toy_x, toy_y, toy_groups, toy_fold, 42, 1,
-)
-check("driver finalist wrapper delegates to shared implementation",
-      wrapper_result is sentinel
-      and len(forwarded["args"]) == 7
-      and forwarded["args"][0] is toy_config
-      and forwarded["args"][1] == {"lr": 1e-3, "weight_decay": 0.0}
-      and forwarded["args"][2] is toy_x
-      and forwarded["args"][3] is toy_y
-      and forwarded["args"][4] is toy_groups
-      and forwarded["args"][5] is toy_fold
-      and forwarded["args"][6] == 42
-      and forwarded["kwargs"] == {
-          "n_epochs": 1,
-          "max_epochs": 3,
-          "n_scour_heads": 1,
-      })
 
 # Exercise that shared implementation with a real optimisation/prediction step
 # while replacing only the expensive architecture factory.
@@ -278,12 +245,27 @@ try:
         max_epochs=3,
         n_scour_heads=1,
     )
+    toy_raw_metrics = campaign_trainer.fit_predict_fixed_group_fold(
+        {**toy_config, "method": "RAW"},
+        {"lr": 1e-3, "weight_decay": 0.0},
+        toy_x,
+        toy_y,
+        toy_groups,
+        toy_fold,
+        42,
+        n_epochs=1,
+        max_epochs=3,
+        n_scour_heads=1,
+    )
 finally:
     campaign_trainer.build_model = original_build_model
     campaign_trainer.DEVICE = original_device
 check("shared fixed-fold trainer runs and returns state metrics",
       np.array_equal(toy_metrics["state"], [4, 5])
       and np.isfinite(toy_metrics["scour_mse"]).all())
+check("RAW and PAA share the fixed grouped-fold trainer",
+      np.array_equal(toy_raw_metrics["state"], [4, 5])
+      and np.isfinite(toy_raw_metrics["scour_mse"]).all())
 raises("fixed-fold trainer rejects epoch count above protocol maximum",
        lambda: campaign_trainer.fit_predict_finalist_fold(
            toy_config, {"lr": 1e-3, "weight_decay": 0.0},
@@ -446,63 +428,316 @@ raises("unpaired shapes rejected",
        lambda: paired_state_contrast(err, comp[:-1], n_boot=10, seed=1),
        ValueError)
 
-# Exercise the paper-facing driver's semantic state-key firewall, rather than
-# merely checking that paired numeric tensors happen to have equal shapes.
-alignment_nodes = [
-    driver_functions["_records_to_error_tensor"],
-    driver_functions["_outer_test_hierarchical_inference"],
-]
-alignment_module = ast.Module(body=alignment_nodes, type_ignores=[])
-ast.fix_missing_locations(alignment_module)
-alignment_namespace = {
-    "np": np,
-    "os": __import__("os"),
-    "assemble_state_repeat_seed_tensor": assemble_state_repeat_seed_tensor,
-    "hierarchical_state_seed_bootstrap": hierarchical_state_seed_bootstrap,
-    "paired_state_contrast": paired_state_contrast,
-    "SEEDS": [3, 7],
-    "BOOTSTRAP_N": 20,
-    "BOOTSTRAP_SEED": 123,
-    "SUMMARY_DIR": ".",
-    "_dofs_label": lambda dofs: ",".join(str(d) for d in dofs),
-    "_write_rows_csv": lambda *_args, **_kwargs: None,
+print("\n--- fixed-width model mechanics ---")
+pool = MultiRatePooling1D((1, 2, 4))
+short_input = torch.arange(2 * 3 * 17, dtype=torch.float32).reshape(2, 3, 17)
+long_input = torch.arange(2 * 3 * 41, dtype=torch.float32).reshape(2, 3, 41)
+short_pooled = pool(short_input)
+long_pooled = pool(long_input)
+expected_short = torch.cat([
+    torch.nn.functional.adaptive_max_pool1d(short_input, level).reshape(2, -1)
+    for level in (1, 2, 4)
+], dim=1)
+check("adaptive pyramid width is independent of input length",
+      short_pooled.shape == long_pooled.shape == (2, 21))
+check("multi-rate representation is the declared temporal pyramid",
+      torch.equal(short_pooled, expected_short))
+raises("duplicate temporal-pyramid bins rejected",
+       lambda: MultiRatePooling1D((1, 2, 2)), ValueError)
+raises("empty temporal input rejected",
+       lambda: pool(torch.empty(2, 3, 0)), ValueError)
+
+position = Time2VecPositionEncoding(seq_len=17, out_features=5)
+position_short = position(torch.linspace(0, 1, 17).reshape(1, 1, -1))
+position_long = position(torch.linspace(0, 1, 41).reshape(1, 1, -1))
+check("Time2Vec-style coordinate encoding accepts live sequence lengths",
+      position_short.shape == (1, 5, 17)
+      and position_long.shape == (1, 5, 41))
+check("historical Space2Vec import is a compatibility alias only",
+      Space2Vec is Time2VecPositionEncoding)
+
+fixed_width_params = {
+    "n_conv_layers": 1,
+    "n_filters_l0": 4,
+    "kernel_size_l0": 3,
+    "pooling_l0": False,
+    "nhits_pool_rates": (1, 2, 4),
+    "n_dense_layers": 1,
+    "n_dense_units_l0": 6,
+    "dropout_l0": 0.0,
 }
-exec(compile(alignment_module, str(driver_path), "exec"), alignment_namespace)
-outer_inference = alignment_namespace["_outer_test_hierarchical_inference"]
+network_short = SpaceAwareModularNetwork(
+    n_segments=17,
+    n_classes=3,
+    in_channels=2,
+    params=fixed_width_params,
+    use_space2vec=True,
+    use_nhits=True,
+)
+network_long = SpaceAwareModularNetwork(
+    n_segments=41,
+    n_classes=3,
+    in_channels=2,
+    params=fixed_width_params,
+    use_space2vec=True,
+    use_nhits=True,
+)
+parameter_count = lambda model: sum(p.numel() for p in model.parameters())
+check("RAW/PAA sequence lengths have equal model parameter count",
+      parameter_count(network_short) == parameter_count(network_long))
+check("dense input width is independent of configured sequence length",
+      network_short.dense_layers[0].in_features
+      == network_long.dense_layers[0].in_features == 28)
+network_short.eval()
+with torch.no_grad():
+    logits_short = network_short(torch.randn(2, 2, 17))
+    logits_long = network_short(torch.randn(2, 2, 41))
+check("one fixed network accepts both sequence lengths",
+      logits_short.shape == logits_long.shape == (2, 3))
 
 
-def _alignment_fixture_rows():
-    rows = []
-    for architecture, dofs, states_for_model in (
-        ("winner", "0", (10, 20)),
-        ("comparator", "1", (10, 30)),
-    ):
-        for state in states_for_model:
-            for seed in (3, 7):
-                rows.append({
-                    "architecture": architecture,
-                    "dofs": dofs,
-                    "state": state,
-                    "state_uid": f"fixture-uid-{state}",
-                    "family": "fixture",
-                    "repeat": 0,
-                    "seed": seed,
-                    "scour_mse": float(state + seed),
-                    "all_head_mse": float(state + seed + 1),
-                })
-    return rows
+def _model_mechanics_source_contract(source):
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    classes = {
+        node.name: node for node in tree.body if isinstance(node, ast.ClassDef)
+    }
+    if not {"Time2VecPositionEncoding", "MultiRatePooling1D"} <= set(classes):
+        return False
+    pool_source = ast.get_source_segment(
+        source, classes["MultiRatePooling1D"]
+    )
+    network_source = ast.get_source_segment(
+        source, classes["SpaceAwareModularNetwork"]
+    )
+    return (
+        "F.adaptive_max_pool1d" in pool_source
+        and "F.max_pool1d(" not in pool_source
+        and "self.output_bins = sum(levels)" in pool_source
+        and "current_features * self.multi_rate_pool.output_bins"
+        in network_source
+        and "current_seq_len" not in network_source
+        and "steps=x.size(-1)" in network_source
+        and "Space2Vec = Time2VecPositionEncoding" in source
+    )
 
 
-raises("outer-test paired contrast rejects differently keyed state tensors",
-       lambda: outer_inference(
-           _alignment_fixture_rows(),
-           {("winner", (0,)), ("comparator", (1,))},
-           ("winner", (0,)),
-           [
-               {"architecture": "winner", "dofs": "0"},
-               {"architecture": "comparator", "dofs": "1"},
-           ],
-       ), RuntimeError)
+models_source = Path(__file__).with_name("core").joinpath("models.py").read_text(
+    encoding="utf-8"
+)
+check("model source satisfies the fixed-width mechanics contract",
+      _model_mechanics_source_contract(models_source))
+check("mutation: stride pooling cannot masquerade as adaptive pyramid pooling",
+      not _model_mechanics_source_contract(models_source.replace(
+          "F.adaptive_max_pool1d", "F.max_pool1d", 1
+      )))
+check("mutation: a sequence-length-sized dense head is rejected",
+      not _model_mechanics_source_contract(models_source.replace(
+          "current_features * self.multi_rate_pool.output_bins",
+          "current_features * self.n_segments",
+          1,
+      )))
+check("mutation: reverting the truthful class name is rejected",
+      not _model_mechanics_source_contract(models_source.replace(
+          "class Time2VecPositionEncoding", "class LegacySpaceEncoding", 1
+      )))
+
+
+print("\n--- development adjudication and post-freeze stability ---")
+robust_groups = np.repeat(np.arange(8), 2)
+robust_X = np.zeros((len(robust_groups), 1, 17), dtype=np.float32)
+robust_y = np.zeros((len(robust_groups), 1), dtype=np.float32)
+robust_outer_states = np.array([6, 7])
+robust_outer_idx = np.flatnonzero(np.isin(robust_groups, robust_outer_states))
+robust_dev_idx = np.flatnonzero(~np.isin(robust_groups, robust_outer_states))
+robust_strata = ["A"] * 4 + ["B"] * 4
+development_calls = []
+
+
+def _fake_fold_evaluator(**kwargs):
+    fold = kwargs["fold"]
+    development_calls.append((
+        kwargs["seed"],
+        int(fold.repeat),
+        int(fold.fold),
+        tuple(fold.train_states.tolist()),
+        tuple(fold.val_states.tolist()),
+    ))
+    return {
+        "state": fold.val_states.copy(),
+        "scour_mse": np.full(len(fold.val_states), kwargs["seed"], dtype=float),
+    }
+
+
+development_result = run_development_adjudication(
+    config={"name": "fixture", "method": "raw"},
+    params={"fixture": 1},
+    X=robust_X,
+    y=robust_y,
+    groups=robust_groups,
+    development_idx=robust_dev_idx,
+    strata_by_state=robust_strata,
+    split_seeds=[11, 12],
+    initialization_seeds=[21, 22],
+    n_splits=2,
+    n_repeats=2,
+    n_epochs=3,
+    max_epochs=5,
+    n_scour_heads=1,
+    fit_evaluate=_fake_fold_evaluator,
+)
+check("development adjudication executes every explicit split/fold/init refit",
+      development_result["n_completed_refits"]
+      == development_result["n_expected_refits"] == 16
+      and len(development_calls) == 16)
+check("development interface never evaluates sealed outer states",
+      development_result["outer_test_observations_accessed"] is False
+      and all(
+          not set(call[4]).intersection(robust_outer_states.tolist())
+          for call in development_calls
+      ))
+check("development refits use only prospectively supplied initialization seeds",
+      {call[0] for call in development_calls} == {21, 22})
+raises("empty prospective split-seed list rejected",
+       lambda: run_development_adjudication(
+           config={"name": "fixture", "method": "raw"},
+           params={}, X=robust_X, y=robust_y, groups=robust_groups,
+           development_idx=robust_dev_idx, strata_by_state=robust_strata,
+           split_seeds=[], initialization_seeds=[21], n_splits=2,
+           n_repeats=1, n_epochs=1, max_epochs=1, n_scour_heads=1,
+           fit_evaluate=_fake_fold_evaluator,
+       ), ValueError)
+
+post_freeze_calls = []
+
+
+def _fake_post_freeze_evaluator(**kwargs):
+    fold = kwargs["fold"]
+    post_freeze_calls.append((
+        kwargs["seed"],
+        tuple(fold.train_states.tolist()),
+        tuple(fold.val_states.tolist()),
+    ))
+    return {
+        "state": fold.val_states.copy(),
+        "scour_mse": np.full(len(fold.val_states), kwargs["seed"], dtype=float),
+    }
+
+
+post_freeze_result = run_post_freeze_stability(
+    config={"name": "fixture", "method": "paa"},
+    params={"fixture": 1},
+    X=robust_X,
+    y=robust_y,
+    groups=robust_groups,
+    development_idx=robust_dev_idx,
+    sealed_outer_test_idx=robust_outer_idx,
+    initialization_seeds=[31, 32],
+    n_epochs=3,
+    max_epochs=5,
+    n_scour_heads=1,
+    fit_evaluate=_fake_post_freeze_evaluator,
+)
+check("post-freeze phase is outer-test report-only",
+      post_freeze_result["outer_test_observations_accessed"] is True
+      and post_freeze_result["selection_permitted"] is False
+      and post_freeze_result["n_completed_refits"] == 2)
+check("post-freeze refits use the full development/sealed state partition",
+      all(set(call[1]) == set(range(6))
+          and set(call[2]) == {6, 7} for call in post_freeze_calls))
+crossed_dev = np.sort(np.append(robust_dev_idx, robust_outer_idx[0]))
+crossed_outer = robust_outer_idx[1:]
+raises("state crossing development and sealed outer test rejected",
+       lambda: run_post_freeze_stability(
+           config={"name": "fixture", "method": "paa"},
+           params={}, X=robust_X, y=robust_y, groups=robust_groups,
+           development_idx=crossed_dev,
+           sealed_outer_test_idx=crossed_outer,
+           initialization_seeds=[31], n_epochs=1, max_epochs=1,
+           n_scour_heads=1, fit_evaluate=_fake_post_freeze_evaluator,
+       ), ValueError)
+
+
+def _robustness_source_contract(source):
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    required = {
+        "run_development_adjudication",
+        "run_post_freeze_stability",
+        "evaluate_development_adjudication",
+        "evaluate_post_freeze_stability",
+    }
+    if not required <= set(functions) or "evaluate_stochastic_robustness" in functions:
+        return False
+
+    def required_kwonly(function_name, argument_name):
+        function = functions[function_name]
+        names = [argument.arg for argument in function.args.kwonlyargs]
+        if argument_name not in names:
+            return False
+        return function.args.kw_defaults[names.index(argument_name)] is None
+
+    development_source = ast.get_source_segment(
+        source, functions["run_development_adjudication"]
+    )
+    post_source = ast.get_source_segment(
+        source, functions["run_post_freeze_stability"]
+    )
+    identifiers = {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+    } | {
+        node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)
+    }
+    return (
+        required_kwonly("run_development_adjudication", "split_seeds")
+        and required_kwonly(
+            "run_development_adjudication", "initialization_seeds"
+        )
+        and required_kwonly(
+            "run_post_freeze_stability", "initialization_seeds"
+        )
+        and "repeated_stratified_group_folds(" in development_source
+        and "sealed_outer_test_idx" not in development_source
+        and "split_seeds" not in [
+            argument.arg
+            for argument in functions[
+                "run_post_freeze_stability"
+            ].args.kwonlyargs
+        ]
+        and "selection_permitted=False" in post_source
+        and "outer_test_observations_accessed=True" in post_source
+        and "n_seeds" not in identifiers
+        and "seed=42" not in source
+        and "42 +" not in source
+    )
+
+
+robustness_source = Path(__file__).with_name("training").joinpath(
+    "robustness.py"
+).read_text(encoding="utf-8")
+check("robustness source enforces phase and seed separation",
+      _robustness_source_contract(robustness_source))
+check("mutation: replacing grouped folds is rejected",
+      not _robustness_source_contract(robustness_source.replace(
+          "repeated_stratified_group_folds(", "list(", 1
+      )))
+check("mutation: a default split seed is rejected",
+      not _robustness_source_contract(robustness_source.replace(
+          "split_seeds: Sequence[int],",
+          "split_seeds: Sequence[int] = (42,),",
+          1,
+      )))
+check("mutation: selection-enabled sealed-test use is rejected",
+      not _robustness_source_contract(robustness_source.replace(
+          "selection_permitted=False,", "selection_permitted=True,", 1
+      )))
 
 
 print("\n--- MCSE family-size planning ---")
