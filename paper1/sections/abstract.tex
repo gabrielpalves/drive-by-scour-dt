@@ -1,27 +1,27 @@
 % NOTE: single paragraph, plain language, no citations. Target 200--250 words.
 % The two \pending sentences must be rewritten with observed effect sizes after
 % the authenticated four-block campaign; do not soften the pending markers.
-Scour --- the erosion of soil around bridge foundations during floods --- is a
-leading cause of bridge failure, yet it is difficult to inspect exactly when it
-matters most. Drive-by monitoring offers an attractive alternative: an
-in-service train records its own vibration while crossing the bridge, and that
-response carries information about support condition. Previous studies
-established feasibility but leave pre-deployment choices unresolved:
+Scour --- erosion around bridge foundations during floods --- is a leading
+cause of bridge failure but is difficult to inspect. Drive-by monitoring uses
+an in-service train's vibration to infer support condition. Previous studies
+established feasibility but leave key pre-deployment choices unresolved:
 whether to process raw or compressed signals, which neural components help,
 and which response channels are informative. This study addresses
 those questions with a prospectively specified, source-locked experiment based
-on a two-dimensional train--track--bridge simulation of a two-span benchmark
-and a four-span geometry. Four blocks separate scour
-from a multi-damage task that activates nominal bearing fixity and a local
-flexural-rigidity-loss surrogate. One fixed rail-profile realization is shared
-throughout; speed, temperature, and vehicle properties vary between passages,
-while track damage, wheel polygonization, and suspension damage are deferred.
+on two-dimensional train--track--bridge simulations of two- and four-span
+geometries. Four blocks separate scour-only from tasks adding nominal bearing
+fixity and a local flexural-rigidity-loss surrogate. One generated
+FRA-class-4 profile realization is shared by every semantic state and passage.
+Speed, temperature, and vehicle properties vary
+between passages, while track damage, wheel polygonization, and suspension
+damage are deferred.
 A 16-cell factorial compares raw and Piecewise Aggregate Approximation inputs,
 positional encoding, recurrence, and fixed-width multi-rate pooling. A sealed,
-state-grouped protocol then screens all eight single channels descriptively and
-all 28 two-channel pairs for four retained pipelines. The eight modeled inputs
-include two constrained-wheelset acceleration proxies and therefore represent
-responses, not a validated eight-sensor package.
+state-grouped protocol then screens six learning-eligible single channels
+descriptively and all 15 eligible two-channel pairs for four retained
+pipelines. Two additional constrained-wheelset kinematic proxies remain in the
+eight-response payload only as diagnostics and never enter learning or
+selection.
 \pending{State the authenticated RAW/PAA factorial and selected-pair outcomes,
 with effect sizes and explicitly descriptive finite-design uncertainty.}
 \pending{State the authenticated block-local scour, multi-damage, and

@@ -46,7 +46,15 @@ CHANNELS = (
     "front_bogie_pitch_rate",
     "rear_bogie_pitch_rate",
 )
+# Preserve all eight generated response rows in ``physical8_v1`` while
+# separating storage/V&V diagnostics from scientifically comparable sensors.
+# The constrained-wheelset rows are kinematic proxies, not independent wheel
+# DOFs or instrument models, so F25-X must not rank or combine them as sensors.
+EXCLUDED_PROXY_INDICES = (3, 4)
+ELIGIBLE_SENSOR_INDICES = (0, 1, 2, 5, 6, 7)
+ELIGIBLE_SENSOR_CHANNELS = tuple(CHANNELS[index] for index in ELIGIBLE_SENSOR_INDICES)
 F25_R_CHANNELS = CHANNELS[:2]
+F25_X_CHANNELS = ELIGIBLE_SENSOR_CHANNELS
 
 PROFILE_TYPE = 2
 PROFILE_RELATIVE_PATH = "scour_MATLAB/Calc.ProfileData15_05.mat"
@@ -370,19 +378,21 @@ FROZEN_HP_ANCHORS = (
 
 
 def single_sensor_sets(
-    channels: Sequence[str] = CHANNELS,
+    channels: Sequence[str] = F25_X_CHANNELS,
 ) -> tuple[tuple[str, ...], ...]:
-    """Return the channel-order-preserving singleton inventory."""
+    """Return the eligible channel-order-preserving singleton inventory."""
 
     return tuple((str(channel),) for channel in channels)
 
 
-def lexicographic_sensor_pairs() -> tuple[tuple[str, str], ...]:
-    """Return all 8-choose-2 pairs in pre-registered lexicographic order."""
+def lexicographic_sensor_pairs(
+    channels: Sequence[str] = F25_X_CHANNELS,
+) -> tuple[tuple[str, str], ...]:
+    """Return all eligible 6-choose-2 pairs in lexicographic order."""
 
     # Sort by the stable channel identifiers themselves, not by an observed
     # score and not by the physical8 storage order.
-    return tuple(itertools.combinations(sorted(CHANNELS), 2))
+    return tuple(itertools.combinations(sorted(str(channel) for channel in channels), 2))
 
 
 @dataclass(frozen=True)
@@ -743,8 +753,9 @@ DEVIATION_ROWS = (
         "deliberately changed",
         "F25-X only",
         "two vertical single sensors",
-        "all eight physical singles plus 28 pre-registered exploratory pairs",
-        "tests channel hypotheses without presenting pairs as reconstruction",
+        "six learning-eligible singles plus 15 pre-registered exploratory pairs; "
+        "wheelset proxies excluded",
+        "tests channel hypotheses without treating diagnostic proxies as sensors",
     ),
     DeviationRow(
         "multirate_arm",
@@ -1075,6 +1086,9 @@ def _contract_body() -> dict[str, Any]:
         "source_lineage_policy": SOURCE_LINEAGE_POLICY,
         "channel_schema_id": CHANNEL_SCHEMA_ID,
         "channels": list(CHANNELS),
+        "eligible_sensor_indices": list(ELIGIBLE_SENSOR_INDICES),
+        "eligible_sensor_channels": list(ELIGIBLE_SENSOR_CHANNELS),
+        "excluded_proxy_indices": list(EXCLUDED_PROXY_INDICES),
         "geometry": _jsonable(GeometryContract()),
         "profile": {
             "type": PROFILE_TYPE,
@@ -1153,7 +1167,7 @@ def _contract_body() -> dict[str, Any]:
             "tiers": [_tier_payload(F25_R_UNFROZEN)],
         },
         "F25-X": {
-            "selected_channels": list(CHANNELS),
+            "selected_channels": list(F25_X_CHANNELS),
             "tier_order": [tier.tier_id for tier in F25_X_TIERS],
             "tiers": [_tier_payload(tier) for tier in F25_X_TIERS],
             "frozen_hp_anchor_contract_id": FROZEN_HP_ANCHOR_CONTRACT_ID,
@@ -1291,6 +1305,17 @@ def validate_contract() -> None:
 
     if len(CHANNELS) != 8 or len(set(CHANNELS)) != 8:
         raise F25ContractError("physical8_v1 channel inventory drifted")
+    if (
+        EXCLUDED_PROXY_INDICES != (3, 4)
+        or ELIGIBLE_SENSOR_INDICES != (0, 1, 2, 5, 6, 7)
+        or set(EXCLUDED_PROXY_INDICES) & set(ELIGIBLE_SENSOR_INDICES)
+        or set(EXCLUDED_PROXY_INDICES) | set(ELIGIBLE_SENSOR_INDICES)
+        != set(range(len(CHANNELS)))
+        or ELIGIBLE_SENSOR_CHANNELS
+        != tuple(CHANNELS[index] for index in ELIGIBLE_SENSOR_INDICES)
+        or F25_X_CHANNELS != ELIGIBLE_SENSOR_CHANNELS
+    ):
+        raise F25ContractError("F25-X scientific sensor eligibility drifted")
     if F25_R_CHANNELS != CHANNELS[:2]:
         raise F25ContractError("F25-R is not limited to the two source sensors")
     if tuple(arm.pooling for arm in SOURCE_RECONSTRUCTION_ARMS) != (
@@ -1311,14 +1336,14 @@ def validate_contract() -> None:
     ):
         raise F25ContractError("published finalists or frozen arm anchors drifted")
     pairs = lexicographic_sensor_pairs()
-    if len(pairs) != 28 or len(set(pairs)) != 28 or tuple(sorted(pairs)) != pairs:
-        raise F25ContractError("F25-X pair order is not complete lexicographic 8C2")
+    if len(pairs) != 15 or len(set(pairs)) != 15 or tuple(sorted(pairs)) != pairs:
+        raise F25ContractError("F25-X pair order is not complete eligible 6C2")
 
     expected_tier_numbers = (
         (F25_R_UNFROZEN, 4, 2000, 80, 2000),
-        (F25_X_FROZEN_SINGLES, 24, 0, 480, 480),
-        (F25_X_UNFROZEN_SINGLES, 24, 12000, 480, 12000),
-        (F25_X_FROZEN_PAIRS, 84, 0, 1680, 1680),
+        (F25_X_FROZEN_SINGLES, 18, 0, 360, 360),
+        (F25_X_UNFROZEN_SINGLES, 18, 9000, 360, 9000),
+        (F25_X_FROZEN_PAIRS, 45, 0, 900, 900),
     )
     for tier, configurations, hpo, report, table in expected_tier_numbers:
         actual = (

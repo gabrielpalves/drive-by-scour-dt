@@ -49,6 +49,10 @@ import core.dataset as cds                                                 # noq
 from core.execution_environment import EXECUTION_BLOCK_POLICY             # noqa: E402
 from core.hyperparameter_policy import HYPERPARAMETER_POLICY              # noqa: E402
 from core.capacity_preflight import CAPACITY_PREFLIGHT_POLICY             # noqa: E402
+from core.challenger_policy import (                                      # noqa: E402
+    CHALLENGER_OPTIMIZER_SPACE,
+    CHALLENGER_SEARCH_SPACES,
+)
 from core.campaign_contract import (                                      # noqa: E402
     EXPECTED_PROTOCOL_SCHEMA_TAG,
     EXPECTED_RAIL_END_CLEARANCE_DECISION_ID,
@@ -60,8 +64,11 @@ from core.source_provenance import (                                      # noqa
     generator_source_root,
     python_runtime_source_root,
 )
-from training.trainer import (TRAIN_PROTOCOL, SEARCH_SPACE,                # noqa: E402
-                              _suggest_params)
+from training.trainer import (                                             # noqa: E402
+    SEARCH_SPACE,
+    TRAIN_PROTOCOL,
+    _suggest_params,
+)
 
 fails = 0
 REPO = Path(__file__).resolve().parent
@@ -171,7 +178,7 @@ check_raises("non-canonical type (object) rejected",
 check("short_hash is a 12-char prefix", short_hash(h1) == h1[:12])
 
 # The protocol's executable-code identity is not a hand-maintained version
-# string: it is the content root of every reviewed Python/environment input.
+# string: it is the content root of every reviewed executable Python input.
 with tempfile.TemporaryDirectory(prefix="runtime-root-") as runtime_tmp:
     runtime_root = Path(runtime_tmp)
     manifest_source = REPO / "bundle_source_files.txt"
@@ -180,7 +187,7 @@ with tempfile.TemporaryDirectory(prefix="runtime-root-") as runtime_tmp:
         line for line in manifest_source.read_text(encoding="utf-8").splitlines()
         if line and not line.lstrip().startswith("#")
     ]
-    # The runtime digest is a Python/environment subset, but its source
+    # The runtime digest is an executable-Python subset, but its source
     # inventory is accepted only after the complete reviewed repository layout
     # (including scour_MATLAB) has been authenticated.  Reproduce that boundary
     # in the isolated fixture instead of constructing a partial pseudo-repo.
@@ -191,13 +198,35 @@ with tempfile.TemporaryDirectory(prefix="runtime-root-") as runtime_tmp:
         shutil.copy2(source, target)
     copied_before = python_runtime_source_root(runtime_root)
     sensitivity_target = runtime_root / "core" / "protocol.py"
+    sensitivity_original = sensitivity_target.read_bytes()
     sensitivity_target.write_bytes(
-        sensitivity_target.read_bytes() + b"\n# provenance sensitivity\n"
+        sensitivity_original + b"\n# provenance sensitivity\n"
     )
     copied_after = python_runtime_source_root(runtime_root)
     check("one reviewed Python byte change moves runtime source root",
           copied_before.sha256 != copied_after.sha256
           and copied_before.file_count == copied_after.file_count)
+    sensitivity_target.write_bytes(sensitivity_original)
+    reference_before = python_runtime_source_root(runtime_root)
+    for reference_name in (
+        "environment/campaign-py313-cu128.json",
+        "requirements-campaign-py313-cu128.txt",
+        "requirements-portable.txt",
+    ):
+        reference_path = runtime_root.joinpath(*reference_name.split("/"))
+        original = reference_path.read_bytes()
+        suffix = (
+            b" " if reference_name.endswith(".json")
+            else b"\n# nonbinding setup reference\n"
+        )
+        reference_path.write_bytes(original + suffix)
+        reference_after = python_runtime_source_root(runtime_root)
+        check(
+            f"nonbinding setup reference excluded from core root: {reference_name}",
+            reference_after.sha256 == reference_before.sha256
+            and reference_after.file_count == reference_before.file_count,
+        )
+        reference_path.write_bytes(original)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -293,6 +322,46 @@ for n_conv in (2, 3, 4):
                                        set(params), {c[0] for c in trial.calls}))
 check(f"all {n_combos} gate combinations match SEARCH_SPACE exactly",
       not mismatches, f"{len(mismatches)} mismatches: {mismatches[:2]}")
+
+# The optional challengers have their own independently hashed domain.  Prove
+# that every registered item becomes exactly one Optuna call, in declared
+# order, while the primary SEARCH_SPACE remains free of dormant families.
+check("primary SEARCH_SPACE excludes optional challenger families",
+      "model_families" not in SEARCH_SPACE
+      and set(SEARCH_SPACE) == {
+          "base", "per_conv_layer", "per_dense_layer", "lstm", "nhits"
+      })
+
+challenger_mismatches = []
+for model_type, family_space in CHALLENGER_SEARCH_SPACES.items():
+    trial = RecordingTrial({})
+    params = _suggest_params(trial, {"model_type": model_type, "method": "PAA"})
+    expected = [
+        _spec_to_call("lr", CHALLENGER_OPTIMIZER_SPACE["lr"]),
+        _spec_to_call(
+            "weight_decay", CHALLENGER_OPTIMIZER_SPACE["weight_decay"]
+        ),
+        *[
+            _spec_to_call(name, spec)
+            for name, spec in family_space.items()
+        ],
+    ]
+    if trial.calls != expected:
+        challenger_mismatches.append(
+            (model_type, "call drift", trial.calls, expected)
+        )
+    if list(params) != [call[0] for call in expected]:
+        challenger_mismatches.append(
+            (model_type, "parameter order drift", list(params), expected)
+        )
+check("all challenger suggestions match CHALLENGER_SEARCH_SPACES exactly",
+      not challenger_mismatches,
+      f"{len(challenger_mismatches)} mismatches: {challenger_mismatches[:2]}")
+check("challengers use the same optimizer domain as the primary study",
+      CHALLENGER_OPTIMIZER_SPACE == {
+          "lr": SEARCH_SPACE["base"]["lr"],
+          "weight_decay": SEARCH_SPACE["base"]["weight_decay"],
+      })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -472,7 +541,7 @@ def _fixture(path, variant="A", schema=_EXPECTED_GEN_SCHEMA, manifest=True,
               'use_crack_eov': False,
               'crack_draw': 'per_state',
               'profile_mode': 'fixed',
-              'profile_draw': 'per_state',
+              'profile_draw': 'fixed_shared',
               'profile_jitter_sd_mm': 0.0,
               'use_track_eov': False,
               'track_draw': 'per_state',
@@ -723,8 +792,12 @@ try:
     core0, full0 = build_protocol_descriptors(**_args(ds_a))
     ch0, fh0 = protocol_hash(core0), protocol_hash(full0)
 
-    check("structured protocol schema is version 7",
-          core0["protocol_version"] == 7)
+    check("structured protocol schema is version 8",
+          core0["protocol_version"] == 8)
+    check("default protocol registers no unexecuted sensor-budget control",
+          core0["selection"]["control_sets"] == []
+          and core0["selection"]["control_arch_policy"]
+              == "no non-selectable sensor-budget control is registered")
     check("core protocol binds physical8_v1",
           core0["code"]["expected_channel_schema_id"]
               == _EXPECTED_CHANNEL_SCHEMA_ID)
@@ -738,6 +811,15 @@ try:
           and core0["code"]["python_runtime_source_file_count"]
               == _PYTHON_RUNTIME.file_count
           and _PYTHON_RUNTIME.file_count > 0)
+    check("runtime qualification is capability-based and version-portable",
+          core0["runtime_qualification"] == {
+              "policy": "required-capabilities-and-local-smokes-v1",
+              "exact_versions": "provenance_only",
+              "matlab_gate": "required_apis_licenses_and_physics_smokes",
+              "python_gate": "required_imports_cuda_and_local_capacity",
+              "reference_environment": "known_good_nonbinding",
+          }
+          and "environment_lock" not in core0)
     check("selection metric is the executable objective policy",
           core0["selection"]["selection_metric"] == TRAIN_PROTOCOL["objective"])
     check("execution policy is hash-carried but runtime hardware is not",
@@ -789,6 +871,7 @@ try:
                                                 "use_nhits": True,
                                                 "model_type": "1D_MODULAR"}]},
         "extra_pairs":      {"extra_pairs": [[0, 3]]},
+        "sensor-budget control": {"control_sets": [[0, 1]]},
         "pair_search set":  {"pair_search_stages": {"F40-S", "F40-M"}},
         "schema_tag":       {"schema_tag": "gs5a-r8"},
         "train_protocol":   {"train_protocol": {**TRAIN_PROTOCOL, "batch_size": 64}},
@@ -828,13 +911,6 @@ try:
         "deployment set":   {"deployment_selection_stages": {"F40-M"}},
         "multi-arch pair set": {
             "multi_arch_pair_selection_stages": {"F40-S", "F40-M"}
-        },
-        "environment lock": {
-            "environment_lock": {
-                "path": "environment/campaign.json",
-                "sha256": "a" * 64,
-                "spec": {"python": "3.13.3"},
-            }
         },
         "execution-block policy": {
             "execution_block_policy": {
@@ -885,6 +961,21 @@ try:
     for label, over in KNOBS.items():
         core_i, _ = build_protocol_descriptors(**_args(ds_a, **over))
         check(f"core hash changes on: {label}", protocol_hash(core_i) != ch0)
+
+    portable_reference_core, _ = build_protocol_descriptors(
+        **_args(
+            ds_a,
+            environment_lock={
+                "path": "environment/another-known-good-reference.json",
+                "sha256": "a" * 64,
+                "spec": {"python": "9.9.9"},
+            },
+        )
+    )
+    check(
+        "known-good runtime reference does not change the scientific hash",
+        protocol_hash(portable_reference_core) == ch0,
+    )
 
     # split constants live in core.dataset; patch one and confirm it propagates.
     _orig = cds.SPLIT_TEST_FRAC

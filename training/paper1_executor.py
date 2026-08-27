@@ -33,7 +33,7 @@ Required environment for an executable F40-S factorial job
     Additionally required for selected-pair HPO; absolute path to the canonical
     F40-S pair/retained-slot selection artefact.
 ``TTBI_PAPER1_SELECTION_ARTIFACT_SHA256``
-    External SHA-256 deposited with dispatch; prevents replacing the canonical
+    Independently recorded SHA-256 shipped with dispatch; prevents replacing the canonical
     artefact and merely recomputing its self-digest.
 """
 
@@ -718,14 +718,14 @@ def _load_hpo_candidate(
     results_root: Path,
     study_root: Path,
     run_tag: str,
-    require_same_host: bool,
+    require_same_assignment: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Authenticate one completed HPO champion and its frozen epoch count."""
 
     candidate_job = _hpo_candidate_job(pipeline, restart_seed)
-    if require_same_host and candidate_job not in manifest["jobs"]:
+    if require_same_assignment and candidate_job not in manifest["jobs"]:
         raise Paper1ExecutionDependencyError(
-            "candidate HPO job is not assigned to the adjudication host"
+            "candidate HPO job is not in the same logical dispatch share"
         )
     job_dir = (
         results_root / "F40-S" / "f40s_factorial_hpo"
@@ -1462,7 +1462,7 @@ def _execute_hpo_job(
         sensor_noise=None,
         architectures=all_factorial_architectures(),
         extra_pairs=[],
-        control_sets=[list(range(8))],
+        control_sets=[],
         pair_search_stages={"F40-S"},
         arch_selection_stages={"F40-S"},
         deployment_selection_stages=set(),
@@ -1684,7 +1684,7 @@ def execute_development_adjudication_job(
         results_root=results_root,
         study_root=study_root,
         run_tag=run_tag,
-        require_same_host=True,
+        require_same_assignment=True,
     )
     from core.execution_environment import EXECUTION_BLOCK_POLICY, enforce_execution_block
 
@@ -2199,7 +2199,7 @@ def publish_block_freeze_artifact(
 def _load_report_freeze(
     *, job: Mapping[str, Any], freeze_stage: str, run_tag: str
 ) -> dict[str, Any]:
-    """Authenticate both deposited selection and freeze before data access."""
+    """Authenticate both source-fixed selection and freeze before data access."""
 
     expected_freeze_sha = os.environ.get(
         BLOCK_FREEZE_ARTIFACT_SHA256_ENV, ""

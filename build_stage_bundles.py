@@ -12,33 +12,11 @@ from __future__ import annotations
 
 import os as _bootstrap_os
 import sys as _bootstrap_sys
-for _unsafe_python_path_variable in ("PYTHONPATH", "PYTHONHOME"):
-    if _unsafe_python_path_variable in _bootstrap_os.environ:
-        raise RuntimeError(
-            f"{_unsafe_python_path_variable} must be absent before evidence "
-            "imports"
-        )
 _bootstrap_source_root = _bootstrap_os.path.abspath(
     _bootstrap_os.path.dirname(__file__)
 )
-_bootstrap_first_path = _bootstrap_sys.path[0] or _bootstrap_os.getcwd()
-if (
-    _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
-        _bootstrap_first_path
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_first_path
-    ))
-    or _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_first_path
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_source_root
-    ))
-):
-    raise RuntimeError(
-        "reviewed repository root must be the canonical first import path"
-    )
+if _bootstrap_source_root not in _bootstrap_sys.path:
+    _bootstrap_sys.path.insert(0, _bootstrap_source_root)
 _bootstrap_guard_dir = _bootstrap_os.path.join(
     _bootstrap_source_root, "campaign_import_guard"
 )
@@ -47,13 +25,6 @@ _bootstrap_guard_init = _bootstrap_os.path.join(
 )
 if (
     not _bootstrap_os.path.isfile(_bootstrap_guard_init)
-    or _bootstrap_os.path.islink(_bootstrap_guard_init)
-    or _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
-        _bootstrap_guard_dir
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_guard_dir
-    ))
     or any(
         entry.casefold().startswith("__init__.")
         and entry != "__init__.py"
@@ -85,7 +56,6 @@ import argparse
 import hashlib
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
-import re
 import stat
 import subprocess
 import tempfile
@@ -97,12 +67,10 @@ import zipfile
 REPO = Path(__file__).resolve().parent
 BUILDER_NAME = "build_stage_bundles.py"
 SOURCE_MANIFEST_NAME = "bundle_source_files.txt"
-AUDIT_REPORT_NAME = "docs/audit_r5_results.md"
+BUNDLE_IDENTITY_NAME = "paper1_bundle_identity.json"
+BUNDLE_IDENTITY_SCHEMA = "ttbi-paper1-bundle-identity-v1"
 DRIVER = "comprehensive_ablation_multidamage.py"
 A00 = "scour_MATLAB/A00_Run.m"
-EXPECTED_AUDIT_STATUS = "**Status: PAPER-1 DISPATCH AUTHORIZED.**"
-EXPECTED_AUDIT_HEADING = "# Paper-1 dispatch authorization (legacy filename)"
-DISPATCH_AUTHORIZATION_ENV = "TTBI_DISPATCH_AUTHORIZATION_MANIFEST"
 
 
 class BundleBuildError(RuntimeError):
@@ -123,8 +91,8 @@ BUNDLES = MappingProxyType({
     "f40m_generate": ("generation", "F40-M", "40 m multi-damage generation"),
     "l99s_generate": ("generation", "L99-S", "99.6 m scour generation"),
     "l99m_generate": ("generation", "L99-M", "99.6 m multi-damage generation"),
-    "train_labA": ("training", "labA", "Lab-A matched-GPU job share"),
-    "train_labB": ("training", "labB", "Lab-B matched-GPU job share"),
+    "train_labA": ("training", "labA", "Lab-A logical job share"),
+    "train_labB": ("training", "labB", "Lab-B logical job share"),
 })
 EXPECTED_BUNDLE_ORDER = (
     "f40s_generate",
@@ -138,68 +106,80 @@ if tuple(BUNDLES) != EXPECTED_BUNDLE_ORDER:
     raise RuntimeError("registered Paper-1 six-bundle set drifted")
 
 
-def set_a00_stage(t, stage):
-    t2, n = re.subn(r"^STAGE = '[^']*';", f"STAGE = '{stage}';", t, count=1, flags=re.M)
-    if n != 1:
-        raise BundleBuildError("A00 STAGE line not found/replaced exactly once.")
-    return t2
-
-
-def set_a00_bundle_config(text: str, stage: str) -> str:
-    """Preset one complete reviewed stage tuple, never only its label."""
-
-    counts = {
-        "F40-S": (0, 50, 5, 60, 5, 0),
-        "F40-M": (250, 50, 50, 5, 5, 50),
-        "L99-S": (250, 50, 50, 5, 5, 50),
-        "L99-M": (250, 50, 50, 5, 5, 50),
-    }
-    if stage not in counts:
-        raise BundleBuildError(f"unregistered generation stage {stage!r}")
-    text = set_a00_stage(text, stage)
-    variables = (
-        "n_states_multi",
-        "Npass",
-        "n_healthy_states",
-        "n_anchor_levels",
-        "n_anchor_reps",
-        "n_nuisance_states",
-    )
-    for variable, value in zip(variables, counts[stage], strict=True):
-        text, replacements = re.subn(
-            rf"^{variable}\s*=\s*\d+;.*$",
-            f"{variable} = {value}; % BUNDLE PRESET: {stage}",
-            text,
-            count=1,
-            flags=re.MULTILINE,
-        )
-        if replacements != 1:
-            raise BundleBuildError(
-                f"A00 {variable} line not found/replaced exactly once"
-            )
-    return text
-
 def paper1_readme(
     bundle_kind: str,
     target: str,
     purpose: str,
     source_commit: str,
-    tested_source_commit: str,
-    authorization_sha256: str,
 ) -> str:
     """Return concise instructions derived from the live bundle manifest."""
 
+    training_manifest_command = (
+        "$env:TTBI_TRAINING_JOB_MANIFEST = "
+        "'<ABSOLUTE_PATH_TO_training_job_manifest.json>'"
+        if bundle_kind == "training"
+        else "Remove-Item Env:TTBI_TRAINING_JOB_MANIFEST "
+        "-ErrorAction SilentlyContinue # generation bundle"
+    )
+    capacity_command = (
+        "python -B capacity_preflight_compute.py --all-stages --receipt-dir "
+        '"$env:TTBI_EXECUTION_RECEIPT_DIR"'
+    )
+    if bundle_kind == "generation":
+        capacity_command = "# Training only: " + capacity_command
     lines = [
         f"# Paper-1 {bundle_kind} bundle: {target} — {purpose}",
         "",
-        f"Dispatch bundle commit B: `{source_commit}`.",
-        f"Tested source commit A: `{tested_source_commit}`.",
-        f"Dispatch-authorization manifest SHA-256: `{authorization_sha256}`.",
+        f"Source commit: `{source_commit}`.",
         "",
         "Verify this ZIP against `bundle_sha256.txt` and extract it into a",
         "fresh workspace. Never reuse pre-r12 data, caches, studies, or results.",
-        "All retained data use `physical8_v1`; profile phase is fixed;",
+        "The extracted `paper1_bundle_identity.json` authenticates the embedded",
+        "commit label, source manifest, executable source roots, and bundle",
+        "manifest; a `.git` directory is neither included nor required.",
+        "For Python work, install `requirements-portable.txt` with versions and",
+        "a CUDA-enabled PyTorch build compatible with this PC. The pinned",
+        "py313/cu128 file is only an optional known-good setup reference.",
+        "All retained data use `physical8_v1`; the FRA-4 profile phase is fixed",
+        "and shared across all production states and passages;",
+        "wheelset proxy rows 3/4 are V&V diagnostics and are excluded from",
+        "learning, whose eligible physical sensor indices are 0,1,2,5,6,7;",
         "operational EOV is enabled; track damage and wheel OOR are disabled.",
+        "These six ZIPs dispatch only the complete 1,600-job primary grid.",
+        "Modern-TCN/TSLANet challengers remain contract/model definitions only:",
+        "they have no executor or job manifest here and are not runnable or",
+        "claimable. Any later audited challenger dispatch must use only the",
+        "authenticated F40-S selected pair.",
+        "",
+        "## Durable paths and run identity",
+        "",
+        "Before retained work, configure these explicitly as absolute paths.",
+        "The data root must already exist and its final component must be",
+        "`data`. Training job results, caches, studies, and receipts belong on",
+        "durable storage outside this extracted source workspace. Generation is",
+        "the deliberate exception: A00 first writes inside",
+        "`scour_MATLAB/Results/<case_name>`; copy that completed folder to",
+        "`TTBI_DATA_ROOT` only after generation and both parity checks finish:",
+        "",
+        "```powershell",
+        "$env:TTBI_DATA_ROOT = '<ABSOLUTE_DURABLE_ROOT>\\data'",
+        "$env:TTBI_RESULTS_ROOT = '<ABSOLUTE_DURABLE_RESULTS_ROOT>'",
+        "$env:TTBI_CACHE_ROOT = '<ABSOLUTE_DURABLE_CACHE_ROOT>'",
+        "$env:TTBI_STUDY_ROOT = '<ABSOLUTE_DURABLE_STUDY_ROOT>'",
+        "$env:TTBI_EXECUTION_RECEIPT_DIR = '<ABSOLUTE_DURABLE_RECEIPT_ROOT>'",
+        "$env:TTBI_CAMPAIGN_RUN_TAG = '<ONE_SHARED_PROSPECTIVE_RUN_TAG>'",
+        training_manifest_command,
+        capacity_command,
+        "```",
+        "",
+        "LabA and LabB may execute the currently unlocked phase in parallel,",
+        "but the next phase must wait for an authenticated union of both",
+        "partitions' result packages and Optuna SQLite files. Use common durable",
+        "roots or byte-preserving authenticated consolidation; publish once,",
+        "then redistribute each artifact's absolute path and SHA-256. See",
+        "`README_CAMPAIGN.md` for the exact `--publish-*` barrier commands and",
+        "the `Merge-TtbiTree` helper, which writes paired source/destination",
+        "SHA-256 inventory files that must be retained.",
         "",
     ]
     if bundle_kind == "generation":
@@ -207,15 +187,45 @@ def paper1_readme(
         lines.extend([
             "## Generation",
             "",
-            f"`scour_MATLAB/A00_Run.m` is preset to `{target}`.",
-            "`generation_bundle_manifest.json` is authoritative; do not edit",
-            "the preset or count tuple.",
+            f"This manifest dispatches `scour_MATLAB/A00_Run.m` as `{target}`.",
+            "The A00 bytes are identical in all six ZIPs. The authenticated",
+            "`generation_bundle_manifest.json` selects this stage and its exact",
+            "count tuple; do not edit either file.",
             f"Expected output: `{manifest['dataset']}` with",
             f"{manifest['n_states']} states × "
             f"{manifest['passages_per_state']} passages.",
-            "Run the bundle preflights and host qualification before retained",
-            "generation. After `0001.mat` completes, run MATLAB and Python raw",
-            "parity sequentially and stop generation on either failure.",
+            "On this PC, run the MATLAB capability/physics smokes before retained",
+            "generation: `smoke_audit`, `smoke_geometry`, `smoke_stage3`,",
+            "`smoke_familytable`, `smoke_b54_overlap_parity`, and",
+            "`smoke_generation_worker`. Exact MATLAB/Update/toolbox versions are",
+            "recorded as provenance and need not match the reference descriptor.",
+            "A00 rejects every other working directory. From MATLAB, use exactly",
+            "(replace the placeholder with the extracted bundle's absolute path):",
+            "",
+            "```matlab",
+            "cd('<ABSOLUTE_EXTRACTED_BUNDLE>\\scour_MATLAB')",
+            "A00_Run",
+            "```",
+            "",
+            "A00 writes `scour_MATLAB/Results/<case_name>` inside this workspace.",
+            "Do not redirect that in-progress folder outside the workspace. After",
+            "`0001.mat` completes, run the two raw-parity commands sequentially",
+            "and stop generation on either failure:",
+            "",
+            "```matlab",
+            "smoke_raw_parity('<folder>')",
+            "```",
+            "",
+            "```powershell",
+            "python check_raw_parity.py '<folder>'",
+            "```",
+            "",
+            "For MATLAB, `<folder>` is `Results/<case_name>` from",
+            "`scour_MATLAB`; for Python it is",
+            "`scour_MATLAB/Results/<case_name>` from the bundle root. Only after",
+            "the whole dataset, completion marker, digests, and parity checks are",
+            "complete, use `Copy-TtbiDataset` from `README_CAMPAIGN.md` to copy",
+            f"it byte-for-byte into `TTBI_DATA_ROOT/{manifest['dataset']}`.",
             "",
         ])
     else:
@@ -224,15 +234,23 @@ def paper1_readme(
             "## Training",
             "",
             "Set `TTBI_TRAINING_JOB_MANIFEST` to the absolute path of",
-            "`training_job_manifest.json`. Do not run, omit, or move jobs outside",
-            "that manifest.",
+            "`training_job_manifest.json`, for example in PowerShell:",
+            "`$env:TTBI_TRAINING_JOB_MANIFEST =",
+            "(Resolve-Path '.\\training_job_manifest.json').Path`.",
+            "Do not run, omit, or move jobs outside that manifest.",
             f"This machine owns {manifest['assigned_job_count']} of "
             f"{manifest['complete_job_count']} prospectively enumerated jobs.",
-            "The Lab-A/Lab-B manifests are disjoint and share one complete-grid",
-            "digest; their GPU model and numeric stack must match within every",
-            "scientific block.",
-            "Run the 16-cell capacity preflight first, including the longest",
-            "L99 RAW shape (batch 32 × 8 channels × 11,791 samples). OOM, Optuna",
+            "The Lab-A/Lab-B manifests are disjoint logical job partitions and",
+            "may run on different PCs, GPU models, Python versions, or compatible",
+            "CUDA/PyTorch stacks.",
+            "Create an existing receipt directory outside this extracted",
+            "workspace, set the variables above, then run",
+            "`python -B capacity_preflight_compute.py --all-stages --receipt-dir",
+            "\"$env:TTBI_EXECUTION_RECEIPT_DIR\"` locally on every",
+            "training PC first. It creates one fresh receipt for each of the four",
+            "independent execution blocks and authenticates the embedded bundle",
+            "identity before every block-bound probe of the longest L99 RAW shape",
+            "(batch 32 × 2 channels × 11,791 samples). OOM, Optuna",
             "FAIL, a schema mismatch, or an unassigned job is fatal.",
             "",
         ])
@@ -252,8 +270,6 @@ class TreeEntry(NamedTuple):
 class BundlePlan(NamedTuple):
     repo: Path
     source_commit: str
-    tested_source_commit: str
-    dispatch_authorization_manifest_sha256: str
     names: tuple[str, ...]
     blobs: Mapping[str, bytes]
 
@@ -376,9 +392,9 @@ def _parse_source_manifest(data: bytes) -> tuple[str, ...]:
                 f"Unsafe/non-canonical manifest entry on line "
                 f"{line_number}: {name!r}"
             )
-        if name == "README_BUNDLE.md":
+        if name in {"README_BUNDLE.md", BUNDLE_IDENTITY_NAME}:
             raise BundleBuildError(
-                "README_BUNDLE.md is generated and cannot be a source entry."
+                f"{name} is generated and cannot be a source entry."
             )
         names.append(name)
 
@@ -432,135 +448,10 @@ def _assert_worktree_head_equivalent(
         )
 
 
-class AuthorizedReport(NamedTuple):
-    tested_source_commit: str
-    dispatch_authorization_manifest_sha256: str
-
-
-def _parse_authorized_report(audit_report: str) -> AuthorizedReport:
-    """Parse a fixed early-document authorization header, never free prose."""
-    lines = audit_report.splitlines()
-    if (
-        len(lines) < 7
-        or lines[0] != EXPECTED_AUDIT_HEADING
-        or lines[1] != ""
-        or lines[2] != EXPECTED_AUDIT_STATUS
-        or lines[3] != ""
-        or lines[6] != ""
-    ):
-        raise BundleBuildError(
-            "Refusing to build dispatch bundles: the legacy-filename Paper-1 report "
-            f"must begin with {EXPECTED_AUDIT_HEADING!r} and place "
-            f"{EXPECTED_AUDIT_STATUS!r} exactly on line 3 of its document "
-            "header (not in prose or a code fence)."
-        )
-    tested_match = re.fullmatch(
-        r"\*\*Tested source commit:\*\* `([0-9a-f]{40})`",
-        lines[4],
-    )
-    manifest_match = re.fullmatch(
-        r"\*\*Dispatch authorization manifest SHA-256:\*\* "
-        r"`([0-9a-f]{64})`",
-        lines[5],
-    )
-    status_lines = [
-        line for line in lines if line.startswith("**Status:")
-    ]
-    tested_lines = [
-        line for line in lines if line.startswith("**Tested source commit:**")
-    ]
-    manifest_lines = [
-        line for line in lines
-        if line.startswith(
-            "**Dispatch authorization manifest SHA-256:**"
-        )
-    ]
-    if (
-        tested_match is None
-        or manifest_match is None
-        or status_lines != [EXPECTED_AUDIT_STATUS]
-        or tested_lines != [lines[4]]
-        or manifest_lines != [lines[5]]
-    ):
-        raise BundleBuildError(
-            "Refusing to build dispatch bundles: the legacy-filename Paper-1 header "
-            "must contain one unique status, tested-source SHA, and external "
-            "dispatch-manifest SHA-256 in the fixed header."
-        )
-    return AuthorizedReport(
-        tested_source_commit=tested_match.group(1),
-        dispatch_authorization_manifest_sha256=manifest_match.group(1),
-    )
-
-
-def _resolve_dispatch_authorization_manifest(
-    explicit: str | os.PathLike[str] | None,
-) -> Path:
-    environment = os.environ.get(DISPATCH_AUTHORIZATION_ENV)
-    explicit_text = None if explicit is None else os.fspath(explicit)
-    if explicit_text is not None and environment is not None:
-        if os.path.normcase(explicit_text) != os.path.normcase(environment):
-            raise BundleBuildError(
-                "--dispatch-authorization-manifest and "
-                f"{DISPATCH_AUTHORIZATION_ENV} disagree"
-            )
-    selected = explicit_text if explicit_text is not None else environment
-    if not selected:
-        raise BundleBuildError(
-            "Refusing to build without the absolute external mechanical "
-            "dispatch-evidence manifest. Pass "
-            "--dispatch-authorization-manifest or set "
-            f"{DISPATCH_AUTHORIZATION_ENV}."
-        )
-    path = Path(selected)
-    if not path.is_absolute():
-        raise BundleBuildError(
-            "dispatch authorization manifest path must be absolute"
-        )
-    return path
-
-
-def _verify_dispatch_authorization(
-    *,
-    repo: Path,
-    manifest_path: Path,
-    tested_source_commit: str,
-    dispatch_source_commit: str,
-    expected_manifest_sha256: str,
-) -> None:
-    try:
-        import dispatch_authorization
-    except ImportError as exc:
-        raise BundleBuildError(
-            "Refusing to build: dispatch_authorization.py is unavailable"
-        ) from exc
-    try:
-        dispatch_authorization.verify_dispatch_authorization_manifest(
-            manifest_path,
-            tested_source_commit=tested_source_commit,
-            dispatch_source_commit=dispatch_source_commit,
-            expected_manifest_sha256=expected_manifest_sha256,
-            repo=repo,
-        )
-    except (
-        dispatch_authorization.DispatchAuthorizationError,
-        ImportError,
-        OSError,
-        subprocess.SubprocessError,
-    ) as exc:
-        raise BundleBuildError(
-            "Refusing to build: external mechanical dispatch evidence did "
-            f"not revalidate: {exc}"
-        ) from exc
-
-
 def prepare_bundle_plan(
     repo: str | os.PathLike[str] = REPO,
-    dispatch_authorization_manifest: (
-        str | os.PathLike[str] | None
-    ) = None,
 ) -> BundlePlan:
-    """Validate all gates and snapshot immutable package bytes from HEAD."""
+    """Require a clean commit and snapshot immutable package bytes from HEAD."""
     repo = Path(repo).resolve()
     source_commit = _git(
         repo, "rev-parse", "--verify", "HEAD^{commit}"
@@ -578,11 +469,6 @@ def prepare_bundle_plan(
     # or working tree. All payloads are then addressed by immutable blob OID.
     names = _parse_source_manifest(_read_blob(repo, manifest_entry.oid))
     entries = {name: _regular_blob(tree, name) for name in names}
-    if AUDIT_REPORT_NAME not in entries:
-        raise BundleBuildError(
-            f"Refusing to build dispatch bundles: {AUDIT_REPORT_NAME} is not "
-            "in bundle_source_files.txt."
-        )
     for required in (DRIVER, A00):
         if required not in entries:
             raise BundleBuildError(
@@ -590,21 +476,14 @@ def prepare_bundle_plan(
                 f"{required}"
             )
 
-    # Preserve the explicit dirty/untracked gate for ordinary mistakes. This
-    # is supplementary: payload bytes still come exclusively from HEAD, and
-    # direct hashing above prevents skip-worktree/assume-unchanged bypasses of
-    # the two files that control what the builder executes and packages.
+    # A bundle represents one complete reviewed commit. Refuse unrelated dirty
+    # or untracked files too, so the dispatched tree has one unambiguous source.
     dirty = _git(
         repo,
-        "--literal-pathspecs",
         "status",
         "--porcelain=v1",
         "-z",
         "--untracked-files=all",
-        "--",
-        BUILDER_NAME,
-        SOURCE_MANIFEST_NAME,
-        *names,
     ).stdout
     if dirty:
         rendered = dirty.decode("utf-8", errors="backslashreplace").replace(
@@ -619,66 +498,10 @@ def prepare_bundle_plan(
         name: _read_blob(repo, entries[name].oid)
         for name in names
     }
-    try:
-        audit_report = blobs[AUDIT_REPORT_NAME].decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise BundleBuildError(
-            f"{AUDIT_REPORT_NAME} must be UTF-8."
-        ) from exc
-    authorized = _parse_authorized_report(audit_report)
-    tested_source_commit = authorized.tested_source_commit
-
-    # Benchmark commit A must exist, be an ancestor of dispatch commit B, and
-    # A..B may contain exactly the audit report. Every command is anchored to
-    # the immutable source_commit captured above, so a concurrent HEAD/index/
-    # working-tree change cannot change the bytes or lineage being packaged.
-    ancestor = _git(
-        repo,
-        "merge-base",
-        "--is-ancestor",
-        tested_source_commit,
-        source_commit,
-        check=False,
-    )
-    if ancestor.returncode != 0:
-        raise BundleBuildError(
-            "Refusing to build dispatch bundles: the R5 tested source commit "
-            "is invalid or is not an ancestor of the selected HEAD "
-            f"({tested_source_commit} !<= {source_commit})."
-        )
-    evidence_diff = _git(
-        repo,
-        "diff",
-        "--name-only",
-        f"{tested_source_commit}..{source_commit}",
-    ).stdout.decode("utf-8").splitlines()
-    if evidence_diff != [AUDIT_REPORT_NAME]:
-        raise BundleBuildError(
-            "Refusing to build dispatch bundles: after the tested source "
-            f"commit, HEAD may change only {AUDIT_REPORT_NAME}. "
-            f"Found commit-range paths: {evidence_diff!r}"
-        )
-
-    authorization_manifest = _resolve_dispatch_authorization_manifest(
-        dispatch_authorization_manifest
-    )
-    _verify_dispatch_authorization(
-        repo=repo,
-        manifest_path=authorization_manifest,
-        tested_source_commit=tested_source_commit,
-        dispatch_source_commit=source_commit,
-        expected_manifest_sha256=(
-            authorized.dispatch_authorization_manifest_sha256
-        ),
-    )
 
     return BundlePlan(
         repo=repo,
         source_commit=source_commit,
-        tested_source_commit=tested_source_commit,
-        dispatch_authorization_manifest_sha256=(
-            authorized.dispatch_authorization_manifest_sha256
-        ),
         names=names,
         blobs=MappingProxyType(blobs),
     )
@@ -693,6 +516,75 @@ def _zip_info(name: str) -> zipfile.ZipInfo:
     return info
 
 
+def _payload_root(
+    names: tuple[str, ...], payloads: Mapping[str, bytes]
+) -> tuple[str, int]:
+    """Hash ordered manifest-relative payload bytes like source provenance."""
+
+    lines = [
+        f"{name}:{hashlib.sha256(payloads[name]).hexdigest()}"
+        for name in names
+    ]
+    return (
+        hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest(),
+        len(lines),
+    )
+
+
+def bundle_identity(
+    plan: BundlePlan,
+    *,
+    bundle_kind: str,
+    target: str,
+    payloads: Mapping[str, bytes],
+    bundle_manifest_name: str,
+    bundle_manifest_bytes: bytes,
+) -> dict:
+    """Bind an extracted Git-free bundle to its reviewed executable bytes."""
+
+    if tuple(payloads) != plan.names or set(payloads) != set(plan.names):
+        raise BundleBuildError(
+            "bundle identity payload order differs from the source manifest"
+        )
+    generator_names = tuple(
+        name for name in plan.names if name.startswith("scour_MATLAB/")
+    )
+    runtime_names = tuple(
+        name for name in plan.names
+        if name.endswith(".py")
+    )
+    if not generator_names or not runtime_names:
+        raise BundleBuildError(
+            "bundle identity lacks generator or Python runtime sources"
+        )
+    reviewed_sha, reviewed_count = _payload_root(plan.names, payloads)
+    generator_sha, generator_count = _payload_root(
+        generator_names, payloads
+    )
+    runtime_sha, runtime_count = _payload_root(runtime_names, payloads)
+    return {
+        "schema": BUNDLE_IDENTITY_SCHEMA,
+        "source_commit": plan.source_commit,
+        "bundle_kind": bundle_kind,
+        "target": target,
+        "source_manifest_name": SOURCE_MANIFEST_NAME,
+        "source_manifest_sha256": hashlib.sha256(
+            payloads[SOURCE_MANIFEST_NAME]
+        ).hexdigest(),
+        "source_manifest_entry_count": len(plan.names),
+        "reviewed_source_root_sha256": reviewed_sha,
+        "reviewed_source_file_count": reviewed_count,
+        "generator_source_root_sha256": generator_sha,
+        "generator_source_file_count": generator_count,
+        "python_runtime_source_root_sha256": runtime_sha,
+        "python_runtime_source_file_count": runtime_count,
+        "bundle_manifest_name": bundle_manifest_name,
+        "bundle_manifest_sha256": hashlib.sha256(
+            bundle_manifest_bytes
+        ).hexdigest(),
+    }
+
+
 def _write_paper1_bundle(
     output: Path,
     plan: BundlePlan,
@@ -700,24 +592,38 @@ def _write_paper1_bundle(
     target: str,
     purpose: str,
 ) -> None:
+    payloads: dict[str, bytes] = {}
+    for name in plan.names:
+        # Executable source is byte-identical in all six bundles. Generation
+        # stage selection lives only in the separately authenticated manifest.
+        payloads[name] = plan.blobs[name]
+
+    if bundle_kind == "generation":
+        manifest_name = "generation_bundle_manifest.json"
+        manifest = generation_manifest(target)
+    elif bundle_kind == "training":
+        manifest_name = "training_job_manifest.json"
+        manifest = training_manifests()[target]
+    else:
+        raise BundleBuildError(f"unknown bundle kind {bundle_kind!r}")
+    manifest_bytes = canonical_json_bytes(manifest)
+    identity = bundle_identity(
+        plan,
+        bundle_kind=bundle_kind,
+        target=target,
+        payloads=MappingProxyType(payloads),
+        bundle_manifest_name=manifest_name,
+        bundle_manifest_bytes=manifest_bytes,
+    )
+
     with zipfile.ZipFile(output, "w", allowZip64=True) as archive:
         for name in plan.names:
-            data = plan.blobs[name]
-            if bundle_kind == "generation" and name == A00:
-                data = set_a00_bundle_config(
-                    data.decode("utf-8"), target
-                ).encode("utf-8")
-            archive.writestr(_zip_info(name), data)
-        if bundle_kind == "generation":
-            manifest_name = "generation_bundle_manifest.json"
-            manifest = generation_manifest(target)
-        elif bundle_kind == "training":
-            manifest_name = "training_job_manifest.json"
-            manifest = training_manifests()[target]
-        else:
-            raise BundleBuildError(f"unknown bundle kind {bundle_kind!r}")
+            archive.writestr(_zip_info(name), payloads[name])
         archive.writestr(
-            _zip_info(manifest_name), canonical_json_bytes(manifest)
+            _zip_info(manifest_name), manifest_bytes
+        )
+        archive.writestr(
+            _zip_info(BUNDLE_IDENTITY_NAME), canonical_json_bytes(identity)
         )
         archive.writestr(
             _zip_info("README_BUNDLE.md"),
@@ -726,23 +632,16 @@ def _write_paper1_bundle(
                 target,
                 purpose,
                 plan.source_commit,
-                plan.tested_source_commit,
-                plan.dispatch_authorization_manifest_sha256,
             ).encode("utf-8"),
         )
 
 
 def build_bundles(
     repo: str | os.PathLike[str] = REPO,
-    dispatch_authorization_manifest: (
-        str | os.PathLike[str] | None
-    ) = None,
 ) -> BundleBuildResult:
     """Build and atomically publish a commit-bound complete bundle set."""
-    # Crucially, every authorization/source gate completes before even a
-    # temporary ZIP is created. A blocked invocation has zero bundle/manifest
-    # side effects.
-    plan = prepare_bundle_plan(repo, dispatch_authorization_manifest)
+    # Every source/integrity gate completes before even a temporary ZIP exists.
+    plan = prepare_bundle_plan(repo)
     repo = plan.repo
     bundle_items = tuple(BUNDLES.items())
     if (
@@ -769,8 +668,6 @@ def build_bundles(
         staging = Path(staging_raw)
         sha_lines = [
             f"# source_commit {plan.source_commit}",
-            "# dispatch_authorization_manifest_sha256 "
-            f"{plan.dispatch_authorization_manifest_sha256}",
             f"# complete_bundle_count {len(bundle_items)}",
         ]
         staged_bundles: list[tuple[Path, Path]] = []
@@ -818,12 +715,12 @@ def build_bundles(
 
     print(f"{'bundle':30} {'KB':>5}  adds")
     for (bundle_name, kb, adds), sha_line in zip(
-        built_metadata, sha_lines[3:]
+        built_metadata, sha_lines[2:]
     ):
         print(f"{bundle_name:30} {kb:5}  {adds}")
         print(f"  sha256 {sha_line.split()[0]}")
     print(
-        f"\n{len(bundle_paths)} bundles x {len(plan.names) + 2} files, "
+        f"\n{len(bundle_paths)} bundles x {len(plan.names) + 3} files, "
         "contents resolved from regular tracked HEAD blobs. "
         "SHA-256 manifest -> bundle_sha256.txt"
     )
@@ -837,19 +734,20 @@ def build_bundles(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--dispatch-authorization-manifest",
-        help=(
-            "absolute external create-once evidence manifest; alternatively "
-            f"set {DISPATCH_AUTHORIZATION_ENV}"
-        ),
+        "--check-only",
+        action="store_true",
+        help="validate clean-commit bundle inputs without writing ZIP files",
     )
     args = parser.parse_args(argv)
     try:
-        build_bundles(
-            dispatch_authorization_manifest=(
-                args.dispatch_authorization_manifest
+        if args.check_only:
+            plan = prepare_bundle_plan()
+            print(
+                "PAPER-1 BUNDLE INPUTS PASS: "
+                f"{plan.source_commit} ({len(plan.names)} source files)"
             )
-        )
+        else:
+            build_bundles()
     except BundleBuildError as exc:
         raise SystemExit(str(exc)) from exc
     return 0

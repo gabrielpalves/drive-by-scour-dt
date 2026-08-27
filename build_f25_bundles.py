@@ -4,33 +4,11 @@ from __future__ import annotations
 
 import os as _bootstrap_os
 import sys as _bootstrap_sys
-for _unsafe_python_path_variable in ("PYTHONPATH", "PYTHONHOME"):
-    if _unsafe_python_path_variable in _bootstrap_os.environ:
-        raise RuntimeError(
-            f"{_unsafe_python_path_variable} must be absent before evidence "
-            "imports"
-        )
 _bootstrap_source_root = _bootstrap_os.path.abspath(
     _bootstrap_os.path.dirname(__file__)
 )
-_bootstrap_first_path = _bootstrap_sys.path[0] or _bootstrap_os.getcwd()
-if (
-    _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
-        _bootstrap_first_path
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_first_path
-    ))
-    or _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_first_path
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_source_root
-    ))
-):
-    raise RuntimeError(
-        "reviewed repository root must be the canonical first import path"
-    )
+if _bootstrap_source_root not in _bootstrap_sys.path:
+    _bootstrap_sys.path.insert(0, _bootstrap_source_root)
 _bootstrap_guard_dir = _bootstrap_os.path.join(
     _bootstrap_source_root, "campaign_import_guard"
 )
@@ -39,13 +17,6 @@ _bootstrap_guard_init = _bootstrap_os.path.join(
 )
 if (
     not _bootstrap_os.path.isfile(_bootstrap_guard_init)
-    or _bootstrap_os.path.islink(_bootstrap_guard_init)
-    or _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
-        _bootstrap_guard_dir
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_guard_dir
-    ))
     or any(
         entry.casefold().startswith("__init__.")
         and entry != "__init__.py"
@@ -108,10 +79,13 @@ REQUIRED_F25_SOURCE = {
     "core/f25_experiment_contract.py",
     "core/f25_models.py",
     "core/f25_training_contract.py",
+    "core/temporal_pooling.py",
     "training/f25_executor.py",
+    "scour_MATLAB/Calc.ProfileData15_05.mat",
     "scour_MATLAB/F25_Run.m",
     "scour_MATLAB/smoke_f25_contract.m",
     "scour_MATLAB/smoke_f25_solver.m",
+    "scour_MATLAB/+ttbi/f25_bundle_source_binding.m",
     "scour_MATLAB/+ttbi/f25_damage_for_state.m",
     "scour_MATLAB/+ttbi/f25_execute_generation_state.m",
     "scour_MATLAB/+ttbi/f25_experiment_config.m",
@@ -151,6 +125,19 @@ class SourceSnapshot:
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _link_like(path: Path) -> bool:
+    junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or bool(junction is not None and junction())
 
 
 def _parse_source_manifest(raw: bytes) -> tuple[str, ...]:
@@ -300,12 +287,13 @@ def _operator_readme(experiment: str, source_commit: str) -> bytes:
     text = f"""# {experiment} dispatch bundle
 
 This archive is one authenticated half of the complete F25-R/F25-X comparison
-block from source commit `{source_commit}`. Both halves must remain on one RTX
-2060 GPU/numeric stack. The registered science jobs use one or two channels;
-the capacity gate additionally executes conservative non-job full-eight RAW
-stress cases chosen prospectively for the 6-GB dispatch decision.
+block from source commit `{source_commit}`. Distinct jobs may run on different
+locally qualified PCs, GPU models, or compatible numeric stacks, but one
+in-progress job must remain on the same host. The registered science jobs use
+one or two channels; the capacity gate executes the two worst registered RAW
+pair envelopes, with batch 48, five layers, no pooling, and kernels 2/5.
 
-## Prepare one shared workspace
+## Prepare byte-identical workspaces
 
 Retain the SHA-256 values printed by `build_f25_bundles.py` and transfer both
 `bundle_F25-R.zip` and `bundle_F25-X.zip`. First extract either archive to a
@@ -320,11 +308,11 @@ temporary bootstrap directory and use its builder to verify the pair:
 ```
 
 Only after that command passes, co-extract both archives into one new empty
-workspace. Common source paths are byte-identical by the pair verifier; the
-experiment-qualified evidence files do not collide. Never overlay an old
-workspace, cache, result, receipt, or generated dataset. Preserve all six
-generated evidence files: `{plan_name}`, `{manifest_name}`, `{readme_name}`,
-`{other_plan}`, `{other_manifest}`, and `{other_readme}`.
+workspace on every participating PC. Common source paths are byte-identical by
+the pair verifier; the experiment-qualified evidence files do not collide.
+Never overlay an old workspace, cache, result, receipt, or generated dataset.
+Preserve all six generated evidence files: `{plan_name}`, `{manifest_name}`,
+`{readme_name}`, `{other_plan}`, `{other_manifest}`, and `{other_readme}`.
 
 ```powershell
 $workspace = '<absolute-new-F25-workspace>'
@@ -338,24 +326,72 @@ Expand-Archive -LiteralPath <absolute-bundle_F25-X.zip> `
 `-Force` is permitted only in that newly created empty workspace and only
 after `--verify-pair` proves every common path has identical bytes.
 
-## Capacity, shared generation, and ordered jobs
+## Capacity, one shared generation, and ordered jobs
 
-Use the exact locked campaign Python environment and MATLAB R2025b Update 5.
-Before launching Python, remove `PYTHONPATH` and `PYTHONHOME`, select the one
-target GPU if necessary, and set `CUBLAS_WORKSPACE_CONFIG=:4096:8`.
+Use any supported 64-bit CPython/MATLAB installation that passes the local
+capability, physics and capacity checks. Exact Python, package, CUDA, MATLAB,
+Update and toolbox versions are recorded as provenance; they need not match the
+known-good reference. Select the target GPU if necessary. The executor sets the
+registered deterministic `CUBLAS_WORKSPACE_CONFIG=:4096:8` when absent.
+Install the direct dependencies from `requirements-portable.txt`; the pinned
+py313/cu128 requirements file is only an optional known-good fallback.
 
-From the shared workspace, run the genuine capacity gate without
-`--contract-only`, then generate the common dataset exactly once:
+On **every PC that will execute training jobs**, run the genuine capacity gate
+without `--contract-only`. Each host writes a collision-free receipt below
+`f25_artifacts/capacity_receipts/<runtime-sha256>/<source-root-sha256>.json`;
+never rename a receipt or copy one into another runtime directory. Choose one
+PC as the consolidation coordinator and generate the common dataset there
+exactly once:
 
 ```powershell
 <qualified-python> -B check_f25_capacity.py
 matlab -batch "cd('<workspace>/scour_MATLAB'); F25_Run('F25-R',4)"
 ```
 
-Execute every job in the generated plans in listed order. Finish all eight
-F25-R jobs before any F25-X job because the frozen extension tiers authenticate
-the F25-R winners. Always invoke the executor as a module from the workspace
-root:
+After generation completes, stop all F25 processes and distribute the exact
+dataset and coordinator receipts to every worker with the authenticated,
+append-only merge. `SOURCE_WORKSPACE` and `DESTINATION_WORKSPACE` are absolute
+workspace roots, not their `f25_artifacts` subdirectories:
+
+```powershell
+<qualified-python> -B build_f25_bundles.py --merge-artifacts `
+  <absolute-coordinator-workspace> <absolute-worker-workspace>
+```
+
+The merge first hashes every collision and copies nothing if any existing path
+has different bytes. It then copies only missing regular files and verifies
+them again. It never overwrites SQLite databases, winners, manifests, results,
+capacity receipts, or dataset states.
+
+Assign each job ID to exactly one PC and always invoke the executor as a module
+from that PC's workspace root. Execute the dependency rounds below in order;
+jobs within one round may be distributed, but no later round may start early:
+
+1. F25-R HPO jobs.
+2. F25-R report jobs.
+3. F25-X tier 01 report jobs.
+4. F25-X tier 02 HPO jobs.
+5. F25-X tier 02 report jobs.
+6. F25-X tier 03 report jobs.
+
+At the end of **every** round, stop all F25 processes. Merge each worker into
+the coordinator, one at a time, then merge the coordinator back into every
+worker before starting the next round:
+
+```powershell
+<qualified-python> -B build_f25_bundles.py --merge-artifacts `
+  <absolute-worker-workspace> <absolute-coordinator-workspace>
+<qualified-python> -B build_f25_bundles.py --merge-artifacts `
+  <absolute-coordinator-workspace> <absolute-worker-workspace>
+```
+
+This barrier is mandatory because prior-tier completion and frozen anchor
+winners are authenticated from local artifact paths. A divergent collision
+means two PCs produced different bytes for one logical path: stop and audit;
+never use Explorer, `Copy-Item -Force`, or archive extraction to resolve it.
+One in-progress job must never be split or migrated between PCs.
+
+For a single-PC execution, run every job in generated-plan order:
 
 ```powershell
 $r = Get-Content f25_training_plan.F25-R.json -Raw | ConvertFrom-Json
@@ -370,9 +406,9 @@ foreach ($job in $x.jobs) {{
 }}
 ```
 
-Stop on any nonzero exit. Preserve `f25_artifacts` with the archive hashes and
-the target-host capacity/execution receipts as external run evidence. Do not
-move individual sensors, pairs, or architectures to another GPU stack.
+Stop on any nonzero exit. Preserve the fully consolidated `f25_artifacts` with
+the archive hashes and all per-PC capacity receipts as run evidence. Each job's
+create-once `run_record.json` binds its exact runtime and capacity receipt.
 """
     return text.encode("utf-8")
 
@@ -392,56 +428,9 @@ def _worktree_filtered_blob_oid(repo: Path, name: str) -> str:
 
 
 def _require_publication_boundary(repo: Path, snapshot: SourceSnapshot) -> None:
-    status = _run_git(
-        [
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--",
-            *snapshot.entries,
-        ],
-        repo,
-    )
-    # A just-written CRLF checkout can be reported as metadata-dirty until Git
-    # refreshes its stat cache even though its clean-filtered diff is empty.
-    # Resolve a nonempty porcelain report with content/index/untracked checks;
-    # this keeps the gate read-only and still rejects every substantive change.
-    if status and (
-        _git_difference(
-            ["diff", "--quiet", "--no-ext-diff", "--", *snapshot.entries],
-            repo,
-        )
-        or _git_difference(
-            [
-                "diff",
-                "--cached",
-                "--quiet",
-                "--no-ext-diff",
-                snapshot.source_commit,
-                "--",
-                *snapshot.entries,
-            ],
-            repo,
-        )
-        or bool(
-            _run_git(
-                [
-                    "ls-files",
-                    "--others",
-                    "--exclude-standard",
-                    "-z",
-                    "--",
-                    *snapshot.entries,
-                ],
-                repo,
-            )
-        )
-    ):
-        raise F25BundleError(
-            "F25 bundles require clean commit-A source; dirty paths remain"
-        )
-
+    # Inspect the two files that define the archive boundary directly before
+    # consulting porcelain. Git index hints such as assume-unchanged must not
+    # conceal a modified builder or source manifest.
     committed_oids = dict(snapshot.blob_oids)
     for name in (BUNDLE_BUILDER, SOURCE_MANIFEST):
         expected = committed_oids.get(name)
@@ -452,6 +441,30 @@ def _require_publication_boundary(repo: Path, snapshot: SourceSnapshot) -> None:
             raise F25BundleError(
                 f"working {name} does not match HEAD after clean filtering"
             )
+
+    status = _run_git(
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        repo,
+    )
+    # Reconcile a possible CRLF-only porcelain refresh, but inspect the whole
+    # repository rather than only bundle-manifest entries.
+    if status and (
+        _git_difference(["diff", "--quiet", "--no-ext-diff"], repo)
+        or _git_difference(
+            ["diff", "--cached", "--quiet", "--no-ext-diff", "HEAD"],
+            repo,
+        )
+        or bool(
+            _run_git(
+                ["ls-files", "--others", "--exclude-standard", "-z"],
+                repo,
+            )
+        )
+    ):
+        raise F25BundleError(
+            "F25 bundles require one globally clean reviewed source commit; "
+            "dirty paths remain"
+        )
 
 
 def _payloads(
@@ -698,6 +711,183 @@ def verify_pair_archives(
     )
 
 
+def _canonical_workspace(path: Path, owner: str) -> Path:
+    if not path.is_absolute() or _link_like(path) or not path.is_dir():
+        raise F25BundleError(
+            f"{owner} workspace must be one absolute, unlinked directory"
+        )
+    resolved = path.resolve(strict=True)
+    if os.path.normcase(str(path)) != os.path.normcase(str(resolved)):
+        raise F25BundleError(f"{owner} workspace path is aliased/noncanonical")
+    return resolved
+
+
+def _require_same_extracted_bundle_pair(source: Path, destination: Path) -> None:
+    evidence = [SOURCE_MANIFEST]
+    evidence.extend(
+        name
+        for experiment in ("F25-R", "F25-X")
+        for name in generated_names(experiment)
+    )
+    for name in evidence:
+        source_path = source / name
+        destination_path = destination / name
+        for path, owner in (
+            (source_path, "source"),
+            (destination_path, "destination"),
+        ):
+            try:
+                info = path.lstat()
+            except OSError as exc:
+                raise F25BundleError(
+                    f"{owner} workspace lacks paired F25 evidence: {name}"
+                ) from exc
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or _link_like(path)
+                or info.st_nlink != 1
+            ):
+                raise F25BundleError(
+                    f"{owner} F25 evidence is linked/nonregular: {name}"
+                )
+        if _sha256_path(source_path) != _sha256_path(destination_path):
+            raise F25BundleError(
+                f"F25 workspaces derive from different bundle bytes: {name}"
+            )
+
+
+def _regular_artifact_inventory(root: Path) -> dict[str, tuple[Path, str]]:
+    if not root.exists():
+        return {}
+    if _link_like(root) or not root.is_dir():
+        raise F25BundleError("f25_artifacts is linked or non-directory")
+    inventory: dict[str, tuple[Path, str]] = {}
+    casefolded: set[str] = set()
+    for directory, directory_names, file_names in os.walk(
+        root, topdown=True, followlinks=False
+    ):
+        directory_names.sort()
+        file_names.sort()
+        parent = Path(directory)
+        for child_name in directory_names:
+            child = parent / child_name
+            info = child.lstat()
+            if _link_like(child) or not stat.S_ISDIR(info.st_mode):
+                raise F25BundleError(
+                    f"artifact tree contains a linked/non-directory path: {child}"
+                )
+        for child_name in file_names:
+            child = parent / child_name
+            info = child.lstat()
+            if (
+                _link_like(child)
+                or not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+            ):
+                raise F25BundleError(
+                    f"artifact tree contains a linked/nonregular file: {child}"
+                )
+            relative = child.relative_to(root).as_posix()
+            folded = relative.casefold()
+            if folded in casefolded:
+                raise F25BundleError(
+                    f"artifact tree has a case-colliding path: {relative}"
+                )
+            casefolded.add(folded)
+            inventory[relative] = (child, _sha256_path(child))
+    return inventory
+
+
+def merge_artifact_tree(source_workspace: Path, destination_workspace: Path) -> int:
+    """Append one stopped worker's artifacts without overwriting any byte."""
+
+    source = _canonical_workspace(source_workspace, "source")
+    destination = _canonical_workspace(destination_workspace, "destination")
+    if os.path.normcase(str(source)) == os.path.normcase(str(destination)):
+        raise F25BundleError("artifact merge source and destination are identical")
+    _require_same_extracted_bundle_pair(source, destination)
+    source_root = source / "f25_artifacts"
+    destination_root = destination / "f25_artifacts"
+    source_inventory = _regular_artifact_inventory(source_root)
+    destination_inventory = _regular_artifact_inventory(destination_root)
+    divergent = sorted(
+        name
+        for name, (_path, digest) in source_inventory.items()
+        if name in destination_inventory
+        and destination_inventory[name][1] != digest
+    )
+    if divergent:
+        raise F25BundleError(
+            "artifact merge found divergent bytes and copied nothing: "
+            f"{divergent}"
+        )
+    missing = sorted(set(source_inventory) - set(destination_inventory))
+    lock_path = destination / ".f25-artifact-merge.lock"
+    lock_owned = False
+    try:
+        with lock_path.open("x", encoding="ascii") as lock:
+            lock_owned = True
+            lock.write(f"source={source.as_posix()}\n")
+            lock.flush()
+            os.fsync(lock.fileno())
+        destination_root.mkdir(parents=False, exist_ok=True)
+        for name in missing:
+            source_path, expected_sha = source_inventory[name]
+            target = destination_root.joinpath(*PurePosixPath(name).parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_name(
+                f".{target.name}.f25-merge-{os.getpid()}.tmp"
+            )
+            if temporary.exists():
+                raise F25BundleError(
+                    f"stale artifact-merge temporary exists: {temporary}"
+                )
+            try:
+                with source_path.open("rb") as source_handle, temporary.open(
+                    "xb"
+                ) as target_handle:
+                    while True:
+                        chunk = source_handle.read(1 << 20)
+                        if not chunk:
+                            break
+                        target_handle.write(chunk)
+                    target_handle.flush()
+                    os.fsync(target_handle.fileno())
+                if (
+                    _sha256_path(temporary) != expected_sha
+                    or _sha256_path(source_path) != expected_sha
+                ):
+                    raise F25BundleError(
+                        f"artifact changed while being copied: {name}"
+                    )
+                if target.exists():
+                    if _sha256_path(target) != expected_sha:
+                        raise F25BundleError(
+                            f"artifact appeared with divergent bytes: {name}"
+                        )
+                    temporary.unlink()
+                else:
+                    os.replace(temporary, target)
+            except BaseException:
+                if temporary.exists():
+                    temporary.unlink()
+                raise
+        confirmed = _regular_artifact_inventory(destination_root)
+        if any(
+            name not in confirmed or confirmed[name][1] != expected_sha
+            for name, (_path, expected_sha) in source_inventory.items()
+        ):
+            raise F25BundleError("artifact merge failed post-copy verification")
+    finally:
+        if lock_owned and lock_path.exists():
+            lock_path.unlink()
+    print(
+        f"PASS F25 artifact merge: {len(missing)} new files, "
+        f"{len(source_inventory) - len(missing)} byte-identical files"
+    )
+    return len(missing)
+
+
 def check(repo: Path = REPO) -> None:
     """Exercise bundle structure from a checkout without publication claims."""
 
@@ -762,6 +952,12 @@ def main() -> int:
         type=Path,
         metavar=("F25_R_ZIP", "F25_X_ZIP"),
     )
+    mode.add_argument(
+        "--merge-artifacts",
+        nargs=2,
+        type=Path,
+        metavar=("SOURCE_WORKSPACE", "DESTINATION_WORKSPACE"),
+    )
     parser.add_argument("--expected-f25-r-sha256")
     parser.add_argument("--expected-f25-x-sha256")
     parser.add_argument("--expected-source-commit")
@@ -784,6 +980,18 @@ def main() -> int:
             expected_f25_r_sha256=args.expected_f25_r_sha256,
             expected_f25_x_sha256=args.expected_f25_x_sha256,
             expected_source_commit=args.expected_source_commit,
+        )
+    elif args.merge_artifacts:
+        if (
+            args.expected_f25_r_sha256
+            or args.expected_f25_x_sha256
+            or args.expected_source_commit
+        ):
+            parser.error(
+                "expected archive identities are valid only with --verify-pair"
+            )
+        merge_artifact_tree(
+            args.merge_artifacts[0], args.merge_artifacts[1]
         )
     elif (
         args.expected_f25_r_sha256

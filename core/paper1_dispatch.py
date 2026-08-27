@@ -1,11 +1,11 @@
 """Deterministic six-bundle dispatch manifests for the Paper-1 campaign.
 
-The four generation manifests each bind one scientific block.  The two
-training manifests partition the complete pre-outcome training grid across the
-matched Lab-A/Lab-B GPUs by registered seed, never by representation,
-architecture, channel set, or outcome.  Consequently every compared pipeline
-has the same host/seed allocation and the two manifests are disjoint while
-their authenticated union is the complete training contract.
+The four generation manifests each bind one scientific block. The two
+training manifests partition the complete pre-outcome training grid into the
+logical Lab-A/Lab-B shares by registered seed, never by representation,
+architecture, channel set, machine, or outcome. Consequently every compared
+pipeline has the same logical-share/seed allocation and the two manifests are
+disjoint while their authenticated union is the complete training contract.
 """
 
 from __future__ import annotations
@@ -231,4 +231,3 @@ def six_bundle_manifest_set() -> dict[str, Any]:
     }
     value["dispatch_set_sha256"] = canonical_json_sha256(value)
     return value
-

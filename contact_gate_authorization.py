@@ -27,7 +27,6 @@ from contact_gate_core import (
     CHANNEL_SCHEMA_ID,
     COMMIT_RE,
     ENVIRONMENT_LOCK,
-    EXPECTED_MATLAB_RELEASE,
     EXPECTED_TOTAL_CASES,
     ROOT,
     SUMMARY_SCHEMA,
@@ -39,6 +38,7 @@ from contact_gate_core import (
     _sha256_bytes,
     _sha256_file,
     _strict_json_file,
+    _validate_actual_matlab_environment,
     _validate_utc_pair,
 )
 from contact_gate_policy import _parse_policy, _parse_selection
@@ -84,9 +84,9 @@ def _verify_gate_snapshot(
     checker_sha = verifier_source_root()
     environment_lock_sha = _sha256_file(ENVIRONMENT_LOCK)
     git_check(source_commit)
-    _, locked_descriptor, locked_environment_sha = (
-        _locked_matlab_environment()
-    )
+    # Authenticate the committed known-good reference itself, while treating
+    # its values as setup guidance rather than a live-host allow-list.
+    _locked_matlab_environment()
     source_identity = _generator_source_identity()
     source_root = source_identity.sha256
     _validate_matlab_source_contract(
@@ -137,9 +137,6 @@ def _verify_gate_snapshot(
         "generator_source_root_sha256": source_root,
         "generator_source_digest_lines": source_identity.digest_lines,
         "generator_source_file_count": source_identity.file_count,
-        "matlab_environment_sha256": locked_environment_sha,
-        "matlab_environment_descriptor": locked_descriptor,
-        "matlab_release": EXPECTED_MATLAB_RELEASE,
         "gate_execution_root_sha256": _gate_execution_root(),
     }
     for key, expected in expected_summary.items():
@@ -147,6 +144,11 @@ def _verify_gate_snapshot(
             raise GateError(
                 f"summary {key}={summary[key]!r}, expected {expected!r}"
             )
+    _validate_actual_matlab_environment(
+        summary["matlab_environment_descriptor"],
+        summary["matlab_environment_sha256"],
+        summary["matlab_release"],
+    )
     environment_sha = summary["matlab_environment_sha256"]
     host_id = summary["declared_host_id"]
     if not isinstance(host_id, str) \

@@ -7,8 +7,18 @@ function root = contact_resolved_module_root(names, error_id, label)
 module_dir = fileparts(mfilename('fullpath'));
 lines = cell(size(names));
 for k = 1:numel(names)
-    expected = fullfile(module_dir, names{k});
     [~, base_name] = fileparts(names{k});
+    qualified_parts = strsplit(base_name, '.');
+    if numel(qualified_parts) == 1
+        expected = fullfile(module_dir, names{k});
+    else
+        package_parts = cell(1, numel(qualified_parts));
+        for part_index = 1:(numel(qualified_parts) - 1)
+            package_parts{part_index} = ['+', qualified_parts{part_index}];
+        end
+        package_parts{end} = [qualified_parts{end}, '.m'];
+        expected = fullfile(module_dir, package_parts{:});
+    end
     resolved = which(base_name);
     if isempty(resolved) || ~strcmpi(contact_absolute_path(resolved), ...
             contact_absolute_path(expected))

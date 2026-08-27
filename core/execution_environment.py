@@ -1,13 +1,9 @@
-"""Fail-closed physical execution blocking for the ablation campaign.
+"""Portable execution allocation and per-run hardware provenance.
 
-The experimental *allocation policy* in :data:`EXECUTION_BLOCK_POLICY` is
-hash-carried by ``core.protocol``.  The machine/GPU observed at run time is
-deliberately not part of the shared protocol hash: it is recorded separately
-and enforced through one atomic receipt per prospectively specified contrast block.
-
-This distinction lets studies in one scientific block share a protocol while
-still preventing a study or downstream rung from moving silently to another
-host/GPU.
+The logical block allocation is hash-carried by ``core.protocol``. Hardware and
+numeric-stack facts are recorded separately for audit, while each PC proves its
+own CUDA capacity. A different qualified GPU or software version therefore does
+not invalidate the scientific protocol or prevent another job in the block.
 """
 
 from __future__ import annotations
@@ -25,8 +21,9 @@ from typing import Any
 
 
 EXECUTION_BLOCK_POLICY = {
-    "schema": "ttbi-execution-block-policy-v2",
-    "same_gpu_model_and_numeric_stack_within_block": True,
+    "schema": "ttbi-execution-block-policy-v3",
+    "portable_hosts_within_block": True,
+    "capacity_preflight_per_host": True,
     "host_and_device_uuid_may_differ_within_block": True,
     "blocks": {
         "f40s": {"anchor_stage": "F40-S", "stages": ["F40-S"]},
@@ -39,8 +36,8 @@ EXECUTION_BLOCK_POLICY = {
             "status": "descriptive_nonconfirmatory",
             "confirmatory": False,
             "rationale": (
-                "each scientific block has independent HPO and may use a "
-                "different matched-GPU compatibility block; cross-block "
+                "each scientific block has independent HPO and may run on a "
+                "different locally qualified PC; cross-block "
                 "performance is reported descriptively, not as a paired "
                 "hardware-controlled treatment effect"
             ),
@@ -52,16 +49,16 @@ EXECUTION_BLOCK_POLICY = {
         )
     },
     "receipt_contract": {
-        "schema": "ttbi-execution-block-receipt-v2",
+        "schema": "ttbi-execution-block-receipt-v3",
         "anchor_creates": True,
         "non_anchor_requires_existing_exact_receipt": True,
-        "identity_match": "exact_execution_compatibility_sha256",
+        "identity_match": "protocol_block_stage_run_tag",
     },
 }
 
 _DESCRIPTOR_SCHEMA = "ttbi-execution-environment-v1"
 _BINDING_SCHEMA = "ttbi-execution-runtime-binding-v2"
-_RECEIPT_SCHEMA = "ttbi-execution-block-receipt-v2"
+_RECEIPT_SCHEMA = "ttbi-execution-block-receipt-v3"
 _COMPATIBILITY_SCHEMA = "ttbi-execution-compatibility-v1"
 _HEX = frozenset("0123456789abcdef")
 
@@ -104,7 +101,8 @@ def canonical_execution_block_policy(policy: dict) -> dict:
     canonical = json.loads(_canonical_json_bytes(policy).decode("ascii"))
     required = {
         "schema",
-        "same_gpu_model_and_numeric_stack_within_block",
+        "portable_hosts_within_block",
+        "capacity_preflight_per_host",
         "host_and_device_uuid_may_differ_within_block",
         "blocks",
         "cross_block_inference",
@@ -114,14 +112,14 @@ def canonical_execution_block_policy(policy: dict) -> dict:
         raise RuntimeError(
             "execution-block policy fields differ from the registered contract"
         )
-    if canonical["schema"] != "ttbi-execution-block-policy-v2":
+    if canonical["schema"] != "ttbi-execution-block-policy-v3":
         raise RuntimeError("unsupported execution-block policy schema")
-    if canonical["same_gpu_model_and_numeric_stack_within_block"] is not True:
-        raise RuntimeError(
-            "campaign policy must match the GPU model/stack within each block"
-        )
+    if canonical["portable_hosts_within_block"] is not True:
+        raise RuntimeError("campaign blocks must permit qualified local hosts")
+    if canonical["capacity_preflight_per_host"] is not True:
+        raise RuntimeError("every training PC must run its own capacity preflight")
     if canonical["host_and_device_uuid_may_differ_within_block"] is not True:
-        raise RuntimeError("matched GPUs on different hosts must be permitted")
+        raise RuntimeError("qualified GPUs on different hosts must be permitted")
 
     expected_blocks = {
         "f40s": ("F40-S", ("F40-S",)),
@@ -175,9 +173,9 @@ def canonical_execution_block_policy(policy: dict) -> dict:
         "schema": _RECEIPT_SCHEMA,
         "anchor_creates": True,
         "non_anchor_requires_existing_exact_receipt": True,
-        "identity_match": "exact_execution_compatibility_sha256",
+        "identity_match": "protocol_block_stage_run_tag",
     }:
-        raise RuntimeError("execution receipt contract differs from v2")
+        raise RuntimeError("execution receipt contract differs from v3")
     return canonical
 
 
@@ -351,21 +349,11 @@ def validate_execution_environment(descriptor: dict) -> dict:
         raise RuntimeError("unsupported accelerator backend")
     if accelerator["backend"] == "cuda":
         if (
-            not isinstance(accelerator["uuid"], str)
-            or not accelerator["uuid"].strip()
-        ):
-            raise RuntimeError(
-                "CUDA device UUID is unavailable; exact physical-GPU "
-                "execution blocking cannot be certified"
-            )
-        if (
             isinstance(accelerator["device_index"], bool)
             or not isinstance(accelerator["device_index"], int)
             or accelerator["device_index"] < 0
             or not isinstance(accelerator["name"], str)
             or not accelerator["name"].strip()
-            or not isinstance(accelerator["driver_version"], str)
-            or not accelerator["driver_version"].strip()
             or isinstance(accelerator["sm_count"], bool)
             or not isinstance(accelerator["sm_count"], int)
             or accelerator["sm_count"] <= 0
@@ -374,6 +362,15 @@ def validate_execution_environment(descriptor: dict) -> dict:
             or accelerator["total_memory_bytes"] <= 0
         ):
             raise RuntimeError("invalid CUDA accelerator identity")
+        for optional_text in ("uuid", "driver_version"):
+            value_or_none = accelerator[optional_text]
+            if value_or_none is not None and (
+                not isinstance(value_or_none, str)
+                or not value_or_none.strip()
+            ):
+                raise RuntimeError(
+                    f"CUDA {optional_text} must be nonempty text or null"
+                )
         capability = accelerator["compute_capability"]
         if (
             not isinstance(capability, dict)
@@ -460,12 +457,11 @@ def execution_environment_sha256(descriptor: dict) -> str:
 
 
 def execution_compatibility_descriptor(descriptor: dict) -> dict:
-    """Return the within-block hardware/numeric equivalence class.
+    """Return a descriptive hardware/numeric fingerprint for provenance.
 
-    Hostname, OS build text, CUDA device index, and physical UUID are retained
-    in each run's exact environment attestation but excluded here.  The fields
-    that can change model execution or capacity remain exact, allowing the two
-    matched RTX 5060 Ti hosts to share F40-S without admitting the RTX 2060.
+    Hostname, OS build text, CUDA device index, and physical UUID are excluded
+    from this concise view. The value is never used to admit or reject a host;
+    local capacity and numerical tests are the gate.
     """
 
     environment = validate_execution_environment(descriptor)
@@ -582,7 +578,7 @@ def validate_block_reference_execution(
     current_stage: str,
     policy: dict = EXECUTION_BLOCK_POLICY,
 ) -> str:
-    """Require selection/follower to share one matched execution block."""
+    """Require a shared logical receipt, allowing distinct qualified hosts."""
 
     block, anchor = execution_block_for_stage(current_stage, policy)
     selected = validate_execution_runtime(selection_runtime)
@@ -618,18 +614,12 @@ def validate_block_reference_execution(
             f"{current_stage}: current execution attestation disagrees with "
             "the registered block"
         )
-    if (
-        selected["execution_compatibility_sha256"]
-        != current["execution_compatibility_sha256"]
-        or selected["execution_compatibility_descriptor"]
-        != current["execution_compatibility_descriptor"]
-        or selection_receipt_sha256 != current_receipt_sha
-    ):
+    if selection_receipt_sha256 != current_receipt_sha:
         raise RuntimeError(
-            f"{current_stage}: reference selection execution compatibility "
-            f"differs from the current {block} block receipt"
+            f"{current_stage}: reference selection uses a different logical "
+            f"{block} protocol/run receipt"
         )
-    return "same_block_compatible_hardware_exact_stack"
+    return "same_block_portable_host_capability_qualified"
 
 
 def _receipt_path(
@@ -748,7 +738,7 @@ def enforce_execution_block(
     receipt_dir: str | os.PathLike[str],
     descriptor: dict | None = None,
 ) -> dict:
-    """Create/validate the block compatibility receipt and attest this host."""
+    """Create/validate a logical block receipt and attest this host."""
 
     if not isinstance(run_tag, str):
         raise RuntimeError("run_tag must be text")
@@ -759,16 +749,12 @@ def enforce_execution_block(
     )
     block = runtime["execution_block"]
     anchor = runtime["anchor_stage"]
-    compatibility_sha = runtime["execution_compatibility_sha256"]
-    compatibility = runtime["execution_compatibility_descriptor"]
     receipt = {
         "schema": _RECEIPT_SCHEMA,
         "execution_block": block,
         "anchor_stage": anchor,
         "protocol_core_hash": protocol_core_hash,
         "run_tag": run_tag,
-        "execution_compatibility_sha256": compatibility_sha,
-        "execution_compatibility_descriptor": compatibility,
     }
     receipt_payload = _canonical_json_bytes(receipt) + b"\n"
     path = _receipt_path(
@@ -787,8 +773,8 @@ def enforce_execution_block(
         if stage != anchor:
             raise RuntimeError(
                 f"{stage}: execution-block receipt is missing for {block!r}. "
-                f"Run its anchor {anchor!r} first on the physical host/GPU "
-                "reserved for this block."
+                f"Run its logical anchor {anchor!r} first for this protocol "
+                "and campaign run tag."
             )
         created = _atomic_create(path, receipt_payload)
         if not created:
@@ -803,8 +789,7 @@ def enforce_execution_block(
         if existing != receipt:
             raise RuntimeError(
                 f"{stage}: execution receipt mismatch for block {block!r}; "
-                "refusing to move a contrast block to another GPU class or "
-                "numeric execution state"
+                "the protocol core or logical run tag changed"
             )
 
     # Re-read the final public path even after creation. This both proves the

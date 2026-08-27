@@ -166,12 +166,15 @@ pipeline.
 \subsection{Prospectively fixed response-channel screen}
 \label{sec:channel_design}
 
-The F40-S screen uses the eight \texttt{physical8\_v1} channels in
-Table~\ref{tab:channels}. For each retained slot, it evaluates all eight
-singles and all $\binom{8}{2}=28$ ascending pairs at the adjudicated frozen
+The F40-S payload contains the eight \texttt{physical8\_v1} responses in
+Table~\ref{tab:channels}, but learning eligibility is restricted to the six
+modeled-DOF responses at indices 0, 1, 2, 5, 6, and 7. Wheelset-proxy indices 3
+and 4 remain diagnostic-only and are excluded from every training and selection
+input. For each retained slot, the screen evaluates the six eligible singles
+and all $\binom{6}{2}=15$ ascending eligible pairs at the adjudicated frozen
 hyperparameters and checkpoint epoch, using paired initialization seeds
 4001, 4003, 4007, 4013, and 4019. The prospectively enumerated grid therefore
-contains $4\times36\times5=720$ job slots before authenticated alias
+contains $4\times21\times5=420$ job slots before authenticated alias
 deduplication; a winner/baseline alias is not retrained as though it were a
 distinct pipeline. Each fit uses the canonical train-to-inner-validation
 grouped partition; the outer test remains sealed.
@@ -179,7 +182,7 @@ grouped partition; the outer test remains sealed.
 For one input/pipeline, per-state scour MSE is averaged over the five seeds and
 then equally across validation states. The input score is then averaged equally
 over unique resolved pipelines. Singles are reported diagnostics but cannot
-select. The minimum among the 28 pairs wins, with lexicographic ascending-pair
+select. The minimum among the 15 pairs wins, with lexicographic ascending-pair
 tie-breaking. The artifact authenticates the full result tensor, state
 coverage, and deduplication map; no result-dependent pair can be inserted.
 
@@ -190,9 +193,15 @@ After pair selection, each of the four retained slots receives five new
 100-trial searches on that pair in F40-S. The same four slots receive
 independent five-by-100-trial selected-pair HPO in F40-M, L99-S, and L99-M.
 This contributes another 80 studies and 8,000 requested trials. Together with
-the factorial anchor, the registered HPO budget is exactly 160 studies and
+the factorial anchor, the primary registered HPO budget is exactly 160 studies and
 16,000 trials. There is no transport gate, no rescue trigger, and no primary
 downstream result based on inherited F40-S hyperparameters.
+
+Only after the primary F40-S screen authenticates its selected pair may the
+optional ModernTCN- and TSLANet-inspired contemporary challengers enter. Every
+challenger receives that same pair; none may train on the diagnostic proxy rows,
+run an independent channel screen, or select a different pair. This secondary
+tier is outside the primary 16-cell selection and the primary accounting below.
 
 After each block's vectors and checkpoint policy are frozen, four slots are
 trained on the complete development set with 30 disjoint prospectively listed
@@ -201,7 +210,7 @@ initialization seeds and evaluated on the sealed outer test: $4\times4\times
 A separate secondary analysis applies frozen F40-S settings to the three
 downstream blocks with four slots and five seeds ($3\times4\times5=60$ fits).
 It is descriptive/non-selection only. The complete prospective refit grid is
-480 adjudication + 720 channel-screen + 480 stability + 60 transfer = 1,740
+480 adjudication + 420 channel-screen + 480 stability + 60 transfer = 1,440
 listed fits, subject only to authenticated alias deduplication.
 
 \subsection{Evaluation and registered analyses}
@@ -228,14 +237,16 @@ subset; L99 uses all 475 shared states.
 \subsection{Reproducibility and provenance}
 \label{sec:reproducibility}
 
-Generation is bound to a registered MATLAB numerical-stack descriptor and
-learning to a pinned Python/PyTorch/CUDA environment. Source roots, generation
-contracts, channel schema, split identity, study identities, weights, scalers,
-selection artifacts, and execution receipts are content authenticated and
-cross-checked at resume and analysis boundaries. Before dispatch, every
-generation host must produce all four marked qualification micro-datasets;
-every passage enters the cross-host comparison, and the designated contact
-gate covers all 420 qualification passages. Training hosts must additionally
-pass genuine RAW benchmark/capacity authorization. These checks provide
-artifact integrity and internal consistency under a trusted-operator model;
-they are not cryptographic hardware attestation.
+Generation records the actual MATLAB numerical-stack descriptor, and learning
+records the actual Python/PyTorch/CUDA stack and GPU identity. The reviewed
+descriptors are known-good setup references, but exact version equality is not
+an eligibility condition. Source roots, generation contracts, channel schema,
+split identity, study identities, weights, scalers, selection artifacts, and
+execution receipts are content authenticated and cross-checked at resume and
+analysis boundaries. Every generation PC must pass its local capability and
+healthy/damaged physics-smoke suite; the source-level contact gate covers all
+420 marked qualification passages. Every training PC must additionally pass a
+genuine worst-case two-channel CUDA capacity preflight. Cross-release comparison
+and timing benchmarks are optional diagnostics. These checks provide artifact
+integrity and internal consistency under a trusted-operator model; they are not
+cryptographic hardware attestation.

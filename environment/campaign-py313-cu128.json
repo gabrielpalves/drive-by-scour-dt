@@ -1,5 +1,5 @@
 {
-  "schema": "ttbi-campaign-environment-v2",
+  "schema": "ttbi-campaign-environment-v3",
   "python": "3.13.3",
   "python_runtime": {
     "version": "3.13.3",
@@ -48,8 +48,8 @@
   "torch_cuda": "12.8",
   "cudnn_runtime": 90701,
   "cublas_workspace_config": ":4096:8",
-  "package_inventory_policy": "exact",
-  "package_artifact_policy": "wheel-record-sha256-v1",
+  "package_inventory_policy": "known-good-reference",
+  "package_artifact_policy": "known-good-wheel-record-reference-v1",
   "package_record_sha256": {
     "alembic": "f37c1d71fd1f788e9e25441a577f953cf87ee888d3dada8dd3d305e497ca47e1",
     "colorama": "9f5dbfb25aabbdddf7152000ad1c9b5e7848a610887df68e36933921a1b0f207",

@@ -258,8 +258,8 @@ MUTATIONS = (
             "    return manifest  # MUTANT: exact phase executor bypassed"
         ),
         evidence=(
-            "[FAIL] post-freeze phase refuses to open data without a "
-            "deposited freeze"
+            "[FAIL] post-freeze phase refuses to open data without an "
+            "authenticated freeze"
         ),
     ),
     Mutation(
@@ -277,23 +277,24 @@ MUTATIONS = (
         ),
     ),
     Mutation(
-        name="environment verifier accepts package-version drift",
+        name="environment verifier accepts a missing required package",
         group="environment",
         target="core/environment.py",
         checker="check_environment_lock.py",
-        original="if actual != expected:",
-        mutant="if False:  # MUTANT: package-version guard disabled",
-        evidence="[FAIL] package mismatch hard-fails",
-        occurrence=2,
+        original="if missing_required:",
+        mutant="if False:  # MUTANT: required-package guard disabled",
+        evidence="[FAIL] missing required package hard-fails",
     ),
     Mutation(
-        name="environment verifier accepts cuBLAS determinism drift",
+        name="environment verifier accepts a conflicting cuBLAS setting",
         group="environment",
         target="core/environment.py",
         checker="check_environment_lock.py",
-        original="if actual_cublas != expected_cublas:",
+        original="if actual_cublas not in (None, expected_cublas):",
         mutant="if False:  # MUTANT: cuBLAS guard disabled",
-        evidence="[FAIL] cuBLAS determinism mismatch hard-fails",
+        evidence=(
+            "[FAIL] cuBLAS deterministic-setting conflict hard-fails"
+        ),
     ),
     Mutation(
         name="environment verifier accepts unavailable required CUDA",
@@ -345,7 +346,7 @@ MUTATIONS = (
             "not set(_MATLAB_ENVIRONMENT_FIELDS).issubset(set(environment)):"
             "  # MUTANT: extra fields ignored"
         ),
-        evidence="[FAIL] extra MATLAB descriptor field hard-fails",
+        evidence="[FAIL] MATLAB descriptor extra field rejected",
     ),
     Mutation(
         name="qualification inventory ignores exact/tolerant leaf-class drift",
@@ -420,7 +421,7 @@ BASELINE_EVIDENCE = {
     "check_dispatch_authorization.py":
         "DISPATCH AUTHORIZATION CHECKS: ALL PASS",
     "check_execution_blocking.py": "EXECUTION BLOCKING: ALL PASS",
-    "check_environment_lock.py": "ENVIRONMENT LOCK: ALL PASS",
+    "check_environment_lock.py": "ENVIRONMENT COMPATIBILITY: ALL PASS",
     "check_qualification_receipt_inventory.py":
         "QUALIFICATION RECEIPT INVENTORY: ALL CHECKS PASSED",
     "check_profile_pad_contract.py":

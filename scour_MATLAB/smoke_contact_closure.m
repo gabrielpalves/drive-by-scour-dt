@@ -19,8 +19,7 @@ report_cleanup = onCleanup(@() rmdir(report_dir, 's'));
 policy_api = contact_gate_policy();
 policy_api.validate_locked_matlab_environment( ...
     environment_sha, environment_descriptor);
-assert(strcmp(version('-release'), '2025b'));
-fprintf('locked MATLAB release/environment identity: PASS\n');
+fprintf('MATLAB capabilities/reference integrity and live provenance: PASS\n');
 stream_names = {'operations', 'crack', 'profile-state', 'track', ...
     'profile-phase'};
 state_uid = 'fixture-joint-state-0001';
@@ -172,7 +171,10 @@ local_assert_throws(@() contact_assert_file_snapshot_unchanged( ...
     digest_path, manifest_observation, manifest_sha256), ...
     'contact_snapshot:FileRace');
 file_digests = file_digests_base;
-save(digest_path, 'file_digests');
+% Restore the exact authenticated bytes. Re-saving an equivalent MAT variable
+% changes the MAT-file header timestamp and makes this TOCTOU smoke depend on
+% whether both saves happened within the same wall-clock second.
+local_write_file_bytes(digest_path, manifest_bytes);
 fprintf('stable manifest snapshot/reassertion: PASS\n');
 
 report = contact_closure_study(fixture_dir, 1, 1, ...
@@ -227,7 +229,7 @@ save(digest_path, 'file_digests');
 local_assert_throws(@() validate_dataset_digest_manifest(fixture_dir, 1), ...
     'dataset_digest_manifest:BadInventory');
 file_digests = file_digests_base;
-save(digest_path, 'file_digests');
+local_write_file_bytes(digest_path, manifest_bytes);
 fprintf('v2 sidecar/inventory mutation guards: PASS\n');
 
 % Named streams are semantic identities: duplication or omission must fail.
@@ -699,6 +701,15 @@ fid = fopen(path, 'rb');
 assert(fid >= 0);
 cleanup = onCleanup(@() fclose(fid));
 digest = local_bytes_sha256(fread(fid, Inf, '*uint8'));
+end
+
+function local_write_file_bytes(path, bytes)
+fid = fopen(path, 'wb');
+assert(fid >= 0, 'Could not open %s for byte-exact restoration.', path);
+cleanup = onCleanup(@() fclose(fid));
+written = fwrite(fid, uint8(bytes), 'uint8');
+assert(written == numel(bytes), ...
+    'Short byte-exact restoration for %s.', path);
 end
 
 function digest = local_text_sha256(text)

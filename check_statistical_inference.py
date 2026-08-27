@@ -513,7 +513,8 @@ def _model_mechanics_source_contract(source):
         source, classes["SpaceAwareModularNetwork"]
     )
     return (
-        "F.adaptive_max_pool1d" in pool_source
+        "deterministic_adaptive_max_pool1d" in pool_source
+        and "F.adaptive_max_pool1d" not in pool_source
         and "F.max_pool1d(" not in pool_source
         and "self.output_bins = sum(levels)" in pool_source
         and "current_features * self.multi_rate_pool.output_bins"
@@ -531,7 +532,7 @@ check("model source satisfies the fixed-width mechanics contract",
       _model_mechanics_source_contract(models_source))
 check("mutation: stride pooling cannot masquerade as adaptive pyramid pooling",
       not _model_mechanics_source_contract(models_source.replace(
-          "F.adaptive_max_pool1d", "F.max_pool1d", 1
+          "deterministic_adaptive_max_pool1d", "F.max_pool1d", 1
       )))
 check("mutation: a sequence-length-sized dense head is rejected",
       not _model_mechanics_source_contract(models_source.replace(

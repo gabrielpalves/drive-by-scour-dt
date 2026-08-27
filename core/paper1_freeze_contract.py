@@ -3,8 +3,8 @@
 Each Paper-1 block freezes one hyperparameter vector per unique resolved
 pipeline only after all five selected-pair HPO studies authenticate.  The
 sealed outer test is downstream of this artefact and can never participate in
-the choice.  Post-freeze and secondary-transfer results cite an externally
-deposited freeze digest and are explicitly report-only.
+    the choice.  Post-freeze and secondary-transfer results cite the locally
+    authenticated freeze digest and are explicitly report-only.
 """
 
 from __future__ import annotations
@@ -293,7 +293,6 @@ def _derive_freeze(
     if records:
         for field in (
             "selected_pair",
-            "execution_compatibility_sha256",
             "execution_receipt_sha256",
             "protocol_core_hash",
             "protocol_hash",
@@ -331,7 +330,6 @@ def _derive_freeze(
         observed_ids.update(item["hpo_job_id"] for item in inventory)
         for field in (
             "selected_pair",
-            "execution_compatibility_sha256",
             "execution_receipt_sha256",
             "protocol_core_hash",
             "protocol_hash",

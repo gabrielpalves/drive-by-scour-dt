@@ -1,0 +1,18 @@
+# Direct dependencies for portable Paper-1/F25 execution.
+#
+# Install versions compatible with the Python interpreter and target GPU on
+# each PC. Exact versions are intentionally not prescribed; the local import,
+# CUDA-capacity and scientific smoke checks decide eligibility. For NVIDIA
+# training, install a CUDA-enabled PyTorch build suitable for that host.
+
+joblib
+matplotlib
+numpy
+optuna
+pandas
+PyWavelets
+scikit-learn
+scipy
+seaborn
+torch
+tqdm

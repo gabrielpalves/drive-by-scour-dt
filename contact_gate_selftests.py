@@ -57,6 +57,7 @@ from check_contact_closure_gate import (
     _validate_gate_inventory,
     _validate_inventory,
     _validate_matlab_source_contract,
+    _validate_actual_matlab_environment,
     _validate_receipt_location,
     _validate_summary_datasets,
     verifier_source_root,
@@ -174,6 +175,43 @@ def _check_inventory_and_numerics() -> None:
     assert _gci([0, 0, 0], steps, 24000)[0]
     assert not _gci([10000, 9000, 9500], steps, 24000)[0]
     print("[PASS] contraction/GCI branches")
+
+    # A coherent, non-reference MATLAB descriptor is valid evidence. Exact
+    # release equality is not a qualification rule, while descriptor/SHA and
+    # release/descriptor consistency remain fail-closed.
+    from check_contact_closure_gate import _locked_matlab_environment
+
+    _, reference_descriptor, _ = _locked_matlab_environment()
+    replacements = {
+        "release": "R2024b",
+        "version": "24.2.0 portable fixture (R2024b)",
+        "matlab_product_version": "24.2",
+        "statistics_toolbox_version": "24.2",
+        "parallel_toolbox_version": "24.2",
+    }
+    portable_lines = []
+    for line in reference_descriptor.split("\n"):
+        field, value = line.split("=", 1)
+        portable_lines.append(f"{field}={replacements.get(field, value)}")
+    portable_descriptor = "\n".join(portable_lines)
+    portable_sha = _sha256_bytes(portable_descriptor.encode("utf-8"))
+    parsed = _validate_actual_matlab_environment(
+        portable_descriptor, portable_sha, "R2024b"
+    )
+    assert parsed["release"] == "R2024b"
+    _expect_failure(
+        "portable MATLAB descriptor with foreign SHA",
+        lambda: _validate_actual_matlab_environment(
+            portable_descriptor, "0" * 64, "R2024b"
+        ),
+    )
+    _expect_failure(
+        "portable MATLAB descriptor with foreign release stamp",
+        lambda: _validate_actual_matlab_environment(
+            portable_descriptor, portable_sha, "R2025b"
+        ),
+    )
+    print("[PASS] coherent non-reference MATLAB environment accepted")
 
     # Exercise the same SciPy options and recursive conversion used for real
     # MATLAB evidence.  MATLAB logicals, empty char vectors and nonscalar

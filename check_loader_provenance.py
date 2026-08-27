@@ -4,9 +4,10 @@ Run:  python check_loader_provenance.py   (needs numpy + scipy)
 
 Builds a tiny VALID multi-output dataset in a temp dir, asserts it loads, then
 mutates it into each bad variant and asserts the loader REJECTS it. This proves
-that stale, incomplete, corrupt, mixed-provenance, qualification, wrong
+that stale, incomplete, corrupt, mixed-provenance, qualification, incoherent
 numerical-environment, and wrong reviewed-source datasets cannot silently enter
-the pipeline. MUST print ALL PASS before launching runs.
+the pipeline.  A different, internally authenticated MATLAB release is also
+proved portable. MUST print ALL PASS before launching runs.
 """
 import hashlib
 import json
@@ -50,6 +51,29 @@ STATE_STREAM_NAMES = (
 )
 PASSAGE_STREAM_NAMES = ("profile-passage", "oor-passage")
 STATE_UIDS = tuple(f"fixture-state-{index:03d}" for index in range(1, NST + 1))
+
+
+def _portable_actual_matlab_environment():
+    """Return a coherent live-host identity unlike the campaign reference."""
+    replacements = {
+        "matlab_product_version": "24.2",
+        "parallel_toolbox_version": "24.2",
+        "release": "R2024b",
+        "statistics_toolbox_version": "24.2",
+        "version": "24.2.0.9999999 (R2024b) Portable Fixture",
+    }
+    rows = []
+    for row in _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR.split("\n"):
+        key, value = row.split("=", 1)
+        rows.append(f"{key}={replacements.get(key, value)}")
+    descriptor = "\n".join(rows)
+    return {
+        "matlab_release": "R2024b",
+        "actual_matlab_environment_descriptor": descriptor,
+        "actual_matlab_environment_sha256": hashlib.sha256(
+            descriptor.encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def _state_seed_id(uid):
@@ -435,7 +459,7 @@ def _write_manifest(path, n_states=NST, npass=NP, schema=_EXPECTED_GEN_SCHEMA,
           'use_crack_eov': False,
           'crack_draw': 'per_state',
           'profile_mode': 'fixed',
-          'profile_draw': 'per_state',
+          'profile_draw': 'fixed_shared',
           'profile_jitter_sd_mm': 0.0,
           'use_track_eov': False,
           'track_draw': 'per_state',
@@ -498,6 +522,27 @@ def _build(path, manifest=True, complete=True, state_table=True, **state_kw):
         _write_state(path, i, **state_kw)   # each write finalizes digests+marker
     if not complete:                        # simulate an interrupted run
         os.remove(os.path.join(path, '_GENERATION_COMPLETE'))
+
+
+def _rewrite_coherent_actual_environment(path, environment):
+    """Apply one authenticated actual environment to manifest and all states."""
+    actual_fields = {
+        key: value
+        for key, value in environment.items()
+        if key != "matlab_release"
+    }
+    _write_manifest(
+        path,
+        matlab_release=environment["matlab_release"],
+        metadata_overrides=actual_fields,
+    )
+    for state_idx in range(1, NST + 1):
+        _write_state(
+            path,
+            state_idx,
+            matlab_release=environment["matlab_release"],
+            nested_overrides=actual_fields,
+        )
 
 
 def _load(path):
@@ -993,9 +1038,10 @@ try:
     check("brief tension above 24 kN cap rejected", lambda: _load(p),
           should_raise=True)
 
-    # -- R11 exact numerical-environment / qualification firewall -----------
-    # These guards run before signals are admitted and therefore also protect
-    # the cache/study paths from laundering qualification output.
+    # -- R11 portable numerical-environment / qualification firewall --------
+    # Exact MATLAB versions are provenance, not an allow-list.  Internal
+    # descriptor authentication and dataset-wide consistency remain fail-closed
+    # before signals are admitted, as does qualification anti-laundering.
     p = os.path.join(root, "qualification"); _build(p)
     _write_manifest(p, qualification=True)
     check("qualification dataset rejected", lambda: _load(p), should_raise=True)
@@ -1005,9 +1051,51 @@ try:
     check("missing qualification marker rejected", lambda: _load(p),
           should_raise=True)
 
-    p = os.path.join(root, "wrongrelease"); _build(p)
-    _write_manifest(p, matlab_release="R2023b")
-    check("wrong MATLAB release rejected", lambda: _load(p), should_raise=True)
+    portable_environment = _portable_actual_matlab_environment()
+    p = os.path.join(root, "portablematlab"); _build(p)
+    _rewrite_coherent_actual_environment(p, portable_environment)
+
+    def _portable_matlab_loads_with_reference_intact():
+        metadata = _read_manifest_generation_metadata(p)
+        if (
+            metadata["matlab_release"]
+            != portable_environment["matlab_release"]
+            or metadata["actual_matlab_environment_descriptor"]
+            != portable_environment["actual_matlab_environment_descriptor"]
+            or metadata["actual_matlab_environment_sha256"]
+            != portable_environment["actual_matlab_environment_sha256"]
+            or metadata["campaign_matlab_release"]
+            != _EXPECTED_MATLAB_RELEASE
+            or metadata["campaign_matlab_environment_descriptor"]
+            != _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR
+            or metadata["campaign_matlab_environment_sha256"]
+            != _EXPECTED_MATLAB_ENVIRONMENT_SHA256
+        ):
+            raise AssertionError("portable/reference provenance was not retained")
+        _load(p)
+
+    check(
+        "coherent different MATLAB release loads with exact campaign reference",
+        _portable_matlab_loads_with_reference_intact,
+        should_raise=False,
+    )
+
+    p = os.path.join(root, "releasevsdescriptor"); _build(p)
+    _write_manifest(p, matlab_release="R2024b")
+    check(
+        "actual MATLAB release/descriptor disagreement rejected",
+        lambda: _load(p),
+        should_raise=True,
+    )
+
+    p = os.path.join(root, "mixedactualenvironment"); _build(p)
+    _rewrite_coherent_actual_environment(p, portable_environment)
+    _write_state(p, 2)
+    check(
+        "mixing actual MATLAB environments within one dataset rejected",
+        lambda: _load(p),
+        should_raise=True,
+    )
 
     p = os.path.join(root, "nocampaignrelease"); _build(p)
     _write_manifest(p, drop_campaign_release=True)
@@ -1067,6 +1155,22 @@ try:
             metadata_drop=drops,
         )
         check(label, lambda p=p: _load(p), should_raise=True)
+
+    p = os.path.join(root, "coherentforeigncampaignenvironment"); _build(p)
+    _write_manifest(
+        p,
+        metadata_overrides={
+            "campaign_matlab_environment_descriptor":
+                portable_environment["actual_matlab_environment_descriptor"],
+            "campaign_matlab_environment_sha256":
+                portable_environment["actual_matlab_environment_sha256"],
+        },
+    )
+    check(
+        "coherent foreign campaign/reference environment rejected",
+        lambda: _load(p),
+        should_raise=True,
+    )
 
     # Self-consistency is not authenticity: rewrite manifest + every state stamp
     # to one canonical foreign source identity, then recompute dataset digests

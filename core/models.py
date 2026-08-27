@@ -16,6 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from core.task import n_outputs as _task_n_outputs
+from core.temporal_pooling import deterministic_adaptive_max_pool1d
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -137,7 +138,7 @@ class MultiRatePooling1D(nn.Module):
             )
         pooled_outputs = []
         for output_bins in self.pyramid_bins:
-            pooled = F.adaptive_max_pool1d(x, output_size=output_bins)
+            pooled = deterministic_adaptive_max_pool1d(x, output_bins)
             pooled_outputs.append(pooled.reshape(x.size(0), -1))
         return torch.cat(pooled_outputs, dim=1)
 
@@ -376,7 +377,6 @@ _POOL_RATE_MAP: dict[str, tuple] = {
     "1_2_4_8": (1, 2, 4, 8),
 }
 
-
 def build_model(
     config:      dict,
     params:      dict,
@@ -412,7 +412,31 @@ def build_model(
     n_out = _task_n_outputs(config)
     in_channels = input_shape[1]
 
-    if config.get('model_type') == '2D_CNN' or config.get('method') == 'PAA_CWT':
+    model_type = str(config.get("model_type", "1D_MODULAR")).upper()
+
+    method = config.get("method")
+    if method == "PAA_CWT" and model_type not in {"1D_MODULAR", "2D_CNN"}:
+        raise ValueError(
+            f"model_type {model_type!r} consumes 1-D RAW/PAA tensors and is "
+            "incompatible with the 2-D PAA_CWT representation"
+        )
+
+    if model_type in {"MODERN_TCN", "TSLANET"}:
+        active_legacy_flags = [
+            name
+            for name in ("use_space2vec", "use_lstm", "use_nhits")
+            if config.get(name, False)
+        ]
+        if active_legacy_flags:
+            raise ValueError(
+                f"model_type {model_type!r} is incompatible with active "
+                f"legacy modules {active_legacy_flags!r}"
+            )
+        from core.challenger_policy import validate_challenger_parameters
+
+        params = validate_challenger_parameters(model_type, params)
+
+    if model_type == "2D_CNN" or method == "PAA_CWT":
         model = Simple2DCNN(
             in_channels=in_channels,
             n_classes=n_out,
@@ -420,7 +444,7 @@ def build_model(
             image_height=input_shape[2],
             image_width=input_shape[3],
         ).to(device)
-    else:
+    elif model_type == "1D_MODULAR":
         model = SpaceAwareModularNetwork(
             n_segments=input_shape[2],
             n_classes=n_out,
@@ -430,5 +454,77 @@ def build_model(
             use_lstm=config.get('use_lstm',      False),
             use_nhits=config.get('use_nhits',     False),
         ).to(device)
+    elif model_type == "MODERN_TCN":
+        from core.challenger_policy import (
+            CHALLENGER_FACTORY_POLICY,
+            CHALLENGER_PATCH_LAYOUTS,
+            CHALLENGER_POOLING_LAYOUTS,
+            MODERN_TCN_LAYOUTS,
+        )
+        from core.modern_tcn import ModernTCNRegressor
+
+        fixed = CHALLENGER_FACTORY_POLICY[model_type]
+        patch_size, patch_stride = CHALLENGER_PATCH_LAYOUTS[
+            params["modern_patch_layout"]
+        ]
+        layout = MODERN_TCN_LAYOUTS[params["modern_layout"]]
+        pool_bins = CHALLENGER_POOLING_LAYOUTS[params["challenger_pooling"]]
+        model = ModernTCNRegressor(
+            in_channels=in_channels,
+            output_dim=n_out,
+            dims=layout["dims"],
+            depths=layout["depths"],
+            kernel_size=params["modern_kernel_size"],
+            patch_size=patch_size,
+            patch_stride=patch_stride,
+            stage_stride=fixed["stage_stride"],
+            small_kernel_size=fixed["small_kernel_size"],
+            expansion_ratio=params["modern_expansion_ratio"],
+            dropout=params["modern_dropout"],
+            small_kernel_merged=fixed["small_kernel_merged"],
+            activation_checkpointing=fixed["activation_checkpointing"],
+            depthwise_channel_chunk_size=(
+                fixed["depthwise_channel_chunk_size"]
+            ),
+            pool_bins=pool_bins,
+        ).to(device)
+    elif model_type == "TSLANET":
+        from core.challenger_policy import (
+            CHALLENGER_FACTORY_POLICY,
+            CHALLENGER_PATCH_LAYOUTS,
+            CHALLENGER_POOLING_LAYOUTS,
+        )
+        from core.tslanet import TSLANetRegressor
+
+        fixed = CHALLENGER_FACTORY_POLICY[model_type]
+        patch_size, patch_stride = CHALLENGER_PATCH_LAYOUTS[
+            params["tsla_patch_layout"]
+        ]
+        pool_bins = CHALLENGER_POOLING_LAYOUTS[params["challenger_pooling"]]
+        model = TSLANetRegressor(
+            in_channels=in_channels,
+            output_dim=n_out,
+            embed_dim=params["tsla_embed_dim"],
+            depth=params["tsla_depth"],
+            patch_size=patch_size,
+            patch_stride=patch_stride,
+            mlp_ratio=params["tsla_mlp_ratio"],
+            dropout=params["tsla_dropout"],
+            drop_path_rate=params[fixed["drop_path_rate_source"]],
+            use_asb=fixed["use_asb"],
+            use_icb=fixed["use_icb"],
+            adaptive_filter=fixed["adaptive_filter"],
+            spectral_threshold_init=fixed["spectral_threshold_init"],
+            spectral_mask_temperature=fixed["spectral_mask_temperature"],
+            spectral_eps=fixed["spectral_eps"],
+            position_bins=fixed["position_bins"],
+            head_hidden_dim=fixed["head_hidden_dim"],
+            pool_bins=pool_bins,
+        ).to(device)
+    else:
+        raise ValueError(
+            f"unsupported model_type {model_type!r}; expected 1D_MODULAR, "
+            "2D_CNN, MODERN_TCN, or TSLANET"
+        )
 
     return model, n_out

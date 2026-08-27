@@ -87,11 +87,12 @@ The settled Paper-1 campaign contains four blocks rather than a progressive
 mechanism ladder. F40-S is a two-span, one-target scour benchmark; F40-M adds
 nominal bearing fixity and local flexural-rigidity loss. L99-S and L99-M repeat
 those scour-only and multi-damage roles on a four-span, three-target geometry.
-All blocks share one fixed rail-profile realization and vary speed,
-temperature, and vehicle properties between passages. Track-layer damage,
-wheel polygonization, suspension damage, and varied profile phases are
-deferred by configuration. Their implementation remains in the one qualified
-source tree, but they are not part of this experiment.
+All four blocks use one generated FRA-class-4 profile realization (registered
+phase seed 20260728), shared by every state and passage. Speed, temperature,
+and vehicle properties vary between passages.
+Track-layer damage, wheel polygonization, and suspension damage are deferred by
+configuration; their implementation remains in the one qualified source tree,
+but they are not part of this experiment.
 
 Within that scope, the study asks:
 
@@ -100,10 +101,11 @@ Within that scope, the study asks:
   spatial-coordinate encoding, LSTM recurrence, and fixed-width multi-rate
   pooling affect grouped-development scour error across a matched 16-cell HPO
   factorial?
-  \item \textbf{RQ2.} Among eight modeled \texttt{physical8\_v1} responses,
+  \item \textbf{RQ2.} Among the six learning-eligible modeled-DOF responses in
+  the eight-response \texttt{physical8\_v1} payload,
   which unordered two-channel pair minimizes the prospectively specified
   aggregate screen score for the retained RAW/PAA pipelines, and what do the
-  eight non-selectable single-channel diagnostics show?
+  six non-selectable single-channel diagnostics show?
   \item \textbf{RQ3.} After independent selected-pair HPO in each block, how
   accurately do the retained pipelines estimate one or three support-specific
   stiffness-loss targets and localize the most affected support?
@@ -118,11 +120,12 @@ Within that scope, the study asks:
 
 Three claim boundaries apply throughout. The target is modeled vertical
 support-stiffness loss, not physical scour-hole depth. The inputs are modeled
-response channels, not transducer packages or placements; specifically, the
-two wheelset rows are idealized total constrained-motion acceleration proxies,
-not validated axle-box sensor observations. Finally, each block receives its
-own selected-pair HPO for the primary analysis, so cross-block primary results
-do not measure frozen-hyperparameter transport.
+response channels, not transducer packages or placements. Specifically, the
+two wheelset rows are idealized constrained-motion kinematic diagnostics, not
+independent vehicle degrees of freedom or validated axle-box observations, and
+they are excluded from every learning and selection input. Finally, each block
+receives its own selected-pair HPO for the primary analysis, so cross-block
+primary results do not measure frozen-hyperparameter transport.
 
 \subsection{Contributions}
 \label{sec:contributions}
@@ -141,16 +144,19 @@ the authenticated campaign, its corresponding estimates:
   \item a complete Option-C adjudication in which the five HPO winners per cell
   are compared on one predeclared three-fold grouped-development OOF partition
   before the outer test is opened;
-  \item a prospectively listed \texttt{physical8\_v1} response screen over
-  eight non-selectable singles and all 28 selectable pairs for four retained
-  RAW/PAA pipeline slots, with paired initialization seeds and authenticated
-  alias deduplication;
+  \item a prospectively listed \texttt{physical8\_v1} response screen over the
+  six eligible, non-selectable singles and all 15 selectable pairs for four
+  retained RAW/PAA pipeline slots, with paired initialization seeds and
+  authenticated alias deduplication;
+  \item an optional secondary contemporary-architecture tier admitted only
+  after the F40-S screen, in which every challenger uses the same authenticated
+  primary selected pair and no challenger performs its own pair selection;
   \item independent selected-pair HPO and disjoint post-freeze stability fits
   in every scientific block, separating primary block-local performance from a
   secondary frozen-F40-S transfer analysis; and
   \item explicit numerical and observation-model boundaries for the
   support-aligned meshes, inherited track topology and scaling, Rayleigh
-  damping policy, and idealized wheelset response proxies.
+  damping policy, and diagnostic-only idealized wheelset response proxies.
 \end{enumerate}
 
 Table~\ref{tab:delta} summarizes the relation to the closest prior work.
@@ -188,7 +194,7 @@ configuration & multi-run statistics \\
 localization, and bearing co-estimation in four explicit blocks} &
 \textbf{RAW/PAA $\times$ position $\times$ LSTM $\times$ fixed-width
 multi-rate factorial} & \textbf{Option-C grouped OOF adjudication; complete
-8-single/28-pair screen; per-block selected-pair HPO} & \textbf{sealed outer
+  6-single/15-pair screen; per-block selected-pair HPO} & \textbf{sealed outer
 test; disjoint post-freeze stability; authenticated paired-state and secondary
 transfer roles} \\
 \bottomrule

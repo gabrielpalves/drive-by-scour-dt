@@ -4,24 +4,26 @@
 % =====================================================================
 % HARD RULE (do not remove until the campaign is complete):
 % Populate this section ONLY from authenticated outputs of the complete
-% four-block Paper-1 campaign at the authorized source commit. No number,
+% four-block Paper-1 campaign at the clean campaign source commit. No number,
 % figure, ranking, or qualitative outcome from a pilot or superseded design is
 % admissible, even as a placeholder.
 % =====================================================================
 
-\subsection{Campaign accounting and qualification}
+\subsection{Campaign accounting and local qualification}
 \label{sec:accounting}
 
-This subsection will identify the authorized source revision, protocol and
-source-root digests, generation and training environments, host-qualification
-and cross-host comparison receipts, rail-clearance and response-sensitivity
-verdicts, contact/time-step closure, and exact artifact inventories. It will
+This subsection will identify the campaign source revision, protocol and
+source-root digests, recorded generation and training environments, per-PC
+capability/physics-smoke and CUDA-capacity results, rail-clearance and
+response-sensitivity verdicts, contact/time-step closure, and exact artifact
+inventories. It will
 confirm 305/425/475/475 states and 50 passages per state for
 F40-S/F40-M/L99-S/L99-M, respectively, and document that no failed, incomplete,
 retried, out-of-memory, provenance-inconsistent, or post-contact-violation job
 entered a reported result.
 \pending{Complete accounting from the authenticated campaign artifacts,
-including all 160 HPO studies, 1,740 planned refits, and sealed-test openings.}
+including all 160 primary HPO studies, 1,440 planned primary refits, and
+sealed-test openings.}
 
 \subsection{F40-S architecture-factorial adjudication}
 \label{sec:factorial_results}
@@ -41,13 +43,15 @@ report ties using the prospectively fixed restart-seed and cell-ID rules.}
 
 For each of the four retained slots --- best RAW, best PAA, RAW CNN--GAP, and
 PAA CNN--GAP, with authenticated alias deduplication --- the frozen F40-S
-screen evaluates eight singles and all 28 unordered pairs with five paired
-initialization seeds. Single channels are reported as non-selectable
-diagnostics. Pair selection averages state-level scour MSE across seeds,
-validation states, and unique resolved pipelines; only the 28 pairs are
-eligible, with lexicographic ascending-pair tie-breaking. The full tensor,
-coverage, and deduplication map will accompany the selected pair.
-\pending{Authenticated 720-job channel-screen table, single-channel diagnostics,
+screen uses five paired initialization seeds. The eight-response payload is
+retained, but wheelset
+proxy indices 3 and 4 are diagnostic-only and never enter a fit. The eligible
+screen therefore contains six non-selectable singles and 15 selection-eligible
+pairs. Pair selection averages state-level scour MSE across seeds, validation
+states, and unique resolved pipelines, with lexicographic ascending-pair
+tie-breaking. The full tensor, coverage, and deduplication map will accompany
+the selected pair.
+\pending{Authenticated 420-job channel-screen table, single-channel diagnostics,
 resolved-pipeline map, and selected physical two-channel pair.}
 
 \subsection{Block-local selected-pair performance and stability}
@@ -62,6 +66,11 @@ sealed-test stability fits are report-only: they cannot change a selected
 pipeline, pair, hyperparameter vector, or checkpoint policy.
 \pending{Authenticated block-local HPO winners and sealed-test estimates for
 the resolved RAW/PAA winners and CNN--GAP baselines in all four blocks.}
+
+Any secondary contemporary-architecture results are admitted only after this
+screen and use the exact authenticated primary F40-S pair. ModernTCN- and
+TSLANet-inspired challengers have no independent pair-selection path and cannot
+change the primary factorial, screen, or selected pair.
 
 \subsection{Multi-pier estimation, localization, and bearing leakage}
 \label{sec:multipier_results}
@@ -127,8 +136,9 @@ transport or rescue claim.}
 
 The discussion will be limited to authenticated estimates. It will address
 whether RAW or PAA and each factorial component changes observed error under
-the matched search budget; which physical response pair the F40-S screen
-selects and what the idealized wheelset-proxy boundary implies; whether the
+the matched search budget; which eligible modeled-DOF response pair the F40-S
+screen selects and what the diagnostic-only wheelset-proxy boundary implies;
+whether the
 four retained pipelines behave consistently after independent block-local
 tuning; how multi-pier and bearing-aware tasks change errors; and how sensitive
 the interpretation is to the registered track/damping model-form choices.

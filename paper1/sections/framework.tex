@@ -5,8 +5,7 @@ The study is organized as a prospectively specified, source-locked simulation
 experiment: the bridge-state catalogues, active-mechanism scope, model-selection
 policy, statistical analyses, and claim boundaries were fixed in versioned,
 hash-identified source before production generation. In this paper,
-``registered'' means fixed in that repository source; it does not imply deposit
-in an external registry. This section gives an overview, while
+``registered'' means fixed in that repository source. This section gives an overview, while
 Sections~\ref{sec:simulation} and~\ref{sec:data_processing} provide the
 implementation details.
 
@@ -19,20 +18,24 @@ and its multi-damage counterpart (L99-M). Named random substreams keyed to
 semantic state identifiers make all intended comparisons invariant to row
 order and parallel scheduling. F40-S and F40-M share an explicit 30-state
 controlled subset; their remaining states are not claimed to be paired.
-L99-S and L99-M share the complete 475-state latent design. All four blocks use
-one fixed rail-profile realization and vary only the registered operational
-conditions between passages. Thus any paired contrast uses only states whose
-semantic identities and operational draws are genuinely shared.
+L99-S and L99-M share the complete 475-state latent design. One generated
+FRA-class-4 profile realization (registered phase seed 20260728) is common to
+every state and passage. Matched StateUIDs in S--M blocks of the same geometry
+also preserve their state-keyed operational draws. Thus any paired contrast
+uses only states whose semantic identities and common-random-number inputs are
+genuinely shared.
 
 \paragraph{Block-local calibration.}
 The architecture factorial is calibrated on F40-S using the prospectively
 chosen front-bogie vertical-acceleration anchor. Frozen hyperparameters then
-support the complete F40-S single- and two-channel screen. After the physical
+support the complete F40-S eligible single- and two-channel screen. After the physical
 channel pair is selected, the retained pipelines are re-optimized on that pair
 in F40-S and independently in F40-M, L99-S, and L99-M. No block inherits
 another block's hyperparameters for its primary result. The earlier
 transport/rescue trigger is withdrawn; a separate frozen-F40-S transfer
-analysis is retained only as a secondary descriptive analysis.
+analysis is retained only as a secondary descriptive analysis. Optional
+contemporary challengers enter only after the F40-S pair is authenticated, use
+that exact pair, and cannot conduct or alter channel selection.
 
 \paragraph{A selection/report firewall.}
 States, never passages, are assigned to train, inner-validation, and sealed
@@ -55,13 +58,18 @@ local flexural-rigidity-loss surrogate in addition to scour. L99-S estimates
 three internal supports on a longer four-span bridge, and L99-M activates the
 same multi-damage task there.
 
-The design supports four distinct estimand classes:
+The design supports five distinct estimand classes:
 
 \begin{enumerate}
   \item \textbf{F40-S method and channel selection.} Grouped-development
   evidence selects one RAW and one PAA factorial cell, and a prospectively
-  specified screen over eight singles and 28 pairs selects one physical
-  two-channel input. Singles are descriptive and non-selectable.
+  specified screen over six eligible singles and 15 eligible pairs selects one
+  physical two-channel input. Singles are descriptive and non-selectable.
+  The two diagnostic wheelset-proxy payload rows are excluded from both sets.
+  \item \textbf{Secondary contemporary architectures.} ModernTCN- and
+  TSLANet-inspired challengers may be evaluated only after selection, on the
+  same authenticated F40-S pair as the primary pipelines. They cannot choose a
+  separate pair or retroactively affect the primary factorial or screen.
   \item \textbf{Block-local primary performance.} The retained RAW/PAA winners
   and their RAW/PAA CNN--GAP baselines receive independent selected-pair HPO in
   every block. Performance on the sealed outer test therefore estimates each
@@ -108,8 +116,8 @@ state pairing; no causal or transport arrow connects the two geometries.}
 \begin{table}[htbp]
 \centering
 \caption{Registered Paper-1 scientific blocks. Every state has 50 passages.
-The profile is one fixed FRA-class-4 realization in all four blocks; speed,
-temperature, and vehicle properties vary operationally.}
+One generated FRA-class-4 realization is shared by all states and passages;
+speed, temperature, and vehicle properties vary operationally.}
 \label{tab:stages}
 \small
 \setlength{\tabcolsep}{4pt}
@@ -126,22 +134,25 @@ Block & Geometry & States & Targets & Expressed bridge mechanisms \\
 \end{table}
 
 Track-layer damage, wheel polygonization, and suspension damage remain present
-in the single qualified source tree but are disabled by the four stage
+in the single campaign source tree but are disabled by the four stage
 configurations; no stripped scientific solver branch is used. Alternative
-profile phases are also disabled. Their later
-evaluation belongs to a separate track/train-damage study cut from the frozen
-source revision; code availability is not evidence that those mechanisms were
-active in Paper~1.
+profile phases are likewise disabled: the production campaign is conditional
+on one fixed generated realization. Later track/train-damage or profile-shift
+evaluation belongs to a separate study cut from the frozen source revision;
+code availability is not evidence that those mechanisms were active in
+Paper~1.
 
 \subsection{Execution blocks and provenance}
 \label{sec:blocks}
 
 Each scientific block has its own authenticated generation contract,
-hyperparameter studies, result manifests, and execution receipts. Within a
-block, compared training arms use the same GPU model and pinned numerical
-stack; physical host identity may differ only where the compatibility contract
-permits it. Data generation may be distributed across independently qualified
-hosts. Every reported row is bound to the generating source revision, channel
-schema, protocol hashes, split identity, and artifact digests, so that a
-result without a complete authenticated lineage fails closed rather than being
-silently admitted.
+hyperparameter studies, result manifests, and execution receipts. Training jobs
+are distributed through prospectively balanced logical seed partitions, not by
+architecture, representation, channel, or observed outcome. The partitions may
+run on different capable GPU models and numerical stacks; their exact runtime
+identities are recorded as provenance rather than used as equality gates. Each
+training PC must pass its own worst-case local capacity probe, and each
+generation PC its own capability and physics-smoke suite. Every reported row is
+bound to the generating source revision, channel schema, protocol hashes, split
+identity, and artifact digests, so that a result without a complete
+authenticated lineage fails closed rather than being silently admitted.

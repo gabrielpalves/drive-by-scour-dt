@@ -6,7 +6,7 @@ configuration sources and reconstructs the semantic StateUID inventories from
 the published grammar.  A stored ``matched_state_count`` therefore cannot make
 the check pass by itself.
 
-Run: ``py -3.13 check_paper1_campaign_contract.py``
+Run: ``python check_paper1_campaign_contract.py``
 """
 
 from __future__ import annotations
@@ -249,6 +249,18 @@ def validate_python_contract() -> None:
         )):
             raise ContractError(f"{stage}: track/OOR entered production")
         if (
+            scenario["profile_mode"] != "fixed"
+            or generation["profile_mode"] != "fixed"
+            or generation["profile_draw"] != "fixed_shared"
+            or generation["profile_fra_classes"] != 4
+            or generation["profile_fixed_phase_seed"] != 20260728
+            or generation["profile_jitter_sd_mm"] != 0.0
+        ):
+            raise ContractError(
+                f"{stage}: rail profile is not the shared fixed-phase FRA-4 "
+                "realization with registered seed and zero passage jitter"
+            )
+        if (
             scenario["rail_end_clearance_m"]
             != EXPECTED_RAIL_END_CLEARANCE_M
             or scenario["rail_end_clearance_decision_id"]
@@ -332,6 +344,10 @@ def validate_matlab_sources(
         "state_design_kind='five-family-multidamage-v2';",
         "Dano  = (0:60)/100;",
         "config.state_design_kind = state_design_kind;",
+        "profile_draw         = 'fixed_shared';",
+        "profile_jitter_sd_mm = 0;",
+        "profile_fra_classes  = 4;",
+        "profile_fixed_phase_seed = 20260728;",
         "rail_end_clearance_m = 6;",
         "'paper1-rail-domain-clearance-c06-v1';",
         "config.rail_end_clearance_m = rail_end_clearance_m;",
@@ -340,6 +356,12 @@ def validate_matlab_sources(
         if token not in campaign_setup:
             raise ContractError(f"campaign_setup missing {token!r}")
     uncommented_setup = re.sub(r"%.*$", "", campaign_setup, flags=re.MULTILINE)
+    if uncommented_setup.count("profile_mode='fixed';") != 4:
+        raise ContractError(
+            "all four production stages must select profile_mode='fixed'"
+        )
+    if "profile_mode='psd_fra';" in uncommented_setup:
+        raise ContractError("a production stage enabled state-random phases")
     for forbidden in (
         "use_track_eov = true;",
         "use_oor_eov = true;",
@@ -520,6 +542,20 @@ def main() -> None:
         "production track EOV enabled",
         campaign_setup=baseline["campaign_setup"].replace(
             "use_track_eov = false;", "use_track_eov = true;", 1
+        ),
+    )
+    _must_reject(
+        "one production stage enabled state-random profile phases",
+        campaign_setup=baseline["campaign_setup"].replace(
+            "profile_mode='fixed';", "profile_mode='psd_fra';", 1
+        ),
+    )
+    _must_reject(
+        "shared fixed profile phase seed changed",
+        campaign_setup=baseline["campaign_setup"].replace(
+            "profile_fixed_phase_seed = 20260728;",
+            "profile_fixed_phase_seed = 20260729;",
+            1,
         ),
     )
     _must_reject(

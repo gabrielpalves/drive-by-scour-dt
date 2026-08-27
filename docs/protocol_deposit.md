@@ -11,23 +11,23 @@
 > external registry deposit. The `nosek2018preregistration` entry is removed
 > from the bibliography (67 keys, 67 entries, still closed).
 >
-> **Rationale.** Preregistration is a norm in psychology, clinical medicine
-> and parts of ecology; it is essentially absent from structural engineering
-> and SHM venues, where the equivalent expectation is a data/code availability
-> statement plus an archived artifact with a DOI at publication. That archive
-> is already planned. P1-S4 arose because the paper reached for
+> **Rationale.** Preregistration is not part of the scientific claim or the
+> execution workflow for this numerical SHM study. Portability is provided by
+> the local source bundle, executable contracts, and physics/numerical checks;
+> no OSF/Zenodo upload, registry locator, or DOI-producing deposit is planned.
+> P1-S4 arose because the paper reached for
 > preregistration culture in one sentence; with that sentence gone, the
 > obligation goes with it, and the claim that remains — prospective
 > specification in hash-identified source — is one the repository can actually
 > evidence through its own source roots, protocol descriptors, and gates.
 >
-> **This document is retained, not deleted.** The specification below is
-> correct and the deposit bundle was built and verified before the decision
+> **This document is retained only as a historical record and is non-operational.**
+> The specification below predates the author's decision and none of its upload,
+> locator, or post-deposit steps belongs to the current campaign. A former
+> deposit bundle was built and verified before the decision
 > (root hash `15a37b1d991d035a193421ee6610d6199e85b1ecd571928ae5b2ffa3156224ea`
-> over 12 files). If a venue or co-author later asks for a registered
-> protocol, everything needed is here: re-run the builder against the
-> then-current tree, deposit, and insert the locator at the sites in §5.
-> Nothing about the campaign depends on it.
+> over 12 files). Do not re-run or publish it as part of Paper 1. Nothing about
+> the campaign depends on it.
 
 > **Everything below this line is HISTORICAL.** It records why the deposit
 > was once treated as a pre-A blocker and how it would have been performed.

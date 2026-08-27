@@ -88,7 +88,7 @@ _COMMON_GENERATION_CONFIG = {
     "crack_frac_range": [0.10, 0.90],
     "crack_int_range": [0.05, 0.30],
     "crack_lc": 0.0,
-    "profile_draw": "per_state",
+    "profile_draw": "fixed_shared",
     "profile_jitter_sd_mm": 0.0,
     "profile_int_range": [0.5, 2.0],
     "profile_fra_classes": 4,

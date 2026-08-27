@@ -43,6 +43,7 @@ from core.execution_environment import (
 from core.source_provenance import python_runtime_source_root
 from core.paper1_training_contract import (
     ANCHOR_CHANNEL_INDEX,
+    ELIGIBLE_SENSOR_INDICES,
     FACTORIAL_CELLS,
     HPO_RESTART_SEEDS,
     RETAINED_PIPELINE_SLOTS,
@@ -50,7 +51,7 @@ from core.paper1_training_contract import (
 )
 
 
-POLICY_SCHEMA = "ttbi-hyperparameter-execution-policy-v3"
+POLICY_SCHEMA = "ttbi-hyperparameter-execution-policy-v4"
 RUN_PLAN_SCHEMA = "ttbi-hyperparameter-run-plan-v4"
 MANIFEST_SCHEMA = "ttbi-hyperparameter-manifest-v4"
 STUDY_IDENTITY_SCHEMA = "ttbi-anchor-study-identity-v3"
@@ -63,7 +64,7 @@ LEGACY_MODE = "legacy"
 
 ARCHITECTURES = tuple(cell.cell_id for cell in FACTORIAL_CELLS)
 SEEDS = tuple(HPO_RESTART_SEEDS)
-FULL_DOF_INPUT = tuple(range(8))
+LEARNING_INPUT_INDICES = tuple(ELIGIBLE_SENSOR_INDICES)
 HPO_ANCHOR_INPUT = (ANCHOR_CHANNEL_INDEX,)
 
 HYPERPARAMETER_POLICY = {
@@ -308,8 +309,12 @@ def _validated_dofs(value: object) -> tuple[int, ...]:
     dofs = tuple(_strict_int(item, "DOF index") for item in value)
     if len(dofs) != len(set(dofs)):
         raise HyperparameterPolicyError("active DOFs contain duplicates")
-    if any(index not in FULL_DOF_INPUT for index in dofs):
-        raise HyperparameterPolicyError("active DOFs must lie in [0, 7]")
+    if any(index not in LEARNING_INPUT_INDICES for index in dofs):
+        raise HyperparameterPolicyError(
+            "active learning inputs must be eligible physical sensor rows "
+            f"{list(LEARNING_INPUT_INDICES)!r}; constrained-wheelset "
+            "kinematic proxies 3/4 are diagnostic-only"
+        )
     if not dofs:
         raise HyperparameterPolicyError("at least one active DOF is required")
     return dofs
@@ -857,13 +862,11 @@ def validate_manifest(
     if expected_runtime is not None:
         expected = validate_execution_runtime(expected_runtime)
         if (
-            runtime["execution_compatibility_sha256"]
-            != expected["execution_compatibility_sha256"]
-            or runtime["execution_compatibility_descriptor"]
-            != expected["execution_compatibility_descriptor"]
+            runtime["execution_block"] != expected["execution_block"]
+            or runtime["anchor_stage"] != expected["anchor_stage"]
         ):
             raise HyperparameterPolicyError(
-                "manifest runtime is outside the current matched execution class"
+                "manifest runtime belongs to another logical execution block"
             )
 
     source_sha = value["python_runtime_source_root_sha256"]
@@ -921,8 +924,6 @@ def validate_manifest(
             or identity["anchor_stage"] != anchor
             or identity["architecture"] != architecture
             or identity["seed"] != seed
-            or identity["execution_compatibility_sha256"]
-            != runtime["execution_compatibility_sha256"]
             or identity["campaign_run_tag"] != run_tag
             or identity["execution_receipt_sha256"]
             != execution_receipt_sha

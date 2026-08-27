@@ -10,6 +10,7 @@ from contact_gate_source_contract import (
     GATE_SOURCE_FILES,
     SOLVER_MODULES,
     STUDY_HARNESS_FILES,
+    matlab_source_path,
 )
 from contact_gate_core import (
     CHANNELS,
@@ -63,9 +64,8 @@ def _study_harness_root() -> str:
     ``report.harness_sha256``, the gate re-verifies it during report binding,
     and this independent recomputation must agree with both.
     """
-    source_dir = ROOT / "scour_MATLAB"
     lines = [
-        f"{name}:{_sha256_file(source_dir / name)}"
+        f"{name}:{_sha256_file(matlab_source_path(name))}"
         for name in STUDY_HARNESS_FILES
     ]
     return _sha256_bytes("\n".join(sorted(lines)).encode("utf-8"))
@@ -81,9 +81,8 @@ def _gate_execution_root() -> str:
     what binds the modules that DECIDE acceptance to the reviewed bytes rather
     than to whatever MATLAB happened to resolve on the operator's path.
     """
-    source_dir = ROOT / "scour_MATLAB"
     lines = [
-        f"{name}:{_sha256_file(source_dir / name)}"
+        f"{name}:{_sha256_file(matlab_source_path(name))}"
         for name in GATE_SOURCE_FILES
     ]
     return _sha256_bytes("\n".join(sorted(lines)).encode("utf-8"))
@@ -93,7 +92,7 @@ def _solver_execution_identity() -> tuple[str, str, str]:
     source_dir = ROOT / "scour_MATLAB"
     lines: list[str] = []
     for module in SOLVER_MODULES:
-        path = source_dir / f"{module}.m"
+        path = matlab_source_path(f"{module}.m")
         lines.append(f"{module}:{_sha256_file(path)}")
     root = _sha256_bytes("\n".join(lines).encode("utf-8"))
     return (

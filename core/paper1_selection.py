@@ -18,6 +18,7 @@ from typing import Any, Mapping
 
 from core.paper1_training_contract import (
     CHANNEL_SCHEMA_ID,
+    ELIGIBLE_SENSOR_INDICES,
     FACTORIAL_CELLS,
     PAA_CNN_GAP_BASELINE_ID,
     RAW_CNN_GAP_BASELINE_ID,
@@ -167,10 +168,10 @@ def validate_selection_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
         or any(isinstance(index, bool) or not isinstance(index, int) for index in pair)
         or pair != sorted(pair)
         or len(set(pair)) != 2
-        or any(index < 0 or index > 7 for index in pair)
+        or any(index not in ELIGIBLE_SENSOR_INDICES for index in pair)
     ):
         raise Paper1SelectionError(
-            "selected pair must be two distinct ascending physical8 indices"
+            "selected pair must be two distinct ascending eligible-sensor indices"
         )
     resolution = result["slot_resolution"]
     if not isinstance(resolution, dict) or set(resolution) != set(
@@ -212,7 +213,7 @@ def load_selection_artifact(
     Production callers resolve ``path`` and ``expected_sha256`` from separate
     environment variables.  Supplying ``path`` explicitly remains useful to
     offline publication/checking code, where the returned self-digest can be
-    deposited before dispatch.
+    recorded independently before dispatch.
     """
 
     from_environment = path is None

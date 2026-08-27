@@ -11,6 +11,9 @@ from core.paper1_training_contract import (
     DEVELOPMENT_N_REPEATS,
     DEVELOPMENT_N_SPLITS,
     DEVELOPMENT_PARTITION_SEED,
+    ELIGIBLE_SENSOR_INDICES,
+    ELIGIBLE_SENSOR_NAMES,
+    EXCLUDED_PROXY_INDICES,
     FACTORIAL_CELLS,
     HPO_RESTART_SEEDS,
     OUTER_SPLIT_SEED,
@@ -39,10 +42,18 @@ def main() -> None:
         "wheelset_1_constrained_vertical_acceleration_proxy",
         "wheelset_2_constrained_vertical_acceleration_proxy",
     )
+    assert EXCLUDED_PROXY_INDICES == (3, 4)
+    assert ELIGIBLE_SENSOR_INDICES == (0, 1, 2, 5, 6, 7)
+    assert ELIGIBLE_SENSOR_NAMES == tuple(
+        CHANNEL_NAMES[index] for index in ELIGIBLE_SENSOR_INDICES
+    )
     inputs = channel_screen_inputs()
-    assert len(inputs) == 36
-    assert sum(len(value) == 1 for value in inputs) == 8
-    assert sum(len(value) == 2 for value in inputs) == 28
+    assert len(inputs) == 21
+    assert sum(len(value) == 1 for value in inputs) == 6
+    assert sum(len(value) == 2 for value in inputs) == 15
+    assert all(
+        set(value) <= set(ELIGIBLE_SENSOR_INDICES) for value in inputs
+    )
 
     hpo = hpo_jobs()
     counts = Counter((job["stage"], job["phase"]) for job in hpo)
@@ -83,13 +94,17 @@ def main() -> None:
 
     grid = complete_job_grid()
     assert grid["stage_order"] == list(STAGE_ORDER)
+    assert grid["channel_names"] == list(CHANNEL_NAMES)
+    assert grid["eligible_sensor_indices"] == list(ELIGIBLE_SENSOR_INDICES)
+    assert grid["excluded_proxy_indices"] == list(EXCLUDED_PROXY_INDICES)
+    assert len(grid["phases"]["channel_screen"]) == 420
     assert len(grid["complete_grid_sha256"]) == 64
     assert grid["transport_rescue_policy"] == (
         "withdrawn; every block has independent HPO"
     )
     print(
         "PASS paper1 training contract: 16 factorial cells, 160 HPO studies "
-        "(16,000 trials), 8+28 channel screen, 30-seed sealed-test stability"
+        "(16,000 trials), 6+15 eligible channel screen, 30-seed sealed-test stability"
     )
 
 

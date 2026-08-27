@@ -94,6 +94,31 @@ STUDY_HARNESS_FILES = (
     "current_matlab_environment.m",
     "generator_source_root.m",
     "matlab_environment_identity.m",
+    "ttbi.assert_no_shadow_matlab_sources.m",
+    "ttbi.assert_results_not_on_matlab_path.m",
+    "ttbi.assert_reviewed_matlab_resolution.m",
+    "ttbi.canonical_execution_path.m",
+    "ttbi.comparison_path.m",
+    "ttbi.directory_observation.m",
+    "ttbi.file_observation.m",
+    "ttbi.file_sha256.m",
+    "ttbi.filesystem_identity.m",
+    "ttbi.hardlink_count.m",
+    "ttbi.hash_reviewed_source_entries.m",
+    "ttbi.java_boolean_value.m",
+    "ttbi.list_matlab_executable_files.m",
+    "ttbi.nofollow_link_options.m",
+    "ttbi.path_component_is_link_alias.m",
+    "ttbi.path_is_same_or_child.m",
+    "ttbi.regular_nonsymlink_file.m",
+    "ttbi.reviewed_source_entries.m",
+    "ttbi.run_small_process.m",
+    "ttbi.sha256.m",
+    "ttbi.sha256_bytes.m",
+    "ttbi.stable_file_sha256.m",
+    "ttbi.validate_repository_relative_path.m",
+    "ttbi.windows_file_identity.m",
+    "ttbi.windows_hardlink_count.m",
     "validate_dataset_digest_manifest.m",
 )
 
@@ -177,6 +202,31 @@ GATE_SOURCE_FILES = (
     "contact_validate_host_receipt.m",
     "contact_validate_locked_matlab_environment.m",
     "contact_windows_file_identity.m",
+    "ttbi.assert_no_shadow_matlab_sources.m",
+    "ttbi.assert_results_not_on_matlab_path.m",
+    "ttbi.assert_reviewed_matlab_resolution.m",
+    "ttbi.canonical_execution_path.m",
+    "ttbi.comparison_path.m",
+    "ttbi.directory_observation.m",
+    "ttbi.file_observation.m",
+    "ttbi.file_sha256.m",
+    "ttbi.filesystem_identity.m",
+    "ttbi.hardlink_count.m",
+    "ttbi.hash_reviewed_source_entries.m",
+    "ttbi.java_boolean_value.m",
+    "ttbi.list_matlab_executable_files.m",
+    "ttbi.nofollow_link_options.m",
+    "ttbi.path_component_is_link_alias.m",
+    "ttbi.path_is_same_or_child.m",
+    "ttbi.regular_nonsymlink_file.m",
+    "ttbi.reviewed_source_entries.m",
+    "ttbi.run_small_process.m",
+    "ttbi.sha256.m",
+    "ttbi.sha256_bytes.m",
+    "ttbi.stable_file_sha256.m",
+    "ttbi.validate_repository_relative_path.m",
+    "ttbi.windows_file_identity.m",
+    "ttbi.windows_hardlink_count.m",
     "validate_dataset_digest_manifest.m",
 )
 
@@ -218,6 +268,8 @@ SOLVER_MODULES = (
     "B64_Coupled_InitialStatic",
     "B65_DynamicCalcCoupledFaster",
     "B66_ContactForce",
+    "bridge_mesh_elements_per_sleeper",
+    "ttbi.wheel_contact_kinematics",
     "TrackProp_Zhai_et_al_WithBallastOnBridge",
     "TrainProp_ObrienCalibrate",
 )
@@ -259,6 +311,28 @@ def _matlab_statements(source: str) -> str:
     return "\n".join(kept)
 
 
+def matlab_source_path(name: str) -> Path:
+    """Resolve a logical MATLAB module filename inside the reviewed tree.
+
+    Package members use inventory names such as ``ttbi.sha256.m`` while their
+    physical source lives at ``+ttbi/sha256.m``. Keeping the logical qualified
+    name in every digest line matches MATLAB's ``which`` identity and prevents
+    an unqualified same-named file from satisfying the contract.
+    """
+    if not isinstance(name, str) or not name.endswith(".m"):
+        raise GateError(f"invalid MATLAB inventory name: {name!r}")
+    stem = name[:-2]
+    qualified = stem.split(".")
+    if any(not part or "/" in part or "\\" in part for part in qualified):
+        raise GateError(f"unsafe MATLAB inventory name: {name!r}")
+    path = ROOT / "scour_MATLAB"
+    if len(qualified) == 1:
+        return path / name
+    for package in qualified[:-1]:
+        path /= f"+{package}"
+    return path / f"{qualified[-1]}.m"
+
+
 def _contact_source_set(
     names: Sequence[str],
     overrides: dict[str, str] | None = None,
@@ -269,7 +343,7 @@ def _contact_source_set(
         if overrides is not None and name in overrides:
             sources[name] = overrides[name]
             continue
-        path = ROOT / "scour_MATLAB" / name
+        path = matlab_source_path(name)
         try:
             sources[name] = path.read_text(encoding="utf-8")
         except OSError as exc:

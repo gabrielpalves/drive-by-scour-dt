@@ -60,7 +60,7 @@ CHANNEL_AGGREGATION_POLICY = {
     "state_weighting": "equal_within_unique_pipeline",
     "pipeline_weighting": "equal_across_unique_resolved_pipelines",
     "alias_policy": "deduplicate_resolved_pipeline_before_weighting",
-    "eligible_set": "all_28_physical8_pairs_only",
+    "eligible_set": "all_15_learning_eligible_pairs_only",
     "singles_role": "reported_nonselectable",
     "tie_break": "lexicographic_ascending_pair",
 }

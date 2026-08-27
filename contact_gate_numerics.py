@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from contact_gate_path_safety import GateError
-from contact_gate_source_contract import SOLVER_MODULES
+from contact_gate_source_contract import SOLVER_MODULES, matlab_source_path
 from contact_gate_core import (
     CHANNEL_SCHEMA_ID,
     CHANNELS,
@@ -351,9 +351,8 @@ def _validate_plain_report(
         or any(not isinstance(item, str) for item in paths + hashes)
     ):
         raise GateError(f"case {row.ordinal} solver source inventory differs")
-    source_dir = ROOT / "scour_MATLAB"
     for module, path_text, digest in zip(modules, paths, hashes):
-        expected_path = (source_dir / f"{module}.m").resolve()
+        expected_path = matlab_source_path(f"{module}.m").resolve()
         if (
             Path(path_text).resolve() != expected_path
             or not SHA256_RE.fullmatch(digest)

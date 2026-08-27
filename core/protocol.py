@@ -27,7 +27,7 @@ of the whole protocol:
     targets  : TARGET_SUPPORTS / BEARING_TARGETS
     preproc  : PAA n_segments etc.            (from core.dataset constants)
     code     : SCHEMA_TAG + expected gen_schema + cache schema tag + SHA-256
-               root over the executing Python/environment source boundary
+               root over the executing Python source boundary
 
 TWO hashes, not one (this distinction is the heart of the design):
 
@@ -337,8 +337,8 @@ def read_dataset_provenance(
         "state_identity": state_identity,
         "semantic_split": semantic_split,
         "matlab_environment_attestation":
-            "exact R11 numerical-stack descriptor and reviewed generator "
-            "source root enforced independently by A00 and Python",
+            "self-consistent actual MATLAB descriptor plus authenticated "
+            "known-good reference and reviewed generator source root",
         "source_byte_verification": byte_verification,
     }
 
@@ -373,6 +373,10 @@ def build_protocol_descriptors(
     execution_block_policy: dict,
     hyperparameter_policy: dict,
     capacity_preflight_policy: dict,
+    # Backward-compatible, deliberately non-scientific setup argument. It is
+    # not hashed directly (see check_protocol_hash); a dataset generated under
+    # a different campaign reference remains distinguishable in rung-level
+    # dataset provenance.
     environment_lock:     dict | None = None,
     # Feature B (2026-07-19): deployment-selection stages + the bootstrap-CI
     # policy are protocol too. Defaults keep older callers/tests valid.
@@ -383,9 +387,9 @@ def build_protocol_descriptors(
     # executable protocol, not post-processing decoration.  The whole policy is
     # supplied as data by the driver and therefore moves the core hash.
     statistical_inference: dict | None = None,
-    # Audit r3 (2026-07-22): non-selectable sensor-budget controls (the full
-    # 8-channel array) reported as comparators at every rung. Default keeps older
-    # callers/tests valid.
+    # Non-selectable sensor-budget controls reported as comparators.  Callers
+    # must pass only channels eligible for scientific learning; the physical8
+    # payload may also contain solver/contact proxies that are not sensors.
     control_sets:         list = (),
 ) -> tuple[dict, dict]:
     """Assemble (core_descriptor, full_descriptor).
@@ -416,10 +420,23 @@ def build_protocol_descriptors(
     execution_policy = canonical_execution_block_policy(
         execution_block_policy
     )
+    canonical_control_sets = [
+        sorted(int(d) for d in control) for control in control_sets
+    ]
+    control_arch_policy = (
+        "registered non-selectable sensor-budget controls are compared under "
+        "the same architecture policy as the scientific candidate inputs"
+        if canonical_control_sets
+        else "no non-selectable sensor-budget control is registered"
+    )
     execution_block, execution_anchor = execution_block_for_stage(
         stage, execution_policy
     )
     core = {
+        # v8: v7 plus portable host qualification. Exact MATLAB/Python/CUDA
+        # identities are run provenance; required capabilities, deterministic
+        # settings and local capacity/physics smokes are the execution gate.
+        #
         # v7: v6 plus an explicit physical channel-schema code contract.
         #
         # v6: v5 plus the executable anchor-HPO/frozen-singleton policy and
@@ -431,10 +448,10 @@ def build_protocol_descriptors(
         # a runtime attestation, never an input to this shared protocol hash.
         #
         # v4: v3's structured executable training/objective policy plus a
-        # content-addressed boundary over the executing Python/environment
-        # files. It cannot be confused with descriptors that relied only on
+        # content-addressed boundary over the executing Python files. It
+        # cannot be confused with descriptors that relied only on
         # manually maintained schema tags.
-        "protocol_version": 7,
+        "protocol_version": 8,
         "code": {
             # Code-version markers: the driver/loader schema tag, the generator
             # schema the loader requires, and the cache contract tag. Bumping any
@@ -462,7 +479,13 @@ def build_protocol_descriptors(
             "seeds":    [int(s) for s in seeds],
         },
         "search_space": search_space,
-        "environment_lock": environment_lock,
+        "runtime_qualification": {
+            "policy": "required-capabilities-and-local-smokes-v1",
+            "exact_versions": "provenance_only",
+            "matlab_gate": "required_apis_licenses_and_physics_smokes",
+            "python_gate": "required_imports_cuda_and_local_capacity",
+            "reference_environment": "known_good_nonbinding",
+        },
         "execution_blocking": execution_policy,
         "hyperparameter_execution": hyperparameter_policy,
         "capacity_preflight": capacity_preflight_policy,
@@ -477,12 +500,8 @@ def build_protocol_descriptors(
             # prose description that could drift from TRAIN_PROTOCOL.
             "selection_metric":       train_protocol["objective"],
             "extra_pairs":            [sorted(int(d) for d in p) for p in extra_pairs],
-            "control_sets":           [sorted(int(d) for d in c) for c in control_sets],
-            "control_arch_policy":    (
-                "all trained architectures are compared on the selected pair "
-                "and full-array control at full-factorial stages; frozen rungs "
-                "report winner/carried architectures (deduplicated)"
-            ),
+            "control_sets":           canonical_control_sets,
+            "control_arch_policy":    control_arch_policy,
             "pair_search_stages":     sorted(pair_search_stages),
             "arch_selection_stages":  sorted(arch_selection_stages),
             # Feature B: deployment rungs re-open arch x pair; comparators are

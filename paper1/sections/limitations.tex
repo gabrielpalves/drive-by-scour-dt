@@ -28,13 +28,13 @@ explicitly before discussing field deployment.
   not a breathing crack or calibrated crack-depth model
   \cite{sinha2002simplified}.
 
-  \item \textbf{Fixed profile and restricted nuisance scope.} One generated
-  FRA-class-4 profile realization is shared by every state and passage. Rail
-  profile is therefore not an operational EOV in Paper~1, and no claim of
-  transport to another track section is available. Track-layer damage, wheel
-  polygonization, and suspension damage are disabled. Evaluating the frozen
-  models later under varied profile phases would be a distribution-shift
-  experiment, not robustness to an EOV represented during training.
+  \item \textbf{One fixed rail profile and restricted nuisance scope.}
+  One generated FRA-class-4 profile realization is shared by all semantic
+  states and passages. Rail-profile phase is therefore not an EOV in this
+  experiment, and performance is conditional on that realization. The study
+  supports no claim of robustness or transport to alternative phases, measured
+  profiles, or unseen track sections. Track-layer damage, wheel
+  polygonization, and suspension damage are disabled.
 
   \item \textbf{The nominal track is an inherited simplified topology.} The
   planar source combines two-rail quantities for rail inertia/mass and a full
@@ -46,9 +46,10 @@ explicitly before discussing field deployment.
   nor a consistently doubled two-rail model, and it is not a complete Zhai
   reproduction. Prospective one-seat/two-rail and 0.545-to-0.600~m
   parameter-transfer sensitivities quantify two parameter-level choices; the
-  omitted-shear/condensation topology itself remains unexamined. If a wheelset
-  proxy wins the channel selection, that topology limitation must be resolved
-  before publication or the wheelset result cannot be headlined.
+  omitted-shear/condensation topology itself remains unexamined. The wheelset
+  proxies are retained only for physical diagnostics and are excluded from
+  learning, so they cannot win the channel selection or support a headline
+  sensor result.
 
   \item \textbf{Damping is model-form dependent.} The 0.1\% rail Rayleigh
   target is an inherited author-chosen value, not a property reported by Zhai;
@@ -81,8 +82,10 @@ explicitly before discussing field deployment.
 
   \item \textbf{Channels are not sensors.} The experiment ranks modeled
   responses, not physical transducer counts or placements. In particular, the
-  two \texttt{physical8\_v1} wheelset rows are total constrained-motion
-  acceleration proxies assembled from the linear model. They omit axle-box
+  eight-response \texttt{physical8\_v1} payload includes two total
+  constrained-motion wheelset proxies assembled from the linear model. They are
+  kinematic diagnostics, not sensors or independent degrees of freedom, and are
+  excluded from every learning and selection input. They also omit axle-box
   mounting dynamics, local wheel/rail compliance beyond the model, sensor
   bandwidth and filtering, and contact nonlinearity. They must not be described
   as measured axle-box accelerations without a separate observation model.
@@ -102,10 +105,12 @@ explicitly before discussing field deployment.
   disjoint post-freeze initialization seeds per retained pipeline and block on
   the sealed outer test; those runs cannot re-rank a model.
 
-  \item \textbf{The channel screen has an asymmetric role.} Eight singles are
-  reported but non-selectable; only the 28 pairs can win. Subsequent HPO on the
+  \item \textbf{The channel screen has an asymmetric role.} Six eligible singles are
+  reported but non-selectable; only the 15 eligible pairs can win. Subsequent HPO on the
   selected pair may improve its block-local model but is not evidence that the
-  pair beats the 27 pairs that were screened under frozen F40-S settings.
+  pair beats the other 14 pairs that were screened under frozen F40-S settings.
+  Any contemporary challenger enters only afterward on this same authenticated
+  pair and has no independent channel-selection claim.
 
   \item \textbf{Descriptive uncertainty, not population coverage.} State-first
   resampling and across-seed summaries are finite-design sensitivity analyses.
@@ -116,6 +121,22 @@ explicitly before discussing field deployment.
   results compare pipelines after block-local HPO. They do not estimate
   zero-shot transfer. Frozen F40-S settings are evaluated downstream only in a
   separately labelled, secondary non-selection analysis.
+
+  \item \textbf{Execution hosts are heterogeneous by design.} Production runs
+  are admitted by capability and local qualification rather than by an exact
+  software pin: GPU model, CUDA/PyTorch build and MATLAB release may differ
+  between machines, and their exact identities are retained only as
+  provenance. Two registered controls bound what that can affect. Training
+  jobs are allocated to machines by seed-index parity, identically for every
+  compared pipeline, so each allocation seed resolves to a single machine and
+  every contrast paired on that seed is formed within one host. Each
+  generation stage is produced entirely under one MATLAB environment, because
+  a run folder can be resumed only under its recorded release and environment
+  digest. Consequently no result reported here is claimed to be bitwise
+  reproducible across machines, and absolute error magnitudes may carry a
+  small host-dependent component. Only the paired within-block contrasts are
+  protected from it, which is a further reason---beyond the independent tuning
+  above---that cross-block comparisons are reported descriptively.
 
   \item \textbf{No detection claim.} The study reports continuous regression
   error and localization. Sensitivity, specificity, probability of detection,

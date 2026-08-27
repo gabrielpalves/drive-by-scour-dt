@@ -56,6 +56,7 @@ from check_contact_closure_gate import (
     _sha256_file,
     _solver_execution_identity,
 )
+from contact_gate_source_contract import matlab_source_path
 
 
 def _synthetic_rows() -> list[SelectionRow]:
@@ -374,7 +375,7 @@ def _synthetic_plain_report(
                 case["peak_tension_N"], case["tension_fraction"])
         ]
     solver_paths = [
-        str((ROOT / "scour_MATLAB" / f"{module}.m").resolve())
+        str(matlab_source_path(f"{module}.m").resolve())
         for module in SOLVER_MODULES
     ]
     solver_hashes = [_sha256_file(Path(path)) for path in solver_paths]

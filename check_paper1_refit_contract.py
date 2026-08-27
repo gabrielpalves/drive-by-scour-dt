@@ -1,6 +1,6 @@
 """Mutation checks for Option-C adjudication and channel selection.
 
-Run: ``py -3.13 check_paper1_refit_contract.py``
+Run: ``python check_paper1_refit_contract.py``
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from core.paper1_refit_contract import (
     validate_channel_selection_artifact,
     validate_development_artifact,
 )
-from core.paper1_selection import build_selection_artifact
+from core.paper1_selection import Paper1SelectionError, build_selection_artifact
 from core.paper1_dispatch import assigned_training_host, training_manifests
 from core.paper1_training_contract import (
     DEVELOPMENT_INIT_SEEDS,
@@ -57,7 +57,11 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 def rejects(name: str, function) -> None:
     try:
         function()
-    except (Paper1RefitContractError, executor.Paper1ExecutionError):
+    except (
+        Paper1RefitContractError,
+        Paper1SelectionError,
+        executor.Paper1ExecutionError,
+    ):
         check(name, True)
     except Exception as exc:  # noqa: BLE001 - mutation diagnostic
         check(name, False, f"unexpected {type(exc).__name__}: {exc}")
@@ -191,12 +195,12 @@ def channel_results(adjudication: dict) -> list[dict]:
         pipeline = adjudication["slot_resolution"][slot]
         selector = job["input_selector"]
         # Singles deliberately look better than pairs, proving they remain
-        # nonselectable. Pair [1,3] is the registered synthetic winner.
+        # nonselectable. Eligible pair [1,5] is the synthetic winner.
         if len(selector) == 1:
             base = 0.01 + selector[0] / 10000
         else:
             base = 0.1 + input_order.index(selector) / 1000
-            if selector == [1, 3]:
+            if selector == [1, 5]:
                 base = 0.05
         base += SCREEN_REFIT_SEEDS.index(job["initialization_seed"]) / 100000
         canonical_job = next(
@@ -286,12 +290,14 @@ def main() -> None:
     screen_results = channel_results(adjudication)
     channel = build_channel_selection_artifact(screen_results, adjudication)
     check(
-        "channel artefact authenticates full 720-job tensor and alias deduplication",
-        len(channel["source_results"]) == 720
+        "channel artefact authenticates full 420-job tensor and alias deduplication",
+        len(channel["source_results"]) == 420
         and channel["aggregation_policy"] == CHANNEL_AGGREGATION_POLICY
-        and len(channel["reported_inputs"]) == 36
-        and len(channel["eligible_pairs"]) == 28
-        and channel["selected_pair"] == [1, 3]
+        and channel["aggregation_policy"]["eligible_set"]
+        == "all_15_learning_eligible_pairs_only"
+        and len(channel["reported_inputs"]) == 21
+        and len(channel["eligible_pairs"]) == 15
+        and channel["selected_pair"] == [1, 5]
         and len(channel["unique_resolved_pipelines"]) == 2
         and validate_channel_selection_artifact(
             channel, adjudication=adjudication
@@ -332,9 +338,25 @@ def main() -> None:
             "channel_screen_manifest": channel["artifact_sha256"],
         },
     )
+    rejects(
+        "wheelset diagnostic proxy selected as a sensor",
+        lambda: build_selection_artifact(
+            campaign_run_tag=adjudication["campaign_run_tag"],
+            selected_pair=[1, 3],
+            best_raw=adjudication["best_raw"],
+            best_paa=adjudication["best_paa"],
+            evidence_sha256={
+                "factorial_hpo_manifest": "a" * 64,
+                "development_adjudication_manifest": adjudication[
+                    "artifact_sha256"
+                ],
+                "channel_screen_manifest": channel["artifact_sha256"],
+            },
+        ),
+    )
     check(
         "downstream selection binds both complete aggregate artefacts",
-        final_selection["selected_pair"] == [1, 3]
+        final_selection["selected_pair"] == [1, 5]
         and final_selection["evidence_sha256"]["development_adjudication_manifest"]
         == adjudication["artifact_sha256"]
         and final_selection["evidence_sha256"]["channel_screen_manifest"]

@@ -1,8 +1,9 @@
-"""Fail-closed import boundary for campaign and evidence entrypoints.
+"""Portable project-import boundary for campaign entrypoints.
 
-The package intentionally lives at the repository top level and contains a
-regular ``__init__.py``.  Python therefore resolves it before a same-name
-module file, unlike the former guard below the namespace package ``core``.
+The guard prevents the campaign's own packages from resolving to another copy.
+It intentionally accepts virtualenv, Conda, system Python, additional search
+paths and relocated/extracted workspaces; those are provenance, not scientific
+eligibility conditions.
 """
 
 from __future__ import annotations
@@ -256,51 +257,6 @@ def _validate_guard_origin(source_root: str) -> None:
         )
 
 
-def _expected_search_paths(
-    source_root: str,
-    site_packages: str,
-) -> list[str]:
-    base = _require_canonical_directory(
-        sys.base_prefix, "CPython base prefix"
-    )
-    prefix = _require_canonical_directory(
-        sys.prefix, "campaign virtual-environment prefix"
-    )
-    python_tag = f"python{sys.version_info.major}{sys.version_info.minor}.zip"
-    return [
-        _normal_canonical(source_root),
-        _normal_canonical(os.path.join(base, python_tag)),
-        _normal_canonical(os.path.join(base, "DLLs")),
-        _normal_canonical(os.path.join(base, "Lib")),
-        _normal_canonical(base),
-        _normal_canonical(prefix),
-        _normal_canonical(site_packages),
-    ]
-
-
-def _validate_import_search_path(
-    source_root: str,
-    site_packages: str,
-) -> None:
-    resolved: list[str] = []
-    for entry in sys.path:
-        if not isinstance(entry, str):
-            raise ImportBoundaryError("sys.path contains a non-text entry")
-        selected = entry if entry else os.getcwd()
-        if _normal_absolute(selected) != _normal_canonical(selected):
-            raise ImportBoundaryError(
-                f"sys.path contains a reparse/aliased entry: {entry!r}"
-            )
-        resolved.append(_normal_canonical(selected))
-
-    expected = _expected_search_paths(source_root, site_packages)
-    if resolved != expected:
-        raise ImportBoundaryError(
-            "Python import-path order differs from the campaign contract: "
-            f"{resolved!r}"
-        )
-
-
 def _validate_project_resolution(source_root: str) -> None:
     for _folded, entry in _PROJECT_PACKAGES.items():
         spec = importlib.machinery.PathFinder.find_spec(entry, sys.path)
@@ -319,248 +275,6 @@ def _validate_project_resolution(source_root: str) -> None:
         ):
             raise ImportBoundaryError(
                 f"reviewed package {entry} resolves from another origin"
-            )
-
-
-def _path_is_within(path: str, root: str) -> bool:
-    try:
-        return os.path.commonpath(
-            (_normal_canonical(path), _normal_canonical(root))
-        ) == _normal_canonical(root)
-    except (OSError, ValueError):
-        return False
-
-
-def _originless_child_has_authenticated_parent(
-    module_name: str,
-    required_root: str,
-    *,
-    allow_special_origin: bool,
-) -> bool:
-    """Recognize extension-created child modules through their loaded parent."""
-    parent_name = module_name
-    while "." in parent_name:
-        parent_name = parent_name.rsplit(".", 1)[0]
-        parent = sys.modules.get(parent_name)
-        if parent is None:
-            continue
-        spec = getattr(parent, "__spec__", None)
-        spec_origin = getattr(spec, "origin", None)
-        if allow_special_origin and spec_origin in {"built-in", "frozen"}:
-            return True
-        for origin in (getattr(parent, "__file__", None), spec_origin):
-            if (
-                isinstance(origin, str)
-                and os.path.isabs(origin)
-                and os.path.isfile(origin)
-                and _normal_absolute(origin) == _normal_canonical(origin)
-                and _path_is_within(origin, required_root)
-            ):
-                return True
-    return False
-
-
-def _validate_loaded_module_origins(
-    source_root: str,
-    site_packages: str,
-) -> None:
-    """Reject modules loaded before the guard from unauthorized origins."""
-    base = os.path.abspath(sys.base_prefix)
-    prefix = os.path.abspath(sys.prefix)
-    authorized_roots = (source_root, base, prefix)
-    root_modules = _root_python_modules(source_root)
-    reviewed_sources = _reviewed_source_names(source_root)
-    manifested_root_modules = {
-        folded: entry
-        for folded, entry in root_modules.items()
-        if entry in reviewed_sources
-    }
-    installed_names = _installed_top_level_names(site_packages)
-    stdlib_names = {name.casefold() for name in sys.stdlib_module_names}
-    project_packages = {
-        **_PROJECT_PACKAGES,
-        _GUARD_PACKAGE: _GUARD_PACKAGE,
-    }
-    protected_names = (
-        set(manifested_root_modules)
-        | set(project_packages)
-        | installed_names
-        | stdlib_names
-        | _STARTUP_MODULES
-    )
-
-    for module_name, module in tuple(sys.modules.items()):
-        top_name = module_name.split(".", 1)[0]
-        folded_top = top_name.casefold()
-        if module is None:
-            if folded_top in protected_names:
-                raise ImportBoundaryError(
-                    f"protected module is a preloaded failure sentinel: "
-                    f"{module_name!r}"
-                )
-            continue
-        if folded_top in _STARTUP_MODULES:
-            raise ImportBoundaryError(
-                f"external Python startup customizer was preloaded: "
-                f"{module_name!r}"
-            )
-        required_root = None
-        if folded_top in project_packages:
-            required_root = os.path.join(
-                source_root, project_packages[folded_top]
-            )
-        elif folded_top in manifested_root_modules:
-            required_root = source_root
-        elif folded_top in stdlib_names:
-            required_root = base
-        elif folded_top in installed_names:
-            required_root = site_packages
-        authenticated_parent = (
-            required_root is not None
-            and _originless_child_has_authenticated_parent(
-                module_name,
-                required_root,
-                allow_special_origin=folded_top in stdlib_names,
-            )
-        )
-
-        spec = getattr(module, "__spec__", None)
-        spec_origin = getattr(spec, "origin", None)
-        file_origin = getattr(module, "__file__", None)
-        special_origin = spec_origin in {"built-in", "frozen"}
-        origins: list[str] = []
-        for label, origin in (
-            ("__file__", file_origin),
-            ("spec.origin", spec_origin),
-        ):
-            if origin is None or origin in {"built-in", "frozen"}:
-                continue
-            if not isinstance(origin, str) or not os.path.isabs(origin):
-                if authenticated_parent and spec is None:
-                    continue
-                raise ImportBoundaryError(
-                    f"preloaded module {module_name!r} has invalid "
-                    f"{label}: {origin!r}"
-                )
-            if (
-                not os.path.isfile(origin)
-                or _normal_absolute(origin) != _normal_canonical(origin)
-            ):
-                raise ImportBoundaryError(
-                    f"preloaded module {module_name!r} has a noncanonical "
-                    f"{label}: {origin!r}"
-                )
-            origins.append(origin)
-
-        locations = getattr(spec, "submodule_search_locations", None)
-        location_paths: list[str] = []
-        if locations is not None:
-            for location in locations:
-                if not isinstance(location, str) or not os.path.isabs(location):
-                    raise ImportBoundaryError(
-                        f"preloaded package {module_name!r} has an invalid "
-                        f"search location: {location!r}"
-                    )
-                if (
-                    not os.path.isdir(location)
-                    or _normal_absolute(location)
-                    != _normal_canonical(location)
-                ):
-                    raise ImportBoundaryError(
-                        f"preloaded package {module_name!r} has a "
-                        f"noncanonical search location: {location!r}"
-                    )
-                location_paths.append(location)
-
-        paths = origins + location_paths
-        if any(
-            not any(_path_is_within(path, root) for root in authorized_roots)
-            for path in paths
-        ):
-            raise ImportBoundaryError(
-                f"preloaded module {module_name!r} came from outside the "
-                "authorized campaign roots"
-            )
-        if (
-            folded_top in root_modules
-            and folded_top not in manifested_root_modules
-        ):
-            raise ImportBoundaryError(
-                f"unmanifested repository-root module was preloaded: "
-                f"{module_name!r}"
-            )
-        if folded_top not in protected_names:
-            continue
-        authenticated_originless_child = (
-            not paths
-            and authenticated_parent
-        )
-        if not paths and not (
-            (special_origin and folded_top in stdlib_names)
-            or authenticated_originless_child
-        ):
-            raise ImportBoundaryError(
-                f"protected preloaded module has no authenticated origin: "
-                f"{module_name!r}"
-            )
-
-        if folded_top in project_packages:
-            canonical_top = project_packages[folded_top]
-            project_root = os.path.join(source_root, canonical_top)
-            if top_name != canonical_top or any(
-                not _path_is_within(path, project_root)
-                for path in paths
-            ):
-                raise ImportBoundaryError(
-                    f"preloaded project package {module_name!r} came from "
-                    "another origin"
-                )
-            if module_name == top_name:
-                expected_init = os.path.join(project_root, "__init__.py")
-                if not origins or any(
-                    _normal_canonical(origin)
-                    != _normal_canonical(expected_init)
-                    for origin in origins
-                ):
-                    raise ImportBoundaryError(
-                        f"preloaded project package {module_name!r} does not "
-                        "use its reviewed initializer"
-                    )
-        elif folded_top in manifested_root_modules:
-            expected_name = manifested_root_modules[folded_top][:-3]
-            expected_file = os.path.join(
-                source_root, manifested_root_modules[folded_top]
-            )
-            if (
-                top_name != expected_name
-                or module_name != top_name
-                or not origins
-                or any(
-                    _normal_canonical(origin)
-                    != _normal_canonical(expected_file)
-                    for origin in origins
-                )
-            ):
-                raise ImportBoundaryError(
-                    f"preloaded reviewed module {module_name!r} came from "
-                    "another origin"
-                )
-        elif folded_top in stdlib_names:
-            if paths and any(
-                not _path_is_within(path, base)
-                for path in paths
-            ):
-                raise ImportBoundaryError(
-                    f"preloaded standard-library module {module_name!r} "
-                    "came from another origin"
-                )
-        elif folded_top in installed_names and any(
-            not _path_is_within(path, site_packages)
-            for path in paths
-        ):
-            raise ImportBoundaryError(
-                f"preloaded installed module {module_name!r} came from "
-                "another origin"
             )
 
 
@@ -624,18 +338,27 @@ def validate_source_tree(
 
 
 def enforce_import_boundary() -> dict[str, int]:
-    """Enforce the complete boundary before scientific imports occur."""
+    """Ensure project packages resolve from this workspace.
+
+    Dependency availability is checked by :mod:`core.environment`.  Exact
+    ``sys.path`` layout, environment manager and physical path aliases are not
+    prescribed because they do not define the physics or learning protocol.
+    """
     global _BOUNDARY_ENFORCED
-    for variable in ("PYTHONPATH", "PYTHONHOME"):
-        if variable in os.environ:
-            raise ImportBoundaryError(
-                f"{variable} must be absent before campaign imports"
-            )
-    source_root = os.path.dirname(os.path.dirname(__file__))
-    site_packages = os.path.join(sys.prefix, "Lib", "site-packages")
-    _validate_import_search_path(source_root, site_packages)
-    result = validate_source_tree(source_root, site_packages)
-    _validate_loaded_module_origins(source_root, site_packages)
+    source_root = os.path.realpath(os.path.dirname(os.path.dirname(__file__)))
+    if not any(
+        isinstance(entry, str)
+        and _normal_canonical(entry if entry else os.getcwd())
+        == _normal_canonical(source_root)
+        for entry in sys.path
+    ):
+        sys.path.insert(0, source_root)
     _validate_project_resolution(source_root)
+    result = {
+        "project_packages": len(_PROJECT_PACKAGES),
+        "search_paths": len(sys.path),
+        "pythonpath_present": int("PYTHONPATH" in os.environ),
+        "pythonhome_present": int("PYTHONHOME" in os.environ),
+    }
     _BOUNDARY_ENFORCED = True
     return result

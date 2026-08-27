@@ -54,13 +54,13 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ──────────────────────────────────────────────────────────────────────────────
 # Training + search-space PROTOCOL (unified protocol_hash, 2026-07-19)
 # ──────────────────────────────────────────────────────────────────────────────
-# Single source of truth: the training code below reads TRAIN_PROTOCOL, and
-# _suggest_params reads SEARCH_SPACE. core/protocol.py folds both into the
-# protocol hash, so changing any value here changes every study/manifest/
-# summary name in lockstep — a re-run can never silently resume studies that
-# trained under a different protocol. check_protocol_hash.py additionally
-# drives _suggest_params with a recording stub and verifies every suggestion
-# it makes matches SEARCH_SPACE exactly (belt-and-braces against drift).
+# Single source of truth: the primary training code below reads TRAIN_PROTOCOL
+# and SEARCH_SPACE. core/protocol.py folds both into the primary protocol hash,
+# so changing either cannot silently resume an incompatible study. Optional
+# ModernTCN/TSLANet studies instead read the separately hashed, data-only
+# registry in core.challenger_policy; dormant challenger families therefore do
+# not rewrite the 16-cell factorial identity. check_protocol_hash.py drives
+# both paths with recording stubs and verifies every suggestion independently.
 
 TRAIN_PROTOCOL = {
     "batch_size":  32,       # train + val DataLoader batch size
@@ -699,11 +699,13 @@ def _suggest_params(trial, config: dict) -> dict:
     when the corresponding architecture flag is active, keeping the search
     space minimal and the Optuna DB schema clean across ablation variants.
 
-    PROTOCOL (2026-07-19): every range/choice comes from SEARCH_SPACE (the
-    hashed protocol data) via _suggest_one — no literal here. The CALL ORDER
-    is preserved exactly from the pre-refactor code (n_conv, n_dense, lr,
-    weight_decay, per-conv blocks, per-dense blocks, lstm_num_layers before
-    lstm_hidden_size, nhits) so a seeded sampler reproduces identical trials.
+    Primary ranges come from SEARCH_SPACE; optional contemporary families come
+    from the separately hashed core.challenger_policy registry. Every spec is
+    executed through _suggest_one, with no range literals here. The primary
+    CALL ORDER is preserved exactly from the pre-refactor code (n_conv,
+    n_dense, lr, weight_decay, per-conv blocks, per-dense blocks,
+    lstm_num_layers before lstm_hidden_size, nhits), so a seeded sampler still
+    reproduces identical primary trials.
     """
     SS = SEARCH_SPACE
     frozen = config.get("frozen_hyperparameters")
@@ -714,6 +716,54 @@ def _suggest_params(trial, config: dict) -> dict:
         if frozen is None:
             return _suggest_one(trial, name, spec)
         return _suggest_frozen_one(trial, name, spec, frozen)
+
+    model_type = str(config.get("model_type", "1D_MODULAR")).upper()
+    if model_type in {"MODERN_TCN", "TSLANET"}:
+        from core.challenger_policy import (
+            CHALLENGER_OPTIMIZER_SPACE,
+            CHALLENGER_SEARCH_SPACES,
+        )
+        family_space = CHALLENGER_SEARCH_SPACES[model_type]
+    else:
+        family_space = None
+    if family_space is not None:
+        if config.get("method") == "PAA_CWT":
+            raise ValueError(
+                f"{model_type} consumes 1-D RAW/PAA tensors and cannot use "
+                "the 2-D PAA_CWT representation"
+            )
+        incompatible_flags = [
+            key for key in ("use_space2vec", "use_lstm", "use_nhits")
+            if config.get(key, False)
+        ]
+        if incompatible_flags:
+            raise ValueError(
+                f"{model_type} is a separate challenger family; legacy "
+                f"architecture flags must be false (active={incompatible_flags})"
+            )
+        params = {
+            "lr": suggest("lr", CHALLENGER_OPTIMIZER_SPACE["lr"]),
+            "weight_decay": suggest(
+                "weight_decay", CHALLENGER_OPTIMIZER_SPACE["weight_decay"]
+            ),
+        }
+        for key, spec in family_space.items():
+            params[key] = suggest(key, spec)
+
+        if frozen is not None and set(params) != set(frozen):
+            missing = sorted(set(params) - set(frozen))
+            extra = sorted(set(frozen) - set(params))
+            raise ValueError(
+                "frozen hyperparameter keyset does not match the active "
+                f"architecture (missing={missing}, extra={extra})"
+            )
+        return params
+
+    if model_type not in {"1D_MODULAR", "2D_CNN"}:
+        raise ValueError(
+            f"unsupported model_type {model_type!r}; expected 1D_MODULAR, "
+            "2D_CNN, MODERN_TCN, or TSLANET"
+        )
 
     n_conv  = suggest('n_conv_layers',  SS['base']['n_conv_layers'])
     n_dense = suggest('n_dense_layers', SS['base']['n_dense_layers'])

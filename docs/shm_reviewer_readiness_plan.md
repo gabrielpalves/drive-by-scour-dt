@@ -1,14 +1,14 @@
 # SHM reviewer-readiness plan
 
-**Status:** Paper-1 source decisions frozen; external qualification and release gates remain
+**Status:** Paper-1 source decisions frozen; final source audit and portable bundle publication remain
 
 **Scope:** scientific validity, interpretability, and reproducibility for an
-SHM/railway-bridge audience; no external preregistration deposit is required.
+SHM/railway-bridge audience.
 
 The earlier audit could correctly say that P1-R1 was the only remaining item
 under its narrow pre-A source-control scope. The expanded goal is stronger:
 the scientific changes below should be completed before establishing a new
-clean commit A and recomputing source hashes.
+clean campaign commit and recomputing source hashes.
 
 ## Paper-1 disposition — 2026-08-09 (controls the historical checklist below)
 
@@ -19,14 +19,14 @@ conflicts; an unchecked historical item does not override this table.
 | Topic | Paper-1 disposition |
 |---|---|
 | Weighted track sampler and campaign-specific track priors | **Deferred mechanism hardening, not a Paper-1 generation blocker.** Track EOV/damage is disabled by authenticated configuration in all four production blocks. The existing fail-closed descriptor and finite-attempt guards remain active; rare-failure and prior-boundary tests stay in the later track-mechanism queue. |
-| Ballast `Kw`/`Cw` topology and on-bridge condensation | **Accepted inherited simplified topology.** No topology arm is added before generation. If a constrained-wheelset channel wins selection, the preregistered contingency is to implement the arm under a new source root or not headline that channel. |
+| Ballast `Kw`/`Cw` topology and on-bridge condensation | **Accepted inherited simplified topology.** No topology arm is added before generation. Constrained-wheelset proxies are diagnostic-only payload rows, are excluded from learning/selection, and cannot support a headline sensor claim. |
 | One-seat/two-rail scaling, 0.545→0.600 m transfer, and rail damping | **Complete.** The inherited hybrid baseline remains production; prospective paired one-seat, two-rail, spacing-consistent, and 0.05%/0.20% damping arms have run. |
 | Fixed-healthy Rayleigh closure | **Complete.** Production remains state/grid-recalibrated; the fixed-healthy-coefficient sensitivity has run for scour, bearing fixity, and crack. |
 | Finite rail domain | **Complete.** The final 18-case F40/L99 × operating-point × 6/15/30 m matrix passed and selected 6 m under `paper1-rail-domain-clearance-c06-v1`. |
-| Manuscript mesh/channel/track/damping corrections | **Complete.** The manuscript now states the geometry-specific meshes, `physical8_v1` idealized constrained-wheelset proxy, inherited hybrid scaling/topology, and damping boundaries. |
-| Numerical mesh/time-step packages and upstream/contact comparisons | **Implemented harnesses, external execution/authorization pending.** Exact-host qualification and contact closure block dispatch, not source implementation. Broader upstream reproduction remains a pre-publication validation task and cannot be inferred from the finite-domain result. |
-| Training robustness | **Implemented, execution pending.** The campaign registers 160 HPO studies and 1,740 refit jobs before authenticated alias deduplication, including grouped development OOF, channel screening, post-freeze stability, and secondary frozen transfer. |
-| Source/release closure | **In progress.** Deliberate path disposition, the final serial suite, clean commit A, CUDA capacity/benchmark receipts, exact-host qualification, contact authorization, and bundle verification remain mandatory. |
+| Manuscript mesh/channel/track/damping corrections | **Complete.** The manuscript now states the geometry-specific meshes, the eight-response `physical8_v1` payload with diagnostic-only wheelset proxies, the six-channel learning set, the shared fixed-phase FRA-class-4 profile, inherited hybrid scaling/topology, and damping boundaries. |
+| Numerical mesh/time-step packages and upstream/contact comparisons | **Implemented harnesses; local execution required.** The source-level contact/time-step closure and each generation PC's capability plus healthy/damaged physics smokes are gates. Exact MATLAB-release matching and pairwise release comparisons are optional diagnostics. Broader upstream reproduction remains a later validation task and cannot be inferred from the finite-domain result. |
+| Training robustness | **Primary grid implemented, execution pending.** The six-ZIP campaign registers exactly 160 HPO studies and 1,440 refit jobs (1,600 listed primary jobs) before authenticated alias deduplication, including grouped development OOF, the 420-job six-single/15-pair screen, post-freeze stability, and secondary frozen transfer. Contemporary challengers are currently contract/model-only: this publication has no challenger executor or manifest and therefore no runnable/claimable challenger result. Any later separately audited dispatch must use the same authenticated primary F40-S pair. |
+| Source/release closure | **In progress.** Deliberate path disposition, the final integrated suite, one clean campaign commit, atomic publication and hash verification of all six ZIPs, local capability/physics smokes on every generation PC, and local CUDA capacity preflight on every training PC remain mandatory. Runtime versions and GPU identities are provenance; timing benchmarks are optional. |
 
 The exact pre-commit model-form receipts and their claim boundaries are recorded
 in [`evidence/paper1_model_form_freeze_20260809.json`](evidence/paper1_model_form_freeze_20260809.json).
@@ -87,11 +87,11 @@ in [`evidence/paper1_model_form_freeze_20260809.json`](evidence/paper1_model_for
 - [ ] Withdraw the manuscript's statement that every per-rail track quantity
   is summed into a two-rail planar model until the per-rail-seat scaling issue
   above is resolved.
-- [ ] Correct the manuscript's two `AcelRodaPrimVag` channel descriptions. They
-  are rail FE acceleration-field values interpolated under the wheel positions,
-  not total wheelset accelerations. Non-`.tex` code and documentation now use
-  the correct semantics; `.tex` remains untouched under the current audit
-  constraint.
+- [x] Supersede the historical `AcelRodaPrimVag` ambiguity in the manuscript.
+  `physical8_v1` indices 3/4 are explicitly constrained-wheelset kinematic
+  diagnostics, not sensors or independent DOFs, and are excluded from every
+  learning/selection input; `acc_under` remains the separately named Eulerian
+  rail-field diagnostic.
 
 ## B. Mechanism-level scientific verification
 
@@ -172,13 +172,15 @@ boundaries are specified in
   those longer bridge configurations.
 - [ ] Keep `AcelRodaPrimVag` and `Wheel*_Vert` explicitly marked as legacy
   identifiers wherever compatibility requires them; figures and scientific
-  prose must use the canonical rail-under-wheel Eulerian-acceleration meaning.
+  prose must use the canonical diagnostic-only constrained-wheelset kinematic
+  meaning, while `acc_under` names the Eulerian rail-under-wheel field.
 - [ ] Keep the live Python TTBI path nonqualifying until damaged-response parity
   is closed.
 - [ ] Inspect suspicious untracked root files before any staging; never stage
   the entire dirty tree blindly.
 - [ ] After scientific convergence: recompute source roots, run the complete
-  MATLAB/Python qualification suite, create one clean commit A, and record exact
-  commands/environment/data hashes. A Git revision and availability statement
-  are sufficient for SHM reproducibility; OSF/Zenodo preregistration is not a
-  requirement for this study.
+  MATLAB/Python suite, create one clean campaign commit, build and verify all six
+  ZIPs atomically, then run the per-PC capability/physics and CUDA-capacity
+  checks. Record exact commands, environments, hardware, and data hashes as
+  provenance; resume and analysis remain bound to scientific job identity and
+  authenticated artifacts.

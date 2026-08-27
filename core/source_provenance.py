@@ -6,8 +6,9 @@ canonical SHA-256 roots:
 
 * ``generator_source_root`` covers every listed ``scour_MATLAB/`` file,
   including MATLAB code and numerical assets;
-* ``python_runtime_source_root`` covers every listed Python file plus the
-  Python/MATLAB environment lock and pinned requirements.
+* ``python_runtime_source_root`` covers every listed executable Python file.
+  Known-good environment and requirements files remain bundle provenance and
+  setup guidance, but their version text cannot move the scientific core hash.
 
 Training bundles no longer rewrite scientific presets in the Python driver.
 They carry an external, content-addressed ``TTBI_TRAINING_JOB_MANIFEST`` whose
@@ -31,9 +32,10 @@ import unicodedata
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE_MANIFEST = "bundle_source_files.txt"
-ENVIRONMENT_LOCK = "environment/campaign-py313-cu128.json"
-REQUIREMENTS_LOCK = "requirements-campaign-py313-cu128.txt"
 DRIVER = "comprehensive_ablation_multidamage.py"
+NONBINDING_POLICY_INPUTS = (
+    "environment/campaign-py313-cu128.json",
+)
 REGULAR_PROJECT_PACKAGES = (
     "campaign_import_guard",
     "core",
@@ -1081,16 +1083,27 @@ def repository_source_snapshot(
     runtime_names = tuple(
         name for name in all_names
         if name.endswith(".py")
-        or name in {ENVIRONMENT_LOCK, REQUIREMENTS_LOCK}
     )
-    required = {DRIVER, ENVIRONMENT_LOCK, REQUIREMENTS_LOCK}
+    required = {DRIVER}
     missing = sorted(required - set(runtime_names))
     if missing:
         raise SourceProvenanceError(
             f"runtime source manifest lacks required entries: {missing}"
         )
+    missing_policy_inputs = sorted(
+        set(NONBINDING_POLICY_INPUTS) - set(all_names)
+    )
+    if missing_policy_inputs:
+        raise SourceProvenanceError(
+            "source manifest lacks nonbinding policy inputs: "
+            f"{missing_policy_inputs}"
+        )
     captured_names = tuple(
-        sorted(set(generator_names) | set(runtime_names))
+        sorted(
+            set(generator_names)
+            | set(runtime_names)
+            | set(NONBINDING_POLICY_INPUTS)
+        )
     )
     snapshots = {
         name: _regular_snapshot(root, name) for name in captured_names
@@ -1147,5 +1160,5 @@ def generator_source_root(
 def python_runtime_source_root(
     repo: str | Path = REPO,
 ) -> SourceRoot:
-    """Hash executable Python bytes and their pinned environment inputs."""
+    """Hash executable Python bytes, excluding nonbinding setup references."""
     return repository_source_snapshot(repo).python_runtime

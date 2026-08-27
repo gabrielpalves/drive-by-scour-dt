@@ -1,6 +1,6 @@
 """Mutation checks for authenticated Paper-1 selected-pair HPO.
 
-Run: ``py -3.13 check_paper1_selection_contract.py``
+Run: ``python check_paper1_selection_contract.py``
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ def selection() -> dict:
     )
     return build_selection_artifact(
         campaign_run_tag="paper1-qualified-run",
-        selected_pair=[1, 3],
+        selected_pair=[1, 5],
         best_raw=best_raw,
         best_paa=best_paa,
         evidence_sha256={
@@ -133,7 +133,7 @@ def main() -> None:
         and all(
             resolve_selection_claim(
                 artifact, stage=stage, slot="f40s_best_raw"
-            )["selected_pair"] == [1, 3]
+            )["selected_pair"] == [1, 5]
             for stage in ("F40-S", "F40-M", "L99-S", "L99-M")
         ),
     )
@@ -156,8 +156,10 @@ def main() -> None:
     semantic_mutations.append(("wrong selection stage", resign(mutant)))
     mutant = deepcopy(artifact); mutant["applicable_stages"][-1] = "foreign"
     semantic_mutations.append(("wrong applicable stage", resign(mutant)))
-    mutant = deepcopy(artifact); mutant["selected_pair"] = [3, 1]
+    mutant = deepcopy(artifact); mutant["selected_pair"] = [5, 1]
     semantic_mutations.append(("unordered pair", resign(mutant)))
+    mutant = deepcopy(artifact); mutant["selected_pair"] = [1, 3]
+    semantic_mutations.append(("wheelset proxy channel", resign(mutant)))
     mutant = deepcopy(artifact); mutant["selected_pair"] = [1, 1]
     semantic_mutations.append(("duplicate channel", resign(mutant)))
     mutant = deepcopy(artifact); mutant["selected_pair"] = [1, 8]
@@ -205,7 +207,7 @@ def main() -> None:
         plan["mode"] == SELECTED_PAIR_HPO_MODE
         and plan["effective_n_trials"] == 100
         and plan["effective_use_pruner"] is True
-        and plan["active_dofs"] == [1, 3]
+        and plan["active_dofs"] == [1, 5]
         and plan["selection_artifact_sha256"] == artifact["artifact_sha256"]
         and plan["selection_slot"] == "f40s_best_raw"
         and validate_run_plan(plan) == plan,
@@ -272,7 +274,7 @@ def main() -> None:
                 result == {"schema": "fixture-completion"}
                 and captured["architecture"]["name_short"]
                 == artifact["slot_resolution"]["f40s_best_raw"]
-                and captured["dofs"] == [1, 3]
+                and captured["dofs"] == [1, 5]
                 and captured["hyperparameter_mode"] == SELECTED_PAIR_HPO_MODE
                 and captured["selection_slot"] == "f40s_best_raw",
             )
@@ -310,7 +312,7 @@ def main() -> None:
 
     baseline_artifact = build_selection_artifact(
         campaign_run_tag="paper1-qualified-run",
-        selected_pair=[1, 3],
+        selected_pair=[1, 5],
         best_raw=RAW_CNN_GAP_BASELINE_ID,
         best_paa=PAA_CNN_GAP_BASELINE_ID,
         evidence_sha256={

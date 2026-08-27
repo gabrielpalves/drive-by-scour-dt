@@ -5,9 +5,9 @@ function P = contact_gate_policy()
 % struct (stages, expected case inventory, refinement steps, diagnostic
 % gates, tolerances, GCI parameters, channel inventory), (b) its canonical
 % key=value descriptor projection used for the policy SHA-256, and (c) the
-% locked-MATLAB-environment validation that pins the exact R2025b Update 5
-% numerical stack.  Nothing here touches the filesystem outside reading the
-% reviewed environment lock; no solver state is consulted.
+% MATLAB reference/live-descriptor validation used for provenance. Exact
+% release equality is not a gate; local capabilities and closure numerics are.
+% Nothing here touches solver state.
 %
 % RATIONALE: the policy literals (notably policy.expected_cases = 420 and
 % policy.stages) are scientific commitments verified byte-for-byte by the

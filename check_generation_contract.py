@@ -1,7 +1,7 @@
 """Executable R11 MATLAB-generation provenance and pool contract.
 
 This checker ties together the MATLAB generator, Python loader/study tag,
-campaign environment lock, canonical MATLAB-environment identity, reviewed
+known-good environment reference, canonical MATLAB-environment identity, reviewed
 generator-source root, atomic state serializer, resume guards, and bounded
 process pool. Mutations operate only on in-memory strings.
 
@@ -110,7 +110,7 @@ EXPECTED_BEHAVIOR_VERSION = EXPECTED_GENERATION_BEHAVIOR_VERSION
 EXPECTED_STUDY_TAG = EXPECTED_PROTOCOL_SCHEMA_TAG
 EXPECTED_CHANNEL_SCHEMA = EXPECTED_CHANNEL_SCHEMA_ID
 EXPECTED_MATLAB_RELEASE = "R2025b"
-EXPECTED_ENVIRONMENT_SCHEMA = "ttbi-campaign-environment-v2"
+EXPECTED_ENVIRONMENT_SCHEMA = "ttbi-campaign-environment-v3"
 EXPECTED_MATLAB_ENVIRONMENT_SHA256 = (
     "958e7fe28f70577e9cb77aba0443c127d0a99726042a4618f7cce88d557fce79"
 )
@@ -524,12 +524,12 @@ def _validate_environment(environment_source: str) -> dict:
     except json.JSONDecodeError as exc:
         raise ContractError("environment lock is not valid JSON") from exc
     if lock.get("schema") != EXPECTED_ENVIRONMENT_SCHEMA:
-        raise ContractError("environment lock is not the reviewed v2 schema")
+        raise ContractError("environment reference is not the reviewed v3 schema")
     if "matlab_release" in lock:
         raise ContractError("coarse top-level matlab_release key returned")
     matlab_environment = lock.get("matlab_environment")
     if matlab_environment != EXPECTED_MATLAB_ENVIRONMENT:
-        raise ContractError("campaign MATLAB environment differs from exact lock")
+        raise ContractError("known-good MATLAB reference descriptor drifted")
     descriptor = _matlab_environment_descriptor(matlab_environment)
     actual_sha = hashlib.sha256(descriptor.encode("utf-8")).hexdigest()
     if actual_sha != EXPECTED_MATLAB_ENVIRONMENT_SHA256:
@@ -747,17 +747,20 @@ def _validate_helpers(a00: str, source_root: str) -> None:
         )
 
     for token in (
-        "release_info = matlabRelease;",
         "full_version = char(version);",
         "matlab_product_version = regexp(full_version, '^\\d+\\.\\d+', ...",
-        "'release', char(release_info.Release)",
+        "'release', ['R' char(version('-release'))]",
         "'version', full_version",
         "'arch', char(computer('arch'))",
         "'blas', strtrim(char(version('-blas')))",
         "'lapack', strtrim(char(version('-lapack')))",
         "'matlab_product_version', matlab_product_version",
-        "'statistics_toolbox_version', char(statistics_info.Version)",
-        "'parallel_toolbox_version', char(parallel_info.Version)",
+        "'statistics_toolbox_version', char(statistics_info(1).Version)",
+        "'parallel_toolbox_version', char(parallel_info(1).Version)",
+        "license('test', 'Statistics_Toolbox')",
+        "license('test', 'Distrib_Computing_Toolbox')",
+        "required_functions = {'lhsdesign', 'poissrnd', 'wblrnd', 'RandStream', ...",
+        "exist(name, 'builtin') == 0",
         "matlab_environment_identity(environment);",
     ):
         _once(CURRENT_ENV_SOURCE, token, f"actual MATLAB capture {token}")
@@ -1779,7 +1782,7 @@ def validate_contract(
         "if ispc",
         "normalized = lower(normalized);",
         "environment_lock_ = jsondecode(fileread(environment_lock_path_));",
-        "'ttbi-campaign-environment-v2'",
+        "'ttbi-campaign-environment-v3'",
         "campaign_matlab_environment = environment_lock_.matlab_environment;",
         "matlab_environment_identity(campaign_matlab_environment);",
         "actual_matlab_environment = current_matlab_environment();",
@@ -1825,19 +1828,31 @@ def validate_contract(
             "working-directory guard must precede environment/source execution"
         )
 
-    exact_environment_gate = (
+    reference_environment_branch = (
         "elseif ~strcmp(actual_matlab_environment_sha256, ...\n"
         "        campaign_matlab_environment_sha256)"
     )
-    _once(a00, exact_environment_gate, "production exact-environment gate")
-    if a00.index("if qualification_run") > a00.index(exact_environment_gate):
-        raise ContractError("qualification does not exclusively bypass env equality")
+    _once(
+        a00,
+        reference_environment_branch,
+        "portable reference-environment diagnostic branch",
+    )
+    diagnostic_start = a00.index(reference_environment_branch)
+    diagnostic_end = a00.index("\nelse\n", diagnostic_start)
+    diagnostic_block = a00[diagnostic_start:diagnostic_end]
+    if (
+        "warning('A00:ReferenceMATLABEnvironmentDiffers'" not in diagnostic_block
+        or "error('A00:CampaignMATLABEnvironment'" in diagnostic_block
+    ):
+        raise ContractError(
+            "MATLAB reference drift must warn and record, never reject production"
+        )
     if a00.index("environment_lock_ = jsondecode") > a00.index(
         "if qualification_run"
     ):
         raise ContractError("qualification bypasses environment-lock validation")
     if a00.index("generator_source_file_count] = generator_source_root();") < a00.index(
-        exact_environment_gate
+        reference_environment_branch
     ):
         raise ContractError("source identity call is unexpectedly inside env gate")
 
@@ -3642,14 +3657,14 @@ def main() -> None:
         "elseif ~strcmp(actual_matlab_environment_sha256, ...\n"
         "        campaign_matlab_environment_sha256)"
     )
-    add("actual-vs-campaign environment gate removed", ma=_replace_once(
+    add("actual-vs-reference environment diagnostic removed", ma=_replace_once(
         a00, gate, "elseif false"))
-    add("actual-vs-campaign environment gate inverted", ma=_replace_once(
+    add("actual-vs-reference diagnostic inverted", ma=_replace_once(
         a00, gate,
         "elseif strcmp(actual_matlab_environment_sha256, ...\n"
         "        campaign_matlab_environment_sha256)",
     ))
-    add("environment gate became self-comparison", ma=_replace_once(
+    add("environment diagnostic became self-comparison", ma=_replace_once(
         a00, gate,
         "elseif ~strcmp(actual_matlab_environment_sha256, ...\n"
         "        actual_matlab_environment_sha256)",

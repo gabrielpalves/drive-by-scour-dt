@@ -109,6 +109,8 @@ TIME_GRID_ULPS = 8
 WAVEFORM_MONOTONIC_ATOL = 1e-12
 FINEST_IDENTITY_ATOL = 1e-12
 CLOSURE_INTERPRETATION = "bounded-numerical-tension-engineering-v1"
+# Known-good reference values used by legacy qualification fixtures. They are
+# not live-host eligibility conditions.
 EXPECTED_MATLAB_RELEASE = "R2025b"
 EXPECTED_MATLAB_VERSION = "25.2.0.3177638 (R2025b) Update 5"
 EXPECTED_MATLAB_ENVIRONMENT_SHA256 = (
@@ -242,7 +244,7 @@ def _strict_json_file(path: Path, label: str) -> dict[str, Any]:
 
 def _locked_matlab_environment() -> tuple[dict[str, str], str, str]:
     lock = _strict_json_file(ENVIRONMENT_LOCK, "campaign environment lock")
-    if lock.get("schema") != "ttbi-campaign-environment-v2":
+    if lock.get("schema") != "ttbi-campaign-environment-v3":
         raise GateError("campaign environment lock has the wrong schema")
     environment = lock.get("matlab_environment")
     if not isinstance(environment, dict):
@@ -251,15 +253,56 @@ def _locked_matlab_environment() -> tuple[dict[str, str], str, str]:
         descriptor = matlab_environment_descriptor(environment)
         digest = matlab_environment_sha256(environment)
     except RuntimeError as exc:
-        raise GateError(f"malformed locked MATLAB descriptor: {exc}") from exc
-    if (
-        digest != EXPECTED_MATLAB_ENVIRONMENT_SHA256
-        or lock.get("matlab_environment_sha256") != digest
-        or environment.get("release") != EXPECTED_MATLAB_RELEASE
-        or environment.get("version") != EXPECTED_MATLAB_VERSION
-    ):
-        raise GateError("campaign lock is not exact R2025b Update 5")
+        raise GateError(f"malformed MATLAB reference descriptor: {exc}") from exc
+    if lock.get("matlab_environment_sha256") != digest:
+        raise GateError("campaign MATLAB reference descriptor/SHA mismatch")
     return environment, descriptor, digest
+
+
+def _validate_actual_matlab_environment(
+    descriptor: Any,
+    digest: Any,
+    release: Any,
+) -> dict[str, str]:
+    """Authenticate a live MATLAB descriptor without version allow-listing."""
+
+    if (
+        not isinstance(descriptor, str)
+        or not descriptor
+        or "\r" in descriptor
+        or descriptor.startswith("\n")
+        or descriptor.endswith("\n")
+        or "\n\n" in descriptor
+        or not isinstance(digest, str)
+        or not SHA256_RE.fullmatch(digest)
+        or not isinstance(release, str)
+        or not re.fullmatch(r"R\d{4}[ab]", release)
+    ):
+        raise GateError("actual MATLAB environment identity is malformed")
+    if _sha256_bytes(descriptor.encode("utf-8")) != digest:
+        raise GateError("actual MATLAB descriptor does not reproduce its SHA-256")
+
+    # The known-good reference defines only the canonical field schema/order;
+    # its values are deliberately not an allow-list for the live host.
+    _, reference_descriptor, _ = _locked_matlab_environment()
+    expected_fields = [
+        line.split("=", 1)[0] for line in reference_descriptor.split("\n")
+    ]
+    parsed: dict[str, str] = {}
+    observed_fields: list[str] = []
+    for line in descriptor.split("\n"):
+        if "=" not in line:
+            raise GateError("actual MATLAB descriptor line lacks '='")
+        field, value = line.split("=", 1)
+        if not field or not value or field in parsed:
+            raise GateError("actual MATLAB descriptor fields are malformed")
+        observed_fields.append(field)
+        parsed[field] = value
+    if observed_fields != expected_fields:
+        raise GateError("actual MATLAB descriptor field schema/order differs")
+    if parsed.get("release") != release:
+        raise GateError("summary MATLAB release differs from its descriptor")
+    return parsed
 
 
 def _as_list(value: Any) -> list[Any]:

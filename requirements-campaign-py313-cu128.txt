@@ -1,12 +1,9 @@
-# Exact Windows/Python 3.13.3 campaign environment, including the complete
-# transitive dependency closure. Keep this inventory byte-reviewed together
-# with environment/campaign-py313-cu128.json.
-# The runtime lock verifies each RECORD-owned runtime file against its locked
-# root and rejects unowned non-cache files in site-packages. Installer metadata,
-# derived bytecode caches, and unused package console launchers are excluded;
-# the active uv launcher, semantic config, and CPython base are authenticated.
-# Campaign entrypoints also reject stdlib/package shadows in the source root.
-# Rebuild with uv 0.8.22:
+# Known-good Windows/Python 3.13.3 reference environment, including its full
+# transitive dependency closure.  These pins are a convenient reproducible
+# fallback, not an execution requirement. Other CPython/package/CUDA versions
+# are accepted when imports, CUDA capacity and the scientific smokes pass; the
+# actual versions are recorded in every run's provenance.
+# Optional recreation of the reference with uv 0.8.22:
 #   uv python install 3.13.3
 #   uv venv --python 3.13.3 --seed .venv-campaign-py313
 #   uv pip sync --python .venv-campaign-py313/Scripts/python.exe --index-strategy unsafe-best-match -r requirements-campaign-py313-cu128.txt

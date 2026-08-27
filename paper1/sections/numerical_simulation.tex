@@ -36,7 +36,7 @@ from the Fernandes two-span example; their use for L99 is an idealized
 geometry/scale stress, not calibration of a 99.6~m field bridge. Every state
 must pass the registered broad frequency gate and healthy states must reproduce
 the nominal healthy first frequency (approximately 4.13~Hz for F40 and
-2.75~Hz for L99) within the authorized acceptance bands.
+2.75~Hz for L99) within the registered acceptance bands.
 
 \begin{figure}[htbp]
 \centering
@@ -44,7 +44,7 @@ the nominal healthy first frequency (approximately 4.13~Hz for F40 and
 \footnotesize Figure placeholder --- F40 and L99 decks on vertical support
 springs, simplified layered track, five-vehicle train, and eight
 \texttt{physical8\_v1} channels on the leading vehicle. Redraw from the
-authorized implementation.}}
+reviewed implementation.}}
 \caption{Two-dimensional TTBI model, bridge geometries, and candidate modeled
 response channels.}
 \label{fig:model}
@@ -87,7 +87,7 @@ All 18 cases completed. Both registered comparison tiers --- C06 versus C30
 and C15 versus C30 --- passed, so the rule selected 6~m for production. The
 verdict is bound to generator source-root SHA-256
 \nolinkurl{aa187204cb3f89e24cb8bc894034044bad38b0358f5e0cd586338f84a8418efb}.
-Its authorized claim is strictly finite-rail-domain selection for this
+Its supported claim is strictly finite-rail-domain selection for this
 source-locked case matrix; it is not general mesh/time-step convergence,
 damage-model validation, or physical/field validation.
 
@@ -175,10 +175,11 @@ Subsystem & Parameter & Value & Units \\
 \subsection{Response-channel schema}
 \label{sec:response_channels}
 
-The leading vehicle supplies the eight candidates in
+The leading vehicle supplies the eight stored responses in
 Table~\ref{tab:channels}, identified collectively as
 \texttt{physical8\_v1}. Six are direct responses of modeled car-body/bogie
-degrees of freedom. The other two are the total vertical accelerations implied
+degrees of freedom and constitute the complete learning-eligible set. The
+other two are the total vertical accelerations implied
 by the constrained motion of the first two wheelsets,
 \begin{equation}
   \ddot z_w = u_{,tt} + 2v\,u_{,xt} + v^2 u_{,xx} + \ddot h_w,
@@ -187,15 +188,17 @@ by the constrained motion of the first two wheelsets,
 where $u$ is the rail displacement field evaluated along the moving contact
 coordinate, $v$ is passage speed, and $h_w$ is the prescribed profile/wheel
 path. These two rows are idealized, model-predicted
-\emph{constrained-wheelset acceleration proxies}. They are not independent
-wheelset degrees of freedom, not the Eulerian rail-field acceleration
-$u_{,tt}$ alone, and not validated measurements from axle-box sensors.
+\emph{constrained-wheelset acceleration proxies}. They are kinematic
+diagnostics, not independent wheelset degrees of freedom, not the Eulerian
+rail-field acceleration $u_{,tt}$ alone, and not validated measurements from
+axle-box sensors. Payload indices 3 and 4 are excluded from all learning,
+screening, and pair selection.
 The separate stored \texttt{acc\_under} rows remain virtual rail-field
-diagnostics and never enter the eight-channel screen.
+diagnostics and never enter the six-channel eligible learning screen.
 
 \begin{table}[htbp]
 \centering
-\caption{Candidate \texttt{physical8\_v1} responses of the leading vehicle.}
+\caption{Stored \texttt{physical8\_v1} responses of the leading vehicle.}
 \label{tab:channels}
 \small
 \begin{tabular}{cll}
@@ -205,8 +208,8 @@ Index & Response channel & Observation status \\
 0 & car-body vertical acceleration & modeled secondary-suspended DOF \\
 1 & front-bogie vertical acceleration & modeled primary-suspended DOF \\
 2 & rear-bogie vertical acceleration & modeled primary-suspended DOF \\
-3 & wheelset-1 constrained vertical acceleration & idealized total-motion proxy \\
-4 & wheelset-2 constrained vertical acceleration & idealized total-motion proxy \\
+3 & wheelset-1 constrained vertical acceleration & diagnostic-only kinematic proxy \\
+4 & wheelset-2 constrained vertical acceleration & diagnostic-only kinematic proxy \\
 5 & car-body pitch angular velocity & modeled secondary-suspended DOF \\
 6 & front-bogie pitch angular velocity & modeled primary-suspended DOF \\
 7 & rear-bogie pitch angular velocity & modeled primary-suspended DOF \\
@@ -217,8 +220,9 @@ Index & Response channel & Observation status \\
 The proxy label is deliberate. Equation~\eqref{eq:wheelset_proxy} omits a
 hardware observation chain, local axle-box mounting dynamics, sensor bandwidth
 and filtering, and contact nonlinearity. Accordingly, the channel screen ranks
-modeled responses and does not determine a transducer count or procurement
-choice.
+only the six modeled-DOF responses (indices 0, 1, 2, 5, 6, and 7). The two
+proxies remain available for physical diagnostics but cannot determine a
+learning input, transducer count, or procurement choice.
 
 \subsubsection{Contact-model scope and qualification}
 \label{sec:contact}
@@ -227,7 +231,8 @@ The bilateral linear contact model does not simulate separation and re-contact.
 Wheel flats and polygonization are disabled in all four Paper-1 blocks. Every
 retained passage nevertheless carries finite/contact diagnostics and fails
 generation if it violates the registered admissibility contract. Before
-dispatch, the contact-closure study evaluates all 420 passages of the four
+retained production, the source-level contact-closure study evaluates all 420
+passages of the four
 marked qualification datasets at 1.0, 0.5, and 0.25~ms, applies the registered
 0/12/24~kN tension gates and 0.002 path-fraction gate, and checks waveform and
 quantity-of-interest convergence. This is an engineering consistency gate for
@@ -288,8 +293,8 @@ depth. Crack status is logged but not predicted.
 Every state and passage in all four blocks uses one generated realization of
 the implemented FRA-class-4 vertical-profile spectrum (registered phase seed
 20260728). No measured profile, per-state phase variation, or per-passage
-profile jitter is used. The fixed choice enables exact paired comparisons but
-removes profile variability from the production EOV distribution.
+profile jitter is used. The fixed choice controls excitation geometry across
+healthy/damaged states and matched S--M comparisons.
 
 Operational conditions do vary. Each state's 50 passages use a Latin
 hypercube over speed 70--90~km/h and temperature 3--33~$^{\circ}$C, rounded to
@@ -340,12 +345,13 @@ Total & 305 & 425 & 475 & \\
 \end{table}
 
 Each state has a collision-checked semantic \texttt{StateUID}. Named substreams
-derive operational, crack, profile, track, and passage identities from that UID
-rather than a mutable row number or parallel-execution order. Only streams for
-expressed Paper-1 mechanisms influence the solve; disabled track/wheel
-namespaces remain inert. States are the split and resampling clusters, and
-their 50 passages are correlated repeated observations, not independent field
-samples.
+derive operational, crack, track, and reserved passage/profile identities from
+that UID rather than a mutable row number or parallel-execution order. The
+production profile does not consume the state-keyed phase identity: its global
+phase comes from registered seed 20260728. Only streams for expressed Paper-1
+mechanisms influence the solve; disabled profile/track/wheel namespaces remain
+inert. States are the split and resampling clusters, and their 50 passages are
+correlated repeated observations, not independent field samples.
 
 The generator stores raw noise-free histories, semantic identities, latent
 design coordinates, operational draws, profile and model-form identifiers,

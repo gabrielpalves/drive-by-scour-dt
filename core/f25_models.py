@@ -13,7 +13,8 @@ from typing import Any
 
 import torch
 from torch import nn
-from torch.nn import functional as F
+
+from core.temporal_pooling import deterministic_adaptive_max_pool1d
 
 
 MODEL_SCHEMA = "f25-pytorch-cnn-v1"
@@ -79,7 +80,10 @@ class _AdaptiveMultiRateFlatten(nn.Module):
         if tensor.ndim != 3 or tensor.shape[-1] < 1:
             raise F25ModelError("multi-rate input must be (batch, channels, time)")
         return torch.cat(
-            [F.adaptive_max_pool1d(tensor, level).flatten(1) for level in self.levels],
+            [
+                deterministic_adaptive_max_pool1d(tensor, level).flatten(1)
+                for level in self.levels
+            ],
             dim=1,
         )
 
@@ -184,4 +188,3 @@ def build_f25_model(
 
 def parameter_count(model: nn.Module) -> int:
     return sum(parameter.numel() for parameter in model.parameters())
-

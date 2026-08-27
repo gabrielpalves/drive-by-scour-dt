@@ -433,8 +433,10 @@ convergence calculations must use the recorded actual interval, never the
 requested label alone.
 
 After fresh source-locked `F40-S`, `F40-M`, `L99-S`, and `L99-M`
-qualification micros exist on the designated reference host, the exact MATLAB
-command is:
+qualification micros exist on one locally qualified closure host, run the
+MATLAB command below. The four inputs in this closure study must share their
+actual MATLAB/source identity; this does not require other generation or
+training jobs to use that host or software version.
 
 ```matlab
 contact_closure_gate( ...

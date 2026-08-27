@@ -85,6 +85,7 @@ assert(saved.file_state_seed_id == state_design.StateSeedID(1));
 assert(strcmp(saved.data.state_family, 'nuisance_only'));
 assert(saved.data.crack_on && any(saved.data.crack_log(:) ~= 0));
 assert(strcmp(saved.data.profile_mode, 'fixed'));
+assert(all(saved.data.profile_log == 4));
 assert(isequal(size(saved.data.contact_log), [1, 4]));
 assert(all(isfinite(saved.data.contact_log), 'all'));
 assert(iscell(saved.data.track_log) && isempty(saved.data.track_log{1}));

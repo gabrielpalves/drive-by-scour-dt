@@ -15,8 +15,10 @@ from typing import Any, Iterable
 
 from core.f25_experiment_contract import (
     CHANNELS,
+    F25_R_CHANNELS,
     F25_R_EXPERIMENT,
     F25_R_UNFROZEN,
+    F25_X_CHANNELS,
     F25_X_EXPERIMENT,
     F25_X_FROZEN_PAIRS,
     F25_X_FROZEN_SINGLES,
@@ -158,8 +160,8 @@ def _job(
         "results_path": results_path,
         "execution_block_id": EXECUTION_BLOCK_ID,
         "hardware_rule": (
-            "all F25-R/F25-X compared configurations execute on one matched "
-            "GPU model/numeric stack; do not move individual architectures"
+            "each F25 job remains on one locally capacity-qualified host; "
+            "distinct jobs may use different qualified GPU models/numeric stacks"
         ),
     }
 
@@ -243,6 +245,9 @@ def validate_training_plan(plan: dict[str, Any]) -> None:
     job_ids = [job.get("job_id") for job in jobs]
     if len(set(job_ids)) != len(job_ids):
         raise F25TrainingContractError("F25 training job identifiers collide")
+    permitted_channels = set(
+        F25_R_CHANNELS if experiment_id == "F25-R" else F25_X_CHANNELS
+    )
     for job in jobs:
         if set(job) != {
             "schema",
@@ -281,6 +286,10 @@ def validate_training_plan(plan: dict[str, Any]) -> None:
             != [CHANNELS.index(channel) for channel in job["sensor_set"]]
         ):
             raise F25TrainingContractError("F25 job identity is inconsistent")
+        if not set(job["sensor_set"]) <= permitted_channels:
+            raise F25TrainingContractError(
+                "F25 learning job contains an ineligible diagnostic proxy"
+            )
         if job["phase"] == "hpo":
             if (
                 job["regime"] != "unfrozen"
@@ -317,10 +326,10 @@ def validate_training_plan(plan: dict[str, Any]) -> None:
         }
     else:
         expected = {
-            (F25_X_FROZEN_SINGLES.tier_id, "report"): 24,
-            (F25_X_UNFROZEN_SINGLES.tier_id, "hpo"): 24,
-            (F25_X_UNFROZEN_SINGLES.tier_id, "report"): 24,
-            (F25_X_FROZEN_PAIRS.tier_id, "report"): 84,
+            (F25_X_FROZEN_SINGLES.tier_id, "report"): 18,
+            (F25_X_UNFROZEN_SINGLES.tier_id, "hpo"): 18,
+            (F25_X_UNFROZEN_SINGLES.tier_id, "report"): 18,
+            (F25_X_FROZEN_PAIRS.tier_id, "report"): 45,
         }
     if counts != expected:
         raise F25TrainingContractError(
@@ -339,4 +348,3 @@ def job_by_id(plan: dict[str, Any], job_id: str) -> dict[str, Any]:
 # Import-time validation is intentionally cheap and torch-free.
 build_training_plan("F25-R")
 build_training_plan("F25-X")
-

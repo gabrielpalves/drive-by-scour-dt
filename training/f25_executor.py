@@ -13,32 +13,11 @@ from __future__ import annotations
 
 import os as _bootstrap_os
 import sys as _bootstrap_sys
-for _unsafe_python_path_variable in ("PYTHONPATH", "PYTHONHOME"):
-    if _unsafe_python_path_variable in _bootstrap_os.environ:
-        raise RuntimeError(
-            f"{_unsafe_python_path_variable} must be absent before F25 imports"
-        )
 _bootstrap_source_root = _bootstrap_os.path.abspath(
     _bootstrap_os.path.join(_bootstrap_os.path.dirname(__file__), _bootstrap_os.pardir)
 )
-_bootstrap_first_path = _bootstrap_sys.path[0] or _bootstrap_os.getcwd()
-if (
-    _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
-        _bootstrap_first_path
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_first_path
-    ))
-    or _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_first_path
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_source_root
-    ))
-):
-    raise RuntimeError(
-        "reviewed repository root must be the canonical first import path"
-    )
+if _bootstrap_source_root not in _bootstrap_sys.path:
+    _bootstrap_sys.path.insert(0, _bootstrap_source_root)
 _bootstrap_guard_dir = _bootstrap_os.path.join(
     _bootstrap_source_root, "campaign_import_guard"
 )
@@ -47,13 +26,6 @@ _bootstrap_guard_init = _bootstrap_os.path.join(
 )
 if (
     not _bootstrap_os.path.isfile(_bootstrap_guard_init)
-    or _bootstrap_os.path.islink(_bootstrap_guard_init)
-    or _bootstrap_os.path.normcase(_bootstrap_os.path.abspath(
-        _bootstrap_guard_dir
-    ))
-    != _bootstrap_os.path.normcase(_bootstrap_os.path.realpath(
-        _bootstrap_guard_dir
-    ))
     or any(
         entry.casefold().startswith("__init__.")
         and entry != "__init__.py"
@@ -87,10 +59,12 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import random
 import sys
 from typing import Any
+
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import numpy as np
 import scipy.io as sio
@@ -98,6 +72,10 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from core.environment import (
+    load_environment_lock,
+    matlab_environment_descriptor,
+)
 from core.execution_environment import (
     current_execution_environment,
     execution_compatibility_descriptor,
@@ -132,19 +110,24 @@ from core.f25_training_contract import (
     build_training_plan,
     canonical_json_sha256,
     job_by_id,
+    validate_training_plan,
 )
-from core.source_provenance import python_runtime_source_root
+from core.source_provenance import generator_source_root, python_runtime_source_root
 from check_f25_capacity import (
+    CAPACITY_RECEIPT_ADDRESS_SCHEMA,
     SCHEMA as F25_CAPACITY_SCHEMA,
+    capacity_receipt_path,
     capacity_contract_cases,
 )
 
 
 REPO = Path(__file__).resolve().parents[1]
-RUN_RECORD_SCHEMA = "f25-training-run-record-v1"
+RUN_RECORD_SCHEMA = "f25-training-run-record-v2"
 WINNER_SCHEMA = "f25-hpo-winner-v1"
 REPORT_SCHEMA = "f25-report-results-v1"
-EXECUTION_RECEIPT_SCHEMA = "f25-execution-block-receipt-v1"
+EXECUTION_RECEIPT_SCHEMA = "f25-execution-block-receipt-v2"
+BUNDLE_SCHEMA = "f25-dispatch-bundle-v2"
+BUNDLE_SOURCE_BINDING_SCHEMA = "f25-bundle-source-binding-v1"
 
 
 class F25ExecutionError(RuntimeError):
@@ -178,6 +161,304 @@ def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
     return digest.hexdigest()
 
 
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _is_commit_sha1(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _unique_json_rows(
+    rows: list[tuple[str, object]], owner: str
+) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in rows:
+        if key in value:
+            raise ValueError(f"{owner} has duplicate JSON key {key!r}")
+        value[key] = item
+    return value
+
+
+def _strict_json_object(path: Path, owner: str) -> tuple[dict[str, Any], bytes]:
+    if not path.is_file() or path.is_symlink():
+        raise F25ExecutionError(f"{owner} is missing or linked: {path}")
+    raw = path.read_bytes()
+
+    def unique_object(rows: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in rows:
+            if key in value:
+                raise ValueError(f"duplicate JSON key {key!r}")
+            value[key] = item
+        return value
+
+    def reject_constant(token: str) -> None:
+        raise ValueError(f"non-finite JSON token {token}")
+
+    try:
+        parsed = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise F25ExecutionError(f"{owner} is not strict UTF-8 JSON") from exc
+    if not isinstance(parsed, dict):
+        raise F25ExecutionError(f"{owner} must be one JSON object")
+    return parsed, raw
+
+
+def _bundle_source_binding_descriptor(binding: dict[str, Any]) -> str:
+    fields = (
+        "schema",
+        "source_commit",
+        "source_manifest_sha256",
+        "bundle_source_root_sha256",
+        "generator_source_root_sha256",
+        "generator_source_file_count",
+        "f25_contract_sha256",
+        "profile_asset_sha256",
+        "f25_r_bundle_manifest_file_sha256",
+        "f25_x_bundle_manifest_file_sha256",
+    )
+    return "\n".join(f"{field}={binding[field]}" for field in fields)
+
+
+def _validate_bundle_source_binding(repo: Path = REPO) -> dict[str, Any]:
+    """Authenticate both bundle manifests and every extracted source byte."""
+
+    repo = repo.resolve(strict=True)
+    source_manifest_path = repo / "bundle_source_files.txt"
+    if not source_manifest_path.is_file() or source_manifest_path.is_symlink():
+        raise F25ExecutionError("F25 reviewed source manifest is missing or linked")
+    source_manifest_raw = source_manifest_path.read_bytes()
+    try:
+        source_manifest_text = source_manifest_raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise F25ExecutionError("F25 source manifest is not UTF-8") from exc
+    if "\r" in source_manifest_text or not source_manifest_text.endswith("\n"):
+        raise F25ExecutionError("F25 source manifest is not canonical LF text")
+    source_names = tuple(
+        line
+        for line in source_manifest_text.splitlines()
+        if line and not line.startswith("#")
+    )
+    if (
+        not source_names
+        or source_names != tuple(sorted(source_names))
+        or len(source_names) != len(set(source_names))
+    ):
+        raise F25ExecutionError("F25 source manifest is empty or noncanonical")
+
+    expected_fields = {
+        "schema",
+        "experiment_id",
+        "bundle_name",
+        "source_commit",
+        "source_manifest_sha256",
+        "source_file_count",
+        "source_files",
+        "source_root_sha256",
+        "f25_contract_sha256",
+        "training_plan_sha256",
+        "generated_artifacts",
+        "shared_generation_root",
+        "artifact_roots",
+        "bundle_manifest_sha256",
+    }
+    contract = build_contract()
+    manifests: dict[str, dict[str, Any]] = {}
+    raw_shas: dict[str, str] = {}
+    for experiment in ("F25-R", "F25-X"):
+        path = repo / f"f25_bundle_manifest.{experiment}.json"
+        manifest, raw = _strict_json_object(path, f"{experiment} bundle manifest")
+        plan = build_training_plan(experiment)
+        recorded_sha = manifest.get("bundle_manifest_sha256")
+        unsigned = dict(manifest)
+        unsigned.pop("bundle_manifest_sha256", None)
+        if (
+            set(manifest) != expected_fields
+            or manifest.get("schema") != BUNDLE_SCHEMA
+            or manifest.get("experiment_id") != experiment
+            or manifest.get("bundle_name") != plan["bundle_name"]
+            or not _is_commit_sha1(manifest.get("source_commit"))
+            or not _is_sha256(recorded_sha)
+            or recorded_sha != canonical_json_sha256(unsigned)
+            or manifest.get("f25_contract_sha256")
+            != contract["contract_sha256"]
+            or manifest.get("source_manifest_sha256")
+            != hashlib.sha256(source_manifest_raw).hexdigest()
+            or manifest.get("training_plan_sha256") != plan["plan_sha256"]
+            or manifest.get("shared_generation_root")
+            != plan["shared_generation_root"]
+            or manifest.get("artifact_roots")
+            != {
+                "manifest": plan["manifest_root"],
+                "cache": plan["cache_root"],
+                "results": plan["results_root"],
+            }
+        ):
+            raise F25ExecutionError(
+                f"{experiment} bundle manifest identity is stale or malformed"
+            )
+        source_files = manifest.get("source_files")
+        if (
+            not isinstance(source_files, list)
+            or len(source_files) != manifest.get("source_file_count")
+            or len(source_files) != len(source_names)
+        ):
+            raise F25ExecutionError(f"{experiment} source inventory is malformed")
+        rows: list[dict[str, str]] = []
+        for expected_name, row in zip(source_names, source_files):
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"path", "sha256"}
+                or row.get("path") != expected_name
+                or not _is_sha256(row.get("sha256"))
+            ):
+                raise F25ExecutionError(
+                    f"{experiment} source inventory row is malformed"
+                )
+            posix = PurePosixPath(expected_name)
+            if (
+                posix.is_absolute()
+                or any(part in {"", ".", ".."} for part in posix.parts)
+                or posix.as_posix() != expected_name
+            ):
+                raise F25ExecutionError("F25 bundle source path is unsafe")
+            source_path = repo.joinpath(*posix.parts)
+            if source_path.is_symlink() or not source_path.is_file():
+                raise F25ExecutionError(
+                    f"F25 source is missing or linked: {expected_name}"
+                )
+            if _sha256_file(source_path) != row["sha256"]:
+                raise F25ExecutionError(
+                    f"F25 source differs from its bundle: {expected_name}"
+                )
+            rows.append({"path": expected_name, "sha256": row["sha256"]})
+        if manifest.get("source_root_sha256") != canonical_json_sha256(rows):
+            raise F25ExecutionError(f"{experiment} bundle source root is invalid")
+        generated = manifest.get("generated_artifacts")
+        expected_generated_paths = {
+            "training_plan": f"f25_training_plan.{experiment}.json",
+            "operator_readme": f"README_{experiment}.md",
+        }
+        if not isinstance(generated, dict) or set(generated) != set(
+            expected_generated_paths
+        ):
+            raise F25ExecutionError(f"{experiment} generated inventory is invalid")
+        for role, artifact in generated.items():
+            if (
+                not isinstance(artifact, dict)
+                or set(artifact) != {"path", "sha256"}
+                or artifact["path"] != expected_generated_paths[role]
+                or not _is_sha256(artifact["sha256"])
+            ):
+                raise F25ExecutionError(
+                    f"{experiment} generated artifact identity is malformed"
+                )
+            artifact_path = repo / artifact["path"]
+            if (
+                artifact_path.is_symlink()
+                or not artifact_path.is_file()
+                or _sha256_file(artifact_path) != artifact["sha256"]
+            ):
+                raise F25ExecutionError(
+                    f"{experiment} generated artifact bytes differ from bundle"
+                )
+        plan_record, _plan_raw = _strict_json_object(
+            repo / expected_generated_paths["training_plan"],
+            f"{experiment} training plan",
+        )
+        try:
+            validate_training_plan(plan_record)
+        except F25TrainingContractError as exc:
+            raise F25ExecutionError(
+                f"{experiment} generated training plan is invalid"
+            ) from exc
+        if plan_record != plan:
+            raise F25ExecutionError(
+                f"{experiment} generated training plan differs from live contract"
+            )
+        manifests[experiment] = manifest
+        raw_shas[experiment] = hashlib.sha256(raw).hexdigest()
+
+    shared_fields = (
+        "source_commit",
+        "source_manifest_sha256",
+        "source_file_count",
+        "source_files",
+        "source_root_sha256",
+        "f25_contract_sha256",
+        "shared_generation_root",
+    )
+    if any(
+        manifests["F25-R"].get(field) != manifests["F25-X"].get(field)
+        for field in shared_fields
+    ):
+        raise F25ExecutionError("F25-R/F25-X bundle source identities differ")
+
+    generator = generator_source_root(repo)
+    manifest_rows = manifests["F25-R"]["source_files"]
+    generator_lines = "\n".join(
+        f"{row['path']}:{row['sha256']}"
+        for row in manifest_rows
+        if row["path"].startswith("scour_MATLAB/")
+    )
+    if (
+        generator.digest_lines != generator_lines
+        or generator.file_count != len(generator_lines.splitlines())
+        or generator.sha256 != hashlib.sha256(
+            generator_lines.encode("utf-8")
+        ).hexdigest()
+    ):
+        raise F25ExecutionError("live MATLAB source differs from bundle identity")
+    profile_sha = contract["profile"]["sha256"]
+    profile_row = next(
+        (
+            row
+            for row in manifest_rows
+            if row["path"] == contract["profile"]["relative_path"]
+        ),
+        None,
+    )
+    if profile_row is None or profile_row["sha256"] != profile_sha:
+        raise F25ExecutionError("bundle does not bind the fixed F25 profile")
+
+    binding = {
+        "schema": BUNDLE_SOURCE_BINDING_SCHEMA,
+        "source_commit": manifests["F25-R"]["source_commit"],
+        "source_manifest_sha256": manifests["F25-R"][
+            "source_manifest_sha256"
+        ],
+        "bundle_source_root_sha256": manifests["F25-R"][
+            "source_root_sha256"
+        ],
+        "generator_source_root_sha256": generator.sha256,
+        "generator_source_digest_lines": generator.digest_lines,
+        "generator_source_file_count": generator.file_count,
+        "f25_contract_sha256": contract["contract_sha256"],
+        "profile_asset_sha256": profile_sha,
+        "f25_r_bundle_manifest_file_sha256": raw_shas["F25-R"],
+        "f25_x_bundle_manifest_file_sha256": raw_shas["F25-X"],
+    }
+    descriptor = _bundle_source_binding_descriptor(binding)
+    binding["binding_descriptor"] = descriptor
+    binding["binding_sha256"] = hashlib.sha256(
+        descriptor.encode("utf-8")
+    ).hexdigest()
+    return binding
+
+
 def _matlab_text(value: Any) -> str:
     array = np.asarray(value)
     if array.size != 1:
@@ -191,15 +472,537 @@ def _matlab_text(value: Any) -> str:
     return text
 
 
+def _matlab_scalar(value: Any, owner: str) -> Any:
+    item: Any = value
+    for _iteration in range(4):
+        array = np.asarray(item)
+        if array.size != 1:
+            raise F25ExecutionError(f"{owner} is not scalar")
+        item = array.reshape(-1)[0]
+        if not isinstance(item, np.ndarray):
+            return item.item() if isinstance(item, np.generic) else item
+    raise F25ExecutionError(f"{owner} has excessive MATLAB scalar nesting")
+
+
+def _case_text(record: np.void, field: str) -> str:
+    try:
+        return _matlab_text(record[field])
+    except (KeyError, ValueError) as exc:
+        raise F25ExecutionError(f"case_info.{field} is not text") from exc
+
+
+def _case_integer(record: np.void, field: str) -> int:
+    value = _matlab_scalar(record[field], f"case_info.{field}")
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        raise F25ExecutionError(f"case_info.{field} is not numeric")
+    integer = int(value)
+    if not math.isfinite(float(value)) or float(value) != integer:
+        raise F25ExecutionError(f"case_info.{field} is not an integer")
+    return integer
+
+
+def _case_number(record: np.void, field: str, owner: str) -> float:
+    value = _matlab_scalar(record[field], f"{owner}.{field}")
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        raise F25ExecutionError(f"{owner}.{field} is not numeric")
+    number = float(value)
+    if not math.isfinite(number):
+        raise F25ExecutionError(f"{owner}.{field} is non-finite")
+    return number
+
+
+def _matlab_struct(value: Any, owner: str) -> np.void:
+    array = np.asarray(value)
+    if array.size != 1:
+        raise F25ExecutionError(f"{owner} is not one scalar struct")
+    record = array.reshape(-1)[0]
+    if not isinstance(record, np.void) or not record.dtype.names:
+        raise F25ExecutionError(f"{owner} is not one scalar struct")
+    return record
+
+
+def _sha_seed32(value: str) -> int:
+    return int(hashlib.sha256(value.encode("utf-8")).hexdigest()[:8], 16)
+
+
+def _f25_seed_catalog() -> dict[str, Any]:
+    labels = [row.label for row in SCENARIOS]
+    state_uids = [f"f25-state-v1|scenario={label}" for label in labels]
+    root_seeds = [
+        _sha_seed32(
+            "ttbi-state-seed-v1|damage_seed=2025080902|" + state_uid
+        )
+        for state_uid in state_uids
+    ]
+    schedule = "uid-named-substreams-v2"
+    state_names = [
+        "operations",
+        "crack",
+        "profile-state",
+        "track",
+        "profile-phase",
+    ]
+    passage_names = ["profile-passage", "oor-passage"]
+    state_seeds = [
+        [
+            _sha_seed32(
+                f"{schedule}|root={root}|uid={uid}|stream={stream}"
+            )
+            for stream in state_names
+        ]
+        for root, uid in zip(root_seeds, state_uids)
+    ]
+    passage_flat = [
+        [
+            _sha_seed32(
+                f"{schedule}|root={root}|uid={uid}|stream={stream}|"
+                f"pass={passage:05d}"
+            )
+            for stream in passage_names
+            for passage in range(1, 201)
+        ]
+        for root, uid in zip(root_seeds, state_uids)
+    ]
+    all_seeds = [
+        *root_seeds,
+        *(seed for row in state_seeds for seed in row),
+        *(seed for row in passage_flat for seed in row),
+    ]
+    if 0 in all_seeds or len(all_seeds) != len(set(all_seeds)):
+        raise F25ExecutionError("F25 independently derived RNG catalogue collides")
+    return {
+        "StateUID": state_uids,
+        "StateSeedID": root_seeds,
+        "StateNamedStreamSeedID": state_seeds,
+        "PassageNamedStreamSeedIDFlat": passage_flat,
+    }
+
+
+def _matlab_descriptor_fields(descriptor: str, owner: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for line in descriptor.split("\n"):
+        if "=" not in line:
+            raise F25ExecutionError(f"{owner} MATLAB descriptor is malformed")
+        name, value = line.split("=", 1)
+        if not name or not value or name in fields or any(
+            character in value for character in ("\r", "\n", "\x00")
+        ):
+            raise F25ExecutionError(f"{owner} MATLAB descriptor is malformed")
+        fields[name] = value
+    expected = {
+        "arch",
+        "blas",
+        "lapack",
+        "matlab_product_version",
+        "parallel_toolbox_version",
+        "release",
+        "statistics_toolbox_version",
+        "version",
+    }
+    if set(fields) != expected or list(fields) != sorted(fields):
+        raise F25ExecutionError(f"{owner} MATLAB descriptor fields differ")
+    return fields
+
+
+def _validate_generation_config(
+    config: dict[str, Any],
+    *,
+    contract: dict[str, Any],
+    binding: dict[str, Any],
+    campaign_environment_sha256: str,
+    actual_environment_sha256: str,
+) -> None:
+    scenarios = contract["scenarios"]
+    expected_damage = [
+        [0.0, row["central_scour_kv_loss_fraction"], 0.0]
+        for row in scenarios
+    ]
+    expected_bearings = [
+        [
+            row["entrance_bearing_kr_nm_per_rad"],
+            row["exit_bearing_kr_nm_per_rad"],
+        ]
+        for row in scenarios
+    ]
+    expected_crack_on = [
+        bool(row["crack_ei_loss_fraction"] > 0.0) for row in scenarios
+    ]
+    expected_crack_location = [29.85 if active else None for active in expected_crack_on]
+    expected_crack_half_length = [0.15 if active else 0.0 for active in expected_crack_on]
+    expected_axis_codes = [
+        [
+            round(100 * (row["crack_depth_ratio"] or 0.0)),
+            round(100 * row["central_scour_kv_loss_fraction"]),
+            int(row["entrance_bearing_kr_nm_per_rad"] > 0.0),
+        ]
+        for row in scenarios
+    ]
+    window = {
+        "schema": "f25-monitoring-window-v1",
+        "source": "full_raw_passage_reconstruction",
+        "samples_per_m": 100,
+        "crop_start": 1001,
+        "crop_end_untrimmed": 6831,
+        "crop_end_trimmed": 6830,
+        "post_deck_samples": 1831,
+        "physical_bridge_samples": 3990,
+        "source_convention_bridge_samples": 4000,
+        "nominal_length_m": 58.3,
+        "untrimmed_sample_count": 5831,
+        "trimmed_sample_count": 5830,
+        "tail_samples_trimmed": 1,
+        "extra_beyond_physical_bridge_samples": 10,
+    }
+    expected = {
+        "schema": "f25-generation-v1",
+        "python_contract_schema": contract["schema"],
+        "python_contract_sha256": contract["contract_sha256"],
+        "shared_data_contract_id": contract["partition"][
+            "shared_data_contract_id"
+        ],
+        "dataset_id": "fernandes-2025-f25-data-v1",
+        "channel_schema_id": contract["channel_schema_id"],
+        "campaign_matlab_environment_sha256": campaign_environment_sha256,
+        "actual_matlab_environment_sha256": actual_environment_sha256,
+        "generator_source_root_sha256": binding[
+            "generator_source_root_sha256"
+        ],
+        "bundle_source_binding_sha256": binding["binding_sha256"],
+        "qualification_source_sha256": "PRODUCTION",
+        "profile_mode": "f25_stored_type2",
+        "profile_asset_sha256": contract["profile"]["sha256"],
+        "L_bridge": contract["geometry"]["bridge_length_m"],
+        "num_spans": 2,
+        "span_lengths_m": contract["geometry"]["span_lengths_m"],
+        "support_locations_m": [0.0, 19.95, 39.9],
+        "deck_element_length_m": contract["geometry"]["deck_mesh_m"],
+        "deck_element_count": contract["geometry"]["deck_element_count"],
+        "deck_mass_per_length_kg_per_m": contract["geometry"][
+            "deck_mass_kg_per_m"
+        ],
+        "deck_E_Pa": 35.0e9,
+        "deck_I_m4": 0.33,
+        "deck_damping_percent": 3,
+        "n_states": contract["passages"]["classes"],
+        "Npass": contract["passages"]["per_class"],
+        "state_design_kind": "f25-ten-scenario-v1",
+        "state_identity_version": "f25-state-v1",
+        "random_stream_schedule_version": "uid-named-substreams-v2",
+        "state_stream_names": [
+            "operations",
+            "crack",
+            "profile-state",
+            "track",
+            "profile-phase",
+        ],
+        "passage_stream_names": ["profile-passage", "oor-passage"],
+        "DamageStates": expected_damage,
+        "BearingStates": expected_bearings,
+        "CrackOn": expected_crack_on,
+        "CrackLocation": expected_crack_location,
+        "CrackIntensity": [
+            row["crack_ei_loss_fraction"] for row in scenarios
+        ],
+        "CrackHalfLength": expected_crack_half_length,
+        "axis_codes": expected_axis_codes,
+        "eov_master_seed": contract["eov_master_seed"],
+        "partition_seed": contract["partition"]["seed"],
+        "noise_master_seed": contract["preprocessing"]["noise"]["master_seed"],
+        "Nveh": contract["eov"]["vehicle_count"],
+        "Nprop": contract["eov"]["varied_properties_per_vehicle"],
+        "vel_km_h": contract["eov"]["speed_km_h"],
+        "temp_C": contract["eov"]["temperature_c"],
+        "primary_suspension_kN_per_m": [2640, 2920],
+        "secondary_suspension_kN_per_m": [942, 1042],
+        "carbody_mass_kg": contract["eov"]["carbody_mass_kg"],
+        "monitoring_window": window,
+        "load_time_measurement_noise_fraction": contract["eov"][
+            "measurement_noise_sigma_fraction"
+        ],
+        "noise_standard_deviation_ddof": contract["preprocessing"]["noise"][
+            "standard_deviation_ddof"
+        ],
+        "contact_max_tension_N": 24000,
+        "contact_max_tension_fraction": 0.002,
+    }
+    expected.update(_f25_seed_catalog())
+    if set(config) != set(expected):
+        raise F25ExecutionError(
+            "F25 generation config field inventory differs from contract"
+        )
+    for field, expected_value in expected.items():
+        if config.get(field) != expected_value:
+            raise F25ExecutionError(
+                f"F25 generation config differs from contract at {field}"
+            )
+
+
+def _validate_generation_case_info(
+    root: Path,
+    completion_receipt: dict[str, Any],
+    binding: dict[str, Any],
+) -> dict[str, Any]:
+    case_path = root / "case_info.mat"
+    if case_path.is_symlink() or not case_path.is_file():
+        raise F25ExecutionError("F25 case_info.mat is missing or linked")
+    try:
+        inventory = sio.whosmat(case_path)
+    except (OSError, ValueError) as exc:
+        raise F25ExecutionError("F25 case_info.mat cannot be inventoried") from exc
+    if len(inventory) != 1 or inventory[0][0] != "case_info":
+        raise F25ExecutionError("F25 case_info.mat must contain only case_info")
+    loaded = sio.loadmat(
+        case_path,
+        variable_names=["case_info"],
+        mat_dtype=True,
+    )
+    if "case_info" not in loaded or loaded["case_info"].size != 1:
+        raise F25ExecutionError("F25 case_info is not one scalar struct")
+    record = loaded["case_info"].reshape(-1)[0]
+    names = set(record.dtype.names or ())
+    required = {
+        "schema",
+        "dataset_id",
+        "shared_data_contract_id",
+        "python_contract_schema",
+        "python_contract_sha256",
+        "generation_schema",
+        "gen_fingerprint",
+        "generation_config_json",
+        "channel_schema_id",
+        "n_states",
+        "passages_per_state",
+        "state_design_kind",
+        "profile_asset_sha256",
+        "monitoring_window",
+        "partition_seed",
+        "noise_master_seed",
+        "matlab_release",
+        "campaign_matlab_release",
+        "actual_matlab_environment_descriptor",
+        "actual_matlab_environment_sha256",
+        "campaign_matlab_environment_descriptor",
+        "campaign_matlab_environment_sha256",
+        "generator_source_root_sha256",
+        "generator_source_digest_lines",
+        "generator_source_file_count",
+        "bundle_source_binding_schema",
+        "bundle_source_binding_sha256",
+        "bundle_source_commit",
+        "bundle_source_manifest_sha256",
+        "bundle_source_root_sha256",
+        "f25_r_bundle_manifest_file_sha256",
+        "f25_x_bundle_manifest_file_sha256",
+        "release_qualification_run",
+    }
+    if names != required:
+        missing = sorted(required - names)
+        extra = sorted(names - required)
+        raise F25ExecutionError(
+            f"F25 case_info field inventory differs: missing={missing}, "
+            f"extra={extra}"
+        )
+
+    contract = build_contract()
+    text_expected = {
+        "schema": "f25-generation-case-info-v2",
+        "dataset_id": "fernandes-2025-f25-data-v1",
+        "shared_data_contract_id": contract["partition"][
+            "shared_data_contract_id"
+        ],
+        "python_contract_schema": contract["schema"],
+        "python_contract_sha256": contract["contract_sha256"],
+        "generation_schema": "f25-generation-v1",
+        "channel_schema_id": contract["channel_schema_id"],
+        "profile_asset_sha256": contract["profile"]["sha256"],
+        "generator_source_root_sha256": binding[
+            "generator_source_root_sha256"
+        ],
+        "bundle_source_binding_schema": BUNDLE_SOURCE_BINDING_SCHEMA,
+        "bundle_source_binding_sha256": binding["binding_sha256"],
+        "bundle_source_commit": binding["source_commit"],
+        "bundle_source_manifest_sha256": binding[
+            "source_manifest_sha256"
+        ],
+        "bundle_source_root_sha256": binding["bundle_source_root_sha256"],
+        "f25_r_bundle_manifest_file_sha256": binding[
+            "f25_r_bundle_manifest_file_sha256"
+        ],
+        "f25_x_bundle_manifest_file_sha256": binding[
+            "f25_x_bundle_manifest_file_sha256"
+        ],
+    }
+    for field, expected in text_expected.items():
+        if _case_text(record, field) != expected:
+            raise F25ExecutionError(f"F25 case_info differs at {field}")
+    if (
+        _case_integer(record, "n_states") != contract["passages"]["classes"]
+        or _case_integer(record, "passages_per_state")
+        != contract["passages"]["per_class"]
+        or _case_integer(record, "partition_seed")
+        != contract["partition"]["seed"]
+        or _case_integer(record, "noise_master_seed")
+        != contract["preprocessing"]["noise"]["master_seed"]
+        or bool(_matlab_scalar(
+            record["release_qualification_run"],
+            "case_info.release_qualification_run",
+        ))
+    ):
+        raise F25ExecutionError("F25 case_info scalar contract differs")
+
+    monitoring = _matlab_struct(
+        record["monitoring_window"], "case_info.monitoring_window"
+    )
+    expected_monitoring = {
+        "schema": "f25-monitoring-window-v1",
+        "source": "full_raw_passage_reconstruction",
+        "samples_per_m": 100,
+        "crop_start": 1001,
+        "crop_end_untrimmed": 6831,
+        "crop_end_trimmed": 6830,
+        "post_deck_samples": 1831,
+        "physical_bridge_samples": 3990,
+        "source_convention_bridge_samples": 4000,
+        "nominal_length_m": 58.3,
+        "untrimmed_sample_count": 5831,
+        "trimmed_sample_count": 5830,
+        "tail_samples_trimmed": 1,
+        "extra_beyond_physical_bridge_samples": 10,
+    }
+    monitoring_names = set(monitoring.dtype.names or ())
+    if monitoring_names != set(expected_monitoring):
+        raise F25ExecutionError("F25 case_info monitoring-window fields differ")
+    for field, expected_value in expected_monitoring.items():
+        if isinstance(expected_value, str):
+            observed: Any = _matlab_text(monitoring[field])
+        else:
+            observed = _case_number(
+                monitoring, field, "case_info.monitoring_window"
+            )
+        if observed != expected_value:
+            raise F25ExecutionError(
+                f"F25 case_info monitoring window differs at {field}"
+            )
+
+    generator_lines = _case_text(record, "generator_source_digest_lines")
+    if (
+        generator_lines != binding["generator_source_digest_lines"]
+        or _case_integer(record, "generator_source_file_count")
+        != binding["generator_source_file_count"]
+        or hashlib.sha256(generator_lines.encode("utf-8")).hexdigest()
+        != binding["generator_source_root_sha256"]
+    ):
+        raise F25ExecutionError("F25 case_info MATLAB source identity is invalid")
+
+    actual_descriptor = _case_text(
+        record, "actual_matlab_environment_descriptor"
+    )
+    actual_sha = _case_text(record, "actual_matlab_environment_sha256")
+    campaign_descriptor = _case_text(
+        record, "campaign_matlab_environment_descriptor"
+    )
+    campaign_sha = _case_text(record, "campaign_matlab_environment_sha256")
+    actual_fields = _matlab_descriptor_fields(actual_descriptor, "actual")
+    campaign_fields = _matlab_descriptor_fields(
+        campaign_descriptor, "campaign reference"
+    )
+    try:
+        reference = load_environment_lock(
+            REPO / "environment" / "campaign-py313-cu128.json"
+        )["spec"]
+        expected_campaign_descriptor = matlab_environment_descriptor(
+            reference["matlab_environment"]
+        )
+    except RuntimeError as exc:
+        raise F25ExecutionError(
+            "F25 cannot authenticate the campaign MATLAB reference"
+        ) from exc
+    if (
+        hashlib.sha256(actual_descriptor.encode("utf-8")).hexdigest()
+        != actual_sha
+        or hashlib.sha256(campaign_descriptor.encode("utf-8")).hexdigest()
+        != campaign_sha
+        or campaign_descriptor != expected_campaign_descriptor
+        or campaign_sha != reference["matlab_environment_sha256"]
+        or _case_text(record, "matlab_release") != actual_fields["release"]
+        or _case_text(record, "campaign_matlab_release")
+        != campaign_fields["release"]
+    ):
+        raise F25ExecutionError("F25 case_info MATLAB descriptor SHA is invalid")
+
+    config_text = _case_text(record, "generation_config_json")
+    fingerprint = _case_text(record, "gen_fingerprint")
+    if (
+        not _is_sha256(fingerprint)
+        or hashlib.sha256(config_text.encode("utf-8")).hexdigest() != fingerprint
+        or completion_receipt.get("gen_fingerprint") != fingerprint
+    ):
+        raise F25ExecutionError("F25 generation fingerprint does not authenticate")
+    try:
+        config = json.loads(
+            config_text,
+            object_pairs_hook=lambda rows: _unique_json_rows(
+                rows, "F25 generation config"
+            ),
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON token {token}")
+            ),
+        )
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise F25ExecutionError("F25 generation config is not strict JSON") from exc
+    if not isinstance(config, dict):
+        raise F25ExecutionError("F25 generation config is not one object")
+    _validate_generation_config(
+        config,
+        contract=contract,
+        binding=binding,
+        campaign_environment_sha256=campaign_sha,
+        actual_environment_sha256=actual_sha,
+    )
+    return {
+        "case_info_sha256": _sha256_file(case_path),
+        "gen_fingerprint": fingerprint,
+        "actual_matlab_environment_descriptor": actual_descriptor,
+        "actual_matlab_environment_sha256": actual_sha,
+        "bundle_source_binding_sha256": binding["binding_sha256"],
+        "bundle_source_commit": binding["source_commit"],
+        "generator_source_root_sha256": binding[
+            "generator_source_root_sha256"
+        ],
+    }
+
+
 def _validate_generation_root(root: Path) -> dict[str, Any]:
+    bundle_binding = _validate_bundle_source_binding(REPO)
     root = root.resolve(strict=True)
     marker = root / "_F25_GENERATION_COMPLETE"
     digest_path = root / "file_digests.json"
-    if not marker.is_file() or not digest_path.is_file():
+    if (
+        not marker.is_file()
+        or marker.is_symlink()
+        or not digest_path.is_file()
+        or digest_path.is_symlink()
+    ):
         raise F25ExecutionError("F25 shared data lack the completion boundary")
-    receipt = json.loads(digest_path.read_text(encoding="utf-8"))
-    if receipt.get("schema") != "f25-generation-artifact-digests-v1":
+    receipt, _receipt_raw = _strict_json_object(
+        digest_path, "F25 generation digest receipt"
+    )
+    if set(receipt) != {
+        "schema",
+        "gen_fingerprint",
+        "python_contract_sha256",
+        "files",
+        "digest_root_sha256",
+    } or receipt.get("schema") != "f25-generation-artifact-digests-v1":
         raise F25ExecutionError("unsupported F25 generation digest schema")
+    if not _is_sha256(receipt.get("gen_fingerprint")) or not _is_sha256(
+        receipt.get("digest_root_sha256")
+    ):
+        raise F25ExecutionError("F25 generation digest identity is malformed")
     if receipt.get("python_contract_sha256") != build_contract()["contract_sha256"]:
         raise F25ExecutionError("generated F25 data bind a foreign contract")
     files = receipt.get("files")
@@ -212,7 +1015,12 @@ def _validate_generation_root(root: Path) -> dict[str, Any]:
             raise F25ExecutionError("F25 state digest inventory is not canonical")
         path = root / expected_name
         expected_sha = row.get("sha256")
-        if not path.is_file() or _sha256_file(path) != expected_sha:
+        if (
+            not _is_sha256(expected_sha)
+            or not path.is_file()
+            or path.is_symlink()
+            or _sha256_file(path) != expected_sha
+        ):
             raise F25ExecutionError(f"F25 state bytes fail SHA-256: {expected_name}")
         canonical.append({"name": expected_name, "sha256": expected_sha})
     if receipt.get("digest_root_sha256") != canonical_json_sha256(canonical):
@@ -221,27 +1029,44 @@ def _validate_generation_root(root: Path) -> dict[str, Any]:
         # Python therefore carries its own canonical verified-state root too.
         receipt = dict(receipt)
     marker_text = marker.read_text(encoding="utf-8")
-    if (
-        f"gen_fingerprint={receipt.get('gen_fingerprint')}" not in marker_text
-        or f"python_contract_sha256={receipt.get('python_contract_sha256')}"
-        not in marker_text
-        or f"digest_root_sha256={receipt.get('digest_root_sha256')}"
-        not in marker_text
-    ):
+    expected_marker = (
+        "schema=f25-generation-complete-v1\n"
+        f"gen_fingerprint={receipt['gen_fingerprint']}\n"
+        f"python_contract_sha256={receipt['python_contract_sha256']}\n"
+        f"digest_root_sha256={receipt['digest_root_sha256']}\n"
+    )
+    if marker_text != expected_marker:
         raise F25ExecutionError("F25 completion marker does not bind its receipt")
+    case_binding = _validate_generation_case_info(
+        root, receipt, bundle_binding
+    )
     return {
         "root": str(root),
         "gen_fingerprint": receipt["gen_fingerprint"],
         "matlab_digest_root_sha256": receipt["digest_root_sha256"],
         "verified_state_root_sha256": canonical_json_sha256(canonical),
+        "verified_state_files": canonical,
+        **case_binding,
     }
 
 
-def _load_clean_selected(root: Path, sensor_indices: list[int]) -> np.ndarray:
+def _load_clean_selected(
+    root: Path, sensor_indices: list[int], binding: dict[str, Any]
+) -> np.ndarray:
     classes: list[np.ndarray] = []
-    contract_sha = build_contract()["contract_sha256"]
+    contract = build_contract()
+    contract_sha = contract["contract_sha256"]
+    expected_state_sha = {
+        row["name"]: row["sha256"] for row in binding["verified_state_files"]
+    }
     for class_index in range(10):
         path = root / f"{class_index + 1:04d}.mat"
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or _sha256_file(path) != expected_state_sha[path.name]
+        ):
+            raise F25ExecutionError(f"{path.name} changed before payload load")
         loaded = sio.loadmat(path, variable_names=["f25_data"], mat_dtype=True)
         if "f25_data" not in loaded:
             raise F25ExecutionError(f"{path.name} lacks f25_data")
@@ -249,7 +1074,11 @@ def _load_clean_selected(root: Path, sensor_indices: list[int]) -> np.ndarray:
         names = set(record.dtype.names or ())
         required = {
             "schema",
+            "generation_schema",
+            "gen_fingerprint",
             "python_contract_sha256",
+            "shared_data_contract_id",
+            "dataset_id",
             "channel_schema_id",
             "class_index_zero_based",
             "clean_trimmed",
@@ -258,12 +1087,26 @@ def _load_clean_selected(root: Path, sensor_indices: list[int]) -> np.ndarray:
             "trimmed_window_samples",
             "tail_samples_trimmed",
             "measurement_noise_applied",
+            "profile_asset_sha256",
+            "matlab_environment_descriptor",
+            "matlab_environment_sha256",
+            "generator_source_root_sha256",
+            "bundle_source_binding_sha256",
+            "release_qualification_run",
         }
         if not required.issubset(names):
             raise F25ExecutionError(f"{path.name} has an incomplete F25 payload")
         if (
             _matlab_text(record["schema"]) != "f25-saved-state-v1"
+            or _matlab_text(record["generation_schema"])
+            != "f25-generation-v1"
+            or _matlab_text(record["gen_fingerprint"])
+            != binding["gen_fingerprint"]
             or _matlab_text(record["python_contract_sha256"]) != contract_sha
+            or _matlab_text(record["shared_data_contract_id"])
+            != contract["partition"]["shared_data_contract_id"]
+            or _matlab_text(record["dataset_id"])
+            != "fernandes-2025-f25-data-v1"
             or _matlab_text(record["channel_schema_id"]) != "physical8_v1"
             or int(np.asarray(record["class_index_zero_based"]).squeeze())
             != class_index
@@ -271,6 +1114,17 @@ def _load_clean_selected(root: Path, sensor_indices: list[int]) -> np.ndarray:
             or int(np.asarray(record["trimmed_window_samples"]).squeeze()) != 5830
             or int(np.asarray(record["tail_samples_trimmed"]).squeeze()) != 1
             or bool(np.asarray(record["measurement_noise_applied"]).squeeze())
+            or _matlab_text(record["profile_asset_sha256"])
+            != contract["profile"]["sha256"]
+            or _matlab_text(record["matlab_environment_descriptor"])
+            != binding["actual_matlab_environment_descriptor"]
+            or _matlab_text(record["matlab_environment_sha256"])
+            != binding["actual_matlab_environment_sha256"]
+            or _matlab_text(record["generator_source_root_sha256"])
+            != binding["generator_source_root_sha256"]
+            or _matlab_text(record["bundle_source_binding_sha256"])
+            != binding["bundle_source_binding_sha256"]
+            or bool(np.asarray(record["release_qualification_run"]).squeeze())
         ):
             raise F25ExecutionError(f"{path.name} violates F25 state semantics")
         clean = np.asarray(record["clean_trimmed"], dtype=np.float64)
@@ -283,12 +1137,24 @@ def _load_clean_selected(root: Path, sensor_indices: list[int]) -> np.ndarray:
         ):
             raise F25ExecutionError(f"{path.name} has invalid monitoring arrays")
         classes.append(clean[:, sensor_indices, :])
+        if _sha256_file(path) != expected_state_sha[path.name]:
+            raise F25ExecutionError(f"{path.name} changed during payload load")
     return np.concatenate(classes, axis=0)
 
 
 def _prepare_dataset(job: dict[str, Any], data_root: Path) -> dict[str, Any]:
     binding = _validate_generation_root(data_root)
-    clean = _load_clean_selected(data_root, job["sensor_indices"])
+    clean = _load_clean_selected(data_root, job["sensor_indices"], binding)
+    confirmed_bundle_binding = _validate_bundle_source_binding(REPO)
+    if (
+        confirmed_bundle_binding["binding_sha256"]
+        != binding["bundle_source_binding_sha256"]
+        or confirmed_bundle_binding["generator_source_root_sha256"]
+        != binding["generator_source_root_sha256"]
+    ):
+        raise F25ExecutionError(
+            "F25 bundle/MATLAB source changed while the dataset was loaded"
+        )
     noisy = np.empty(clean.shape, dtype=np.float32)
     n_channels = len(job["sensor_indices"])
     for class_index in range(10):
@@ -530,7 +1396,7 @@ def _runtime_attestation() -> dict[str, Any]:
         validate_environment_lock(environment_lock)
     except RuntimeError as exc:
         raise F25ExecutionError(
-            f"F25 training environment differs from the campaign lock: {exc}"
+            f"F25 training host failed local capability qualification: {exc}"
         ) from exc
     descriptor = current_execution_environment()
     if descriptor["accelerator"]["backend"] != "cuda":
@@ -546,28 +1412,35 @@ def _runtime_attestation() -> dict[str, Any]:
     }
 
 
-def _bind_execution_block(runtime: dict[str, Any]) -> dict[str, Any]:
-    path = REPO / "f25_artifacts" / "execution_block_receipt.json"
-    contract_sha = build_contract()["contract_sha256"]
-    receipt = {
+def _logical_execution_block_receipt() -> dict[str, Any]:
+    """Return the host-independent identity shared by every F25 job.
+
+    The complete runtime descriptor remains in each job record, and an
+    in-progress job may therefore resume only on that same runtime.  Keeping
+    machine identity out of this block receipt lets distinct, locally
+    qualified jobs run on different available PCs without changing the
+    scientific F25 contract.
+    """
+
+    return {
         "schema": EXECUTION_RECEIPT_SCHEMA,
         "execution_block_id": EXECUTION_BLOCK_ID,
-        "f25_contract_sha256": contract_sha,
-        "execution_compatibility_sha256": runtime[
-            "execution_compatibility_sha256"
-        ],
-        "execution_compatibility_descriptor": runtime[
-            "execution_compatibility_descriptor"
-        ],
+        "f25_contract_sha256": build_contract()["contract_sha256"],
         "hardware_rule": (
-            "complete F25-R/F25-X compared block on one GPU model/numeric stack"
+            "each F25 job remains on one locally capacity-qualified host; "
+            "distinct jobs may use different qualified GPU models/numeric stacks"
         ),
     }
+
+
+def _bind_execution_block() -> dict[str, Any]:
+    path = REPO / "f25_artifacts" / "execution_block_receipt.json"
+    receipt = _logical_execution_block_receipt()
     if path.exists():
         existing = json.loads(path.read_text(encoding="utf-8"))
         if existing != receipt:
             raise F25ExecutionError(
-                "current hardware/numeric stack differs from the F25 block receipt"
+                "existing F25 block receipt differs from the logical contract"
             )
     else:
         _atomic_json(path, receipt)
@@ -578,10 +1451,17 @@ def _bind_execution_block(runtime: dict[str, Any]) -> dict[str, Any]:
 def _require_capacity_receipt(
     runtime: dict[str, Any], source_root: Any
 ) -> dict[str, Any]:
-    path = REPO / "f25_artifacts" / "f25_capacity_receipt.json"
-    if not path.is_file():
+    path = capacity_receipt_path(
+        REPO,
+        execution_environment_sha256_value=(
+            runtime["execution_environment_sha256"]
+        ),
+        python_runtime_source_sha256=source_root.sha256,
+    )
+    if not path.is_file() or path.is_symlink():
         raise F25ExecutionError(
-            "run check_f25_capacity.py on the target 6-GB-class GPU first"
+            "run check_f25_capacity.py on this PC and this exact source "
+            f"workspace first; expected {path}"
         )
     receipt = json.loads(path.read_text(encoding="utf-8"))
     recorded_sha = receipt.get("receipt_sha256")
@@ -624,6 +1504,8 @@ def _require_capacity_receipt(
         receipt.get("schema") != F25_CAPACITY_SCHEMA
         or receipt.get("accepted") is not True
         or receipt.get("contract_only") is not False
+        or receipt.get("capacity_receipt_address_schema")
+        != CAPACITY_RECEIPT_ADDRESS_SCHEMA
         or receipt.get("f25_contract_sha256")
         != build_contract()["contract_sha256"]
         or receipt.get("execution_environment_sha256")
@@ -637,6 +1519,8 @@ def _require_capacity_receipt(
         or receipt.get("execution_compatibility_descriptor")
         != runtime["execution_compatibility_descriptor"]
         or receipt.get("python_runtime_source_sha256") != source_root.sha256
+        or receipt.get("python_runtime_source_file_count")
+        != source_root.file_count
         or recorded_sha != canonical_json_sha256(unsigned)
         or receipt.get("cases") != cases
         or receipt.get("case_contract_sha256")
@@ -651,6 +1535,25 @@ def _require_capacity_receipt(
             "F25 capacity receipt is stale, foreign, incomplete, or rejected"
         )
     return receipt
+
+
+def _capacity_receipt_binding(
+    receipt: dict[str, Any],
+    runtime: dict[str, Any],
+    source_root: Any,
+) -> dict[str, Any]:
+    path = capacity_receipt_path(
+        REPO,
+        execution_environment_sha256_value=(
+            runtime["execution_environment_sha256"]
+        ),
+        python_runtime_source_sha256=source_root.sha256,
+    )
+    return {
+        "schema": "f25-capacity-receipt-binding-v1",
+        "relative_path": path.relative_to(REPO).as_posix(),
+        "receipt_sha256": receipt["receipt_sha256"],
+    }
 
 
 def _job_directory(job: dict[str, Any]) -> Path:
@@ -697,6 +1600,7 @@ def _publish_job_record(
     job: dict[str, Any],
     runtime: dict[str, Any],
     block_receipt: dict[str, Any],
+    capacity_receipt: dict[str, Any],
     source_root: Any,
     data_binding: dict[str, Any],
 ) -> dict[str, Any]:
@@ -709,6 +1613,9 @@ def _publish_job_record(
         "python_runtime_source_file_count": source_root.file_count,
         "execution_runtime": runtime,
         "execution_block_receipt_sha256": block_receipt["receipt_sha256"],
+        "capacity_receipt_binding": _capacity_receipt_binding(
+            capacity_receipt, runtime, source_root
+        ),
         "data_binding": data_binding,
         "partition_sha256": partition_sha256(),
     }
@@ -937,11 +1844,16 @@ def run_job(
     data_root = expected_root
     runtime = _runtime_attestation()
     source_root = python_runtime_source_root(REPO)
-    _require_capacity_receipt(runtime, source_root)
-    block_receipt = _bind_execution_block(runtime)
+    capacity_receipt = _require_capacity_receipt(runtime, source_root)
+    block_receipt = _bind_execution_block()
     dataset = _prepare_dataset(job, data_root)
     run_record = _publish_job_record(
-        job, runtime, block_receipt, source_root, dataset["data_binding"]
+        job,
+        runtime,
+        block_receipt,
+        capacity_receipt,
+        source_root,
+        dataset["data_binding"],
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if job["phase"] == "hpo":
@@ -953,6 +1865,14 @@ def run_job(
 
 
 def smoke() -> None:
+    block_receipt = _logical_execution_block_receipt()
+    if (
+        block_receipt["schema"] != EXECUTION_RECEIPT_SCHEMA
+        or "execution_compatibility_sha256" in block_receipt
+        or "execution_compatibility_descriptor" in block_receipt
+        or "distinct jobs may use different" not in block_receipt["hardware_rule"]
+    ):
+        raise F25ExecutionError("F25 logical block receipt is host-bound")
     params = {
         "n_conv_layers": 1,
         "filters_l0": 32,

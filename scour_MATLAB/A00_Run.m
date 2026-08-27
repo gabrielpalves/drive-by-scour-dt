@@ -7,29 +7,13 @@
 clear; clc; close all
 % process_results;
 
-% Campaign environment gate (audit R11): generator numerics are locked to an
-% exact executable numerical stack, not merely a MATLAB release label. The
-% canonical identity covers MATLAB Update/build, architecture, BLAS/LAPACK, and
-% Statistics/Parallel toolbox versions. A candidate environment qualifies only
-% after BOTH of the following pass ON IT:
-%   (1) the MATLAB smoke suite: smoke_audit, smoke_geometry, smoke_stage3,
-%       smoke_familytable, smoke_b54_overlap_parity  (validates the PHYSICS);
-%   (2) generation identity vs an already-validated release: run
-%       make_micro_smoke.py on both machines, then
-%       `python compare_generation_releases.py <dirA> <dirB>` must report
-%       SEMANTICALLY-BIT-IDENTICAL (MAT containers themselves need not be
-%       byte-identical), or a numerical verdict explicitly accepted and
-%       recorded in docs/framework_rationale.md.
-% Risk areas that make (2) mandatory rather than assumed: Statistics Toolbox
-% samplers (poissrnd/wblrnd/lhsdesign) may change algorithm between releases,
-% and BLAS/LAPACK drift can accumulate over ~8.7k Newmark steps.
-% Qualification NEVER widens this production script. make_micro_smoke.py emits a
-% dedicated reduced script with qualification_run=true; that output is marked in
-% the manifest AND every state, and Python rejects it from every campaign path.
-% Actual and campaign environment descriptors/digests (plus their human release
-% strings) are recorded separately. Qualification bypasses only the exact-stack
-% equality below; it does not bypass lock integrity, source identity, physics
-% gates, state validation, or output marking.
+% Portable campaign environment policy: the reviewed descriptor below is a
+% known-good reference, while current_matlab_environment qualifies the required
+% toolboxes/licenses/APIs on this host.  Exact release, Update, BLAS/LAPACK and
+% toolbox versions are recorded in every output but do not decide eligibility.
+% The physics/numerical smoke suite and smoke_generation_worker are the local
+% qualification.  make_micro_smoke.py remains available as an optional release
+% diagnostic; its marked output can never enter production training.
 script_dir_ = fileparts(mfilename('fullpath'));
 current_working_dir_ = ttbi.canonical_execution_path(pwd);
 expected_working_dir_ = ttbi.canonical_execution_path(script_dir_);
@@ -50,11 +34,11 @@ end
 environment_lock_ = jsondecode(fileread(environment_lock_path_));
 if ~isstruct(environment_lock_) || ~isscalar(environment_lock_) || ...
         ~isfield(environment_lock_, 'schema') || ...
-        ~strcmp(environment_lock_.schema, 'ttbi-campaign-environment-v2') || ...
+        ~strcmp(environment_lock_.schema, 'ttbi-campaign-environment-v3') || ...
         ~isfield(environment_lock_, 'matlab_environment') || ...
         ~isfield(environment_lock_, 'matlab_environment_sha256')
     error('A00:EnvironmentLockFormat', ...
-        'Campaign environment lock lacks the reviewed v2 MATLAB identity.');
+        'Campaign environment reference lacks the reviewed v3 MATLAB identity.');
 end
 campaign_matlab_environment = environment_lock_.matlab_environment;
 [campaign_matlab_environment_sha256, ...
@@ -140,16 +124,15 @@ if qualification_run
             matlab_release, actual_matlab_environment_sha256);
 elseif ~strcmp(actual_matlab_environment_sha256, ...
         campaign_matlab_environment_sha256)
-    error('A00:CampaignMATLABEnvironment', ...
-        ['This campaign is locked to environment %s (%s), but this machine is ' ...
-         '%s (%s). All four Paper-1 blocks must use one exact executable numerical stack. ' ...
-         'Use make_micro_smoke.py --qualification only to generate marked ' ...
-         'cross-environment comparison fixtures.'], ...
+    warning('A00:ReferenceMATLABEnvironmentDiffers', ...
+        ['This host differs from the known-good MATLAB reference %s (%s): ' ...
+         'actual %s (%s). Continuing under capability-and-smoke qualification; ' ...
+         'the actual descriptor is recorded in the dataset.'], ...
         campaign_matlab_environment_sha256, ...
         campaign_matlab_environment.release, ...
         actual_matlab_environment_sha256, actual_matlab_environment.release);
 else
-    fprintf('[A00] MATLAB environment %s (%s; exact campaign lock).\n', ...
+    fprintf('[A00] MATLAB environment %s (%s; known-good reference).\n', ...
         actual_matlab_environment_sha256, actual_matlab_environment.release);
 end
 [generator_source_root_sha256, generator_source_digest_lines, ...
@@ -160,11 +143,11 @@ fprintf('[A00] generator source root %s (%d reviewed scour_MATLAB files).\n', ..
 % =========================================================================
 % Reviewed campaign configuration
 % =========================================================================
-% These seven literals are the generated-micro and stage-bundle override
-% boundary.  build_stage_bundles.py writes the exact count tuple for each
-% Paper-1 stage; make_micro_smoke.py reduces the same tuple in a copied driver.
-% The repository default is the gating F40-S dataset: 61 severities x 5
-% independent semantic replicas = 305 states.
+% These seven literals are ONLY the generated-micro override boundary.
+% make_micro_smoke.py reduces the tuple in a copied driver. Production source
+% is byte-identical in all six dispatch ZIPs: its stage and exact count tuple
+% come from the authenticated generation_bundle_manifest.json beside the
+% repository root, never from a builder rewrite or an environment variable.
 STAGE = 'F40-S';
 n_states_multi   = 0;       % joint LHS states (zero for dense F40-S)
 Npass = 50;                 % passages per semantic state (operational variability)
@@ -172,6 +155,21 @@ n_healthy_states  = 5;      % five independent replicas at zero scour
 n_anchor_levels  = 60;      % positive integer severities 1..60 percent
 n_anchor_reps     = 5;      % each (family,target,level): 3/1/1 train/val/test
 n_nuisance_states = 0;      % dense single-mechanism stage has no nuisance rows
+
+if ~qualification_run
+    bundle_selection_ = ttbi.load_generation_bundle_manifest( ...
+        repository_root_, generator_source_root_sha256, ...
+        generator_source_file_count);
+    STAGE = bundle_selection_.STAGE;
+    n_states_multi = bundle_selection_.n_states_multi;
+    Npass = bundle_selection_.Npass;
+    n_healthy_states = bundle_selection_.n_healthy_states;
+    n_anchor_levels = bundle_selection_.n_anchor_levels;
+    n_anchor_reps = bundle_selection_.n_anchor_reps;
+    n_nuisance_states = bundle_selection_.n_nuisance_states;
+    fprintf('[A00] authenticated generation bundle manifest %s (%s).\n', ...
+        bundle_selection_.manifest_file_sha256, STAGE);
+end
 
 campaign_setup_inputs = struct( ...
     'STAGE', STAGE, ...

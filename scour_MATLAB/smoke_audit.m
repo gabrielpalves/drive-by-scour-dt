@@ -119,11 +119,52 @@ phase_rule_ok_ = isequal(FixedA_.Profile.h, FixedB_.Profile.h) && ...
     ~isequal(FixedA_.Profile.h, Other_.Profile.h) && ...
     isequal(FixedA_.Profile.PSD_Y, Other_.Profile.PSD_Y) && ...
     isequal(expected_after_, observed_after_);
-fprintf('[3] shared FRA-v2 spectrum %s; phase-only contrast %s\n', ...
-    string(spectral_equal_), string(phase_rule_ok_));
-if ~spectral_equal_ || ~phase_rule_ok_
+
+% Exercise the optional state-random phase namespace directly. Two passages of
+% one StateUID must regenerate the exact same profile, while a different
+% StateUID receives a different phase realization under the same FRA-4 PSD.
+% Paper-1 production uses fixed mode; this keeps psd_fra executable for a
+% separately authorized future sensitivity study.
+state_uids_ = { ...
+    ttbi.state_uid(40, 2, 2, 'scour_only', 2, 20, 1); ...
+    ttbi.state_uid(40, 2, 2, 'scour_only', 2, 20, 2)};
+state_roots_ = ttbi.state_seed_ids(state_uids_, 1);
+state_names_ = {'operations','crack','profile-state','track','profile-phase'};
+passage_names_ = {'profile-passage','oor-passage'};
+[state_streams_, ~] = ttbi.named_stream_seed_ids( ...
+    state_roots_, state_uids_, 2, 'uid-named-substreams-v2', ...
+    state_names_, passage_names_);
+state1_cfg_ = struct('mode', 'psd_fra', 'fra_class', 4, ...
+    'phase_seed', double(state_streams_(1, 5)), ...
+    'spectrum_contract', contract_);
+state2_cfg_ = state1_cfg_;
+state2_cfg_.phase_seed = double(state_streams_(2, 5));
+[State1_, ~, ~] = A04_Options(Bm_, Trk_, state1_cfg_);
+[State2_, ~, ~] = A04_Options(Bm_, Trk_, state2_cfg_);
+State1_.Profile.min_dx = 0.02;
+State1_.Profile.L = 20;
+State1_.Position.x = 0:0.02:20;
+State1_.Plot.Profile_original = 0;
+State2_.Profile.min_dx = 0.02;
+State2_.Profile.L = 20;
+State2_.Position.x = 0:0.02:20;
+State2_.Plot.Profile_original = 0;
+rng(17, 'twister');
+State1Pass1_ = B19_GenerateProfile(State1_);
+rng(29, 'twister');
+State1Pass2_ = B19_GenerateProfile(State1_);
+State2Pass1_ = B19_GenerateProfile(State2_);
+state_persistence_ok_ = ...
+    state_streams_(1, 5) ~= state_streams_(2, 5) && ...
+    isequal(State1Pass1_.Profile.h, State1Pass2_.Profile.h) && ...
+    ~isequal(State1Pass1_.Profile.h, State2Pass1_.Profile.h) && ...
+    isequal(State1Pass1_.Profile.PSD_Y, State2Pass1_.Profile.PSD_Y);
+fprintf(['[3] shared FRA-v2 spectrum %s; phase-only contrast %s; ' ...
+    'per-StateUID persistence %s\n'], string(spectral_equal_), ...
+    string(phase_rule_ok_), string(state_persistence_ok_));
+if ~spectral_equal_ || ~phase_rule_ok_ || ~state_persistence_ok_
     fprintf(['    FAIL: fixed and psd_fra must share one spectrum; fixed must ' ...
-        'repeat and state phase must be the only contrast\n']);
+        'repeat, while psd_fra must persist within and differ across StateUIDs\n']);
     fails = fails + 1;
 end
 

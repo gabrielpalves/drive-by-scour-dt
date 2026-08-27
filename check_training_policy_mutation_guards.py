@@ -211,7 +211,11 @@ MUTATIONS = (
             '    actual_cudnn = spec.get("cudnn_runtime")'
             "  # MUTANT: ignore runtime"
         ),
-        evidence="[FAIL] cuDNN runtime mismatch hard-fails",
+        # v3 made cuDNN drift provenance rather than a gate, so laundering the
+        # runtime value no longer trips a hard-fail. It is still caught: the
+        # simulated host reports cuDNN 99999, so echoing the reference erases a
+        # mismatch that the provenance assertion requires to be recorded.
+        evidence="[FAIL] CUDA and cuDNN version drift is provenance",
     ),
     Mutation(
         name="trainer objective call bypasses TRAIN_PROTOCOL objective policy",
@@ -306,7 +310,10 @@ MUTATIONS = (
 BASELINE_EVIDENCE = {
     "check_campaign_controls.py": "CAMPAIGN CONTROLS: ALL PASS",
     "check_weighted_head_mse.py": "WEIGHTED HEAD MSE: ALL PASS",
-    "check_environment_lock.py": "ENVIRONMENT LOCK: ALL PASS",
+    # Renamed with the v3 capability-based qualification: the checker no
+    # longer asserts an exact environment lock, so its green banner is
+    # COMPATIBILITY rather than LOCK.
+    "check_environment_lock.py": "ENVIRONMENT COMPATIBILITY: ALL PASS",
     "check_hyperparameter_policy.py": "HYPERPARAMETER POLICY: ALL PASS",
 }
 

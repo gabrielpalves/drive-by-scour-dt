@@ -46,7 +46,7 @@ function report = contact_closure_study(dataset_dir, state_index, passage_select
 %                                 summary
 %   contact_study_report          durable .mat/.md publication
 %   contact_closure_common        shared hashing/path/closeness utilities
-%   contact_solver_modules        frozen 37-module solver inventory
+%   contact_solver_modules        frozen 39-module solver inventory
 % The comparison-window construction stays HERE so the acceptance support
 % policy is visible at the orchestration level.
 %

@@ -2,8 +2,8 @@ function summary = contact_closure_gate( ...
         f40s_dir, f40m_dir, l99s_dir, l99m_dir, output_dir, varargin)
 %CONTACT_CLOSURE_GATE Exhaustive Paper-1 pre-dispatch time-step closure gate.
 %
-% Real qualifying invocation (on the one designated, exact-stack reference
-% host after its four micros have passed host qualification):
+% Real qualifying invocation (on any capable host after its four local micros
+% have passed capability and physics-smoke qualification):
 %
 %   contact_closure_gate( ...
 %       "...\F40-S_L40_st31", ...
@@ -13,9 +13,12 @@ function summary = contact_closure_gate( ...
 %       "...\contact_closure_paper1", ...
 %       "SourceCommit", "<40-lowercase-hex>");
 %
-% The four inputs must be freshly completed release-qualification micros
-% produced on THIS host from one exact Paper-1 source/environment. Every saved
-% state/passage is selected before any refinement solve: 93 + 93 + 117 + 117 =
+% The four inputs must be freshly completed qualification micros produced on
+% THIS closure host from one internally coherent Paper-1 source and actual
+% MATLAB environment. Different campaign jobs may use other locally qualified
+% hosts; only the evidence combined inside this one closure study must remain
+% internally homogeneous. Every saved state/passage is selected before any
+% refinement solve: 93 + 93 + 117 + 117 =
 % 420 cases, each re-run at 1/0.5/0.25 ms. No historical state number and no
 % post-hoc "worst" selector is part of this gate.
 %
@@ -45,7 +48,7 @@ function summary = contact_closure_gate( ...
 %   contact_gate_*            one-function-per-file acceptance and publication
 %                             helpers, named by their exact responsibility
 %   contact_closure_common    shared hashing/path/closeness utilities
-%   contact_solver_modules    frozen 37-module solver inventory
+%   contact_solver_modules    frozen 39-module solver inventory
 
 arguments
     f40s_dir {mustBeTextScalar}

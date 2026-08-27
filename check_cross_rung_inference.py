@@ -1,6 +1,6 @@
 """Adversarial acceptance for four-stage matched-block inference.
 
-Run: ``py -3.13 check_cross_rung_inference.py``
+Run: ``python check_cross_rung_inference.py``
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ def _payloads() -> dict[str, dict]:
                 "campaign_contract_sha256": campaign_contract_sha256(stage),
                 "evaluation_role": "post_freeze_sealed_test_stability",
                 "pipeline_slot": "raw_cnn_gap_baseline",
-                "input_selector": [1, 3],
+                "input_selector": [1, 5],
                 "metric_name": "scour_mse",
                 "registered_seeds": list(SEEDS),
                 "generated_state_uids": list(inventory),

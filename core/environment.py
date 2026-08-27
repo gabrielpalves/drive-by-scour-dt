@@ -1,4 +1,10 @@
-"""Pinned software-environment provenance for the ablation campaign."""
+"""Portable runtime qualification and software provenance for the campaign.
+
+The JSON descriptor is a known-good reference environment, not an execution
+allow-list.  Scientific runs are admitted by the capabilities they need
+(required packages, CUDA and deterministic configuration); exact versions and
+binary hashes are retained only as provenance.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +12,8 @@ import hashlib
 import json
 import os
 import platform
+import struct
+import sys
 from pathlib import Path
 
 from core.environment_artifacts import (
@@ -20,8 +28,23 @@ from core.environment_artifacts import (
 )
 
 
-_LOCK_SCHEMA = "ttbi-campaign-environment-v2"
-_PACKAGE_ARTIFACT_POLICY = "wheel-record-sha256-v1"
+_LOCK_SCHEMA = "ttbi-campaign-environment-v3"
+_PACKAGE_ARTIFACT_POLICY = "known-good-wheel-record-reference-v1"
+_PACKAGE_INVENTORY_POLICY = "known-good-reference"
+_MINIMUM_PYTHON = (3, 11)
+_REQUIRED_DISTRIBUTIONS = frozenset({
+    "joblib",
+    "matplotlib",
+    "numpy",
+    "optuna",
+    "pandas",
+    "pywavelets",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "torch",
+    "tqdm",
+})
 _LOCK_FIELDS = frozenset({
     "schema",
     "python",
@@ -126,7 +149,7 @@ def _validate_python_runtime_spec(spec: dict) -> dict:
         or runtime["user_site_enabled"] is not False
     ):
         raise RuntimeError(
-            "campaign Python must use the locked isolated uv environment"
+            "known-good Python reference must describe its isolated uv environment"
         )
     build = runtime["build"]
     if (
@@ -168,7 +191,8 @@ def _validate_python_runtime_spec(spec: dict) -> dict:
     ]
     if runtime["sys_path_roles"] != expected_path_roles:
         raise RuntimeError(
-            "python_runtime.sys_path_roles differs from the fixed import path"
+            "python_runtime.sys_path_roles differs from the known-good "
+            "reference inventory"
         )
     startup = runtime["startup_files_sha256"]
     if not isinstance(startup, dict) or not startup:
@@ -192,10 +216,11 @@ def _validate_python_runtime_spec(spec: dict) -> dict:
 
 
 def _locked_package_versions(spec: dict) -> dict[str, str]:
-    """Validate and canonicalize the complete package inventory in the lock."""
-    if spec.get("package_inventory_policy") != "exact":
+    """Validate the known-good package inventory carried by the reference."""
+    if spec.get("package_inventory_policy") != _PACKAGE_INVENTORY_POLICY:
         raise RuntimeError(
-            "campaign environment must require an exact package inventory"
+            "campaign environment must label package versions as a "
+            "known-good reference"
         )
     packages = spec.get("packages")
     if not isinstance(packages, dict) or not packages:
@@ -225,10 +250,11 @@ def _locked_package_record_roots(
     spec: dict,
     packages: dict[str, str],
 ) -> dict[str, str]:
-    """Validate the one authenticated wheel-content root per distribution."""
+    """Validate reference wheel roots without imposing them on live hosts."""
     if spec.get("package_artifact_policy") != _PACKAGE_ARTIFACT_POLICY:
         raise RuntimeError(
-            "campaign package artifact policy must authenticate wheel RECORDs"
+            "campaign package artifact policy must mark wheel roots as "
+            "known-good reference provenance"
         )
     roots = spec.get("package_record_sha256")
     if not isinstance(roots, dict) or set(roots) != set(packages):
@@ -244,11 +270,11 @@ def _locked_package_record_roots(
 
 
 def _validate_lock_spec(spec: object) -> dict:
-    """Validate the complete v2 schema before any field is trusted."""
+    """Validate the complete v3 reference schema before fields are trusted."""
     if not isinstance(spec, dict) or set(spec) != _LOCK_FIELDS:
         got = sorted(spec) if isinstance(spec, dict) else type(spec).__name__
         raise RuntimeError(
-            f"campaign environment fields differ from v2: {got!r}"
+            f"campaign environment fields differ from v3: {got!r}"
         )
     if spec["schema"] != _LOCK_SCHEMA:
         raise RuntimeError("unsupported campaign environment schema")
@@ -379,7 +405,14 @@ def load_environment_lock(path: str | Path) -> dict:
 
 
 def validate_environment_lock(lock: dict) -> dict:
-    """Hard-fail when the running ablation environment differs from the lock."""
+    """Qualify required capabilities and record drift from the reference.
+
+    Version, platform, environment-manager and wheel-byte differences never
+    reject a host.  They are returned in ``reference_mismatches``.  A run is
+    rejected only when a capability used by the campaign is absent: supported
+    64-bit CPython, required distributions, CUDA, or a conflicting cuBLAS
+    deterministic-workspace setting.
+    """
     if (
         not isinstance(lock, dict)
         or set(lock) != {"path", "sha256", "spec"}
@@ -390,106 +423,131 @@ def validate_environment_lock(lock: dict) -> dict:
         raise RuntimeError("malformed loaded campaign environment lock")
     spec = lock["spec"]
     _validate_lock_spec(spec)
-    mismatches: dict[str, tuple[object, object]] = {}
+    reference_mismatches: dict[str, tuple[object, object]] = {}
 
     expected_python_runtime = spec["python_runtime"]
-    actual_python_runtime = _current_python_runtime_descriptor()
-    actual_python = actual_python_runtime["version"]
+    implementation = platform.python_implementation()
+    actual_python = platform.python_version()
+    actual_python_runtime = {
+        "version": actual_python,
+        "implementation": implementation,
+        "implementation_version": platform.python_version(),
+        "machine": platform.machine(),
+        "architecture": f"{struct.calcsize('P') * 8}bit",
+        "cache_tag": getattr(sys.implementation, "cache_tag", None),
+        "compiler": platform.python_compiler(),
+        "executable": str(Path(sys.executable).resolve()),
+        "prefix": str(Path(sys.prefix).resolve()),
+        "base_prefix": str(Path(sys.base_prefix).resolve()),
+        "virtual_environment": sys.prefix != sys.base_prefix,
+        "pythonpath_environment": os.environ.get("PYTHONPATH"),
+        "pythonhome_environment": os.environ.get("PYTHONHOME"),
+        "sys_path": [str(value) for value in sys.path],
+    }
+    if implementation != "CPython":
+        raise RuntimeError(
+            "campaign execution requires CPython because the numerical "
+            "extensions are qualified for its ABI"
+        )
+    if sys.version_info < _MINIMUM_PYTHON:
+        raise RuntimeError(
+            "campaign execution requires CPython "
+            f"{_MINIMUM_PYTHON[0]}.{_MINIMUM_PYTHON[1]} or newer"
+        )
+    if struct.calcsize("P") * 8 != 64:
+        raise RuntimeError("campaign execution requires a 64-bit Python")
     if actual_python != spec["python"]:
-        mismatches["python"] = (actual_python, spec["python"])
+        reference_mismatches["python"] = (actual_python, spec["python"])
     for field, expected in expected_python_runtime.items():
-        actual = actual_python_runtime.get(field, "MISSING")
+        actual = actual_python_runtime.get(field, "NOT_RECORDED_PORTABLY")
         if actual != expected:
-            mismatches[f"python_runtime:{field}"] = (actual, expected)
+            reference_mismatches[f"python_runtime:{field}"] = (
+                actual,
+                expected,
+            )
     actual_system = platform.system()
     if actual_system != spec["platform_system"]:
-        mismatches["platform_system"] = (
+        reference_mismatches["platform_system"] = (
             actual_system, spec["platform_system"])
     actual_cublas = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
     expected_cublas = spec.get("cublas_workspace_config")
+    if actual_cublas not in (None, expected_cublas):
+        raise RuntimeError(
+            "CUBLAS_WORKSPACE_CONFIG conflicts with the deterministic "
+            f"campaign setting: {actual_cublas!r} != {expected_cublas!r}"
+        )
     if actual_cublas != expected_cublas:
-        mismatches["cublas_workspace_config"] = (
+        reference_mismatches["cublas_workspace_config"] = (
             actual_cublas, expected_cublas)
 
     expected_packages = _locked_package_versions(spec)
     actual_packages = _installed_distribution_versions()
+    missing_required = sorted(
+        distribution
+        for distribution in _REQUIRED_DISTRIBUTIONS
+        if distribution not in actual_packages
+    )
+    if missing_required:
+        raise RuntimeError(
+            "campaign runtime is missing required distributions: "
+            f"{missing_required}. Install the project requirements; exact "
+            "reference versions are not required."
+        )
     for distribution, expected in expected_packages.items():
-        actual = actual_packages.get(distribution, "MISSING")
+        actual = actual_packages.get(distribution, "NOT_INSTALLED")
         if actual != expected:
-            mismatches[f"package:{distribution}"] = (actual, expected)
-    for distribution, actual in actual_packages.items():
-        if distribution not in expected_packages:
-            mismatches[f"unexpected-package:{distribution}"] = (
+            reference_mismatches[f"package:{distribution}"] = (
                 actual,
-                "ABSENT",
+                expected,
             )
 
     import torch
     actual_cuda = torch.version.cuda
     if actual_cuda != spec["torch_cuda"]:
-        mismatches["torch_cuda"] = (actual_cuda, spec["torch_cuda"])
+        reference_mismatches["torch_cuda"] = (
+            actual_cuda,
+            spec["torch_cuda"],
+        )
     actual_cudnn = torch.backends.cudnn.version()
     expected_cudnn = spec.get("cudnn_runtime")
     if actual_cudnn != expected_cudnn:
-        mismatches["cudnn_runtime"] = (actual_cudnn, expected_cudnn)
+        reference_mismatches["cudnn_runtime"] = (
+            actual_cudnn,
+            expected_cudnn,
+        )
     cuda_available = bool(torch.cuda.is_available())
     if not cuda_available:
-        mismatches["cuda_available"] = (cuda_available, True)
-
-    # Hashing RECORD-owned runtime files and scanning for unowned non-cache
-    # package files are deferred until every cheap environmental check passes.
-    # A wrong host fails quickly; an authorized campaign pays this cost once.
-    if mismatches:
         raise RuntimeError(
-            "campaign software environment differs from the protocol lock: "
-            f"{mismatches}. Install requirements-campaign-py313-cu128.txt "
-            "in the locked Python runtime; do not mix environments across "
-            "studies."
-        )
-
-    expected_record_roots = _locked_package_record_roots(
-        spec,
-        expected_packages,
-    )
-    actual_record_roots = _installed_distribution_record_roots()
-    for distribution, expected in expected_record_roots.items():
-        actual = actual_record_roots.get(distribution, "MISSING")
-        if actual != expected:
-            mismatches[f"package-record:{distribution}"] = (actual, expected)
-    for distribution, actual in actual_record_roots.items():
-        if distribution not in expected_record_roots:
-            mismatches[f"unexpected-package-record:{distribution}"] = (
-                actual,
-                "ABSENT",
-            )
-    if mismatches:
-        raise RuntimeError(
-            "campaign package bytes differ from the authenticated wheel "
-            f"RECORD roots: {mismatches}. Rebuild the isolated environment "
-            "from requirements-campaign-py313-cu128.txt."
+            "campaign training requires a CUDA device visible to PyTorch; "
+            "run the local capacity preflight on this PC before dispatch"
         )
 
     record = {
+        "qualification_policy": "required-capabilities-and-local-smokes-v1",
+        "qualified": True,
         "lock_sha256": lock["sha256"],
+        "reference_schema": spec["schema"],
         "python": actual_python,
         "python_runtime": actual_python_runtime,
         "platform": platform.platform(),
         "packages": actual_packages,
-        "package_record_sha256": actual_record_roots,
+        # RECORD hashes in the reference remain useful forensic metadata, but
+        # they are deliberately not recomputed as a portability gate.
+        "package_record_sha256": {},
+        "reference_mismatches": reference_mismatches,
+        "required_distributions": sorted(_REQUIRED_DISTRIBUTIONS),
         "torch_cuda": actual_cuda,
         "cuda_available": cuda_available,
         "gpu": (torch.cuda.get_device_name(0) if cuda_available else None),
         "cudnn": actual_cudnn,
         "cublas_workspace_config": actual_cublas,
-        # This Python validator does not launch MATLAB. A00_Run.m independently
-        # captures the same canonical descriptor and hard-gates its SHA-256
-        # before production generation.
+        # This Python validator does not launch MATLAB. A00_Run.m records the
+        # actual MATLAB descriptor and qualifies required functions locally.
         "generator_requirements": {
             "matlab_environment": spec["matlab_environment"],
             "matlab_environment_sha256":
                 spec["matlab_environment_sha256"],
-            "validation":
-                "full descriptor hard-gated by scour_MATLAB/A00_Run.m",
+            "validation": "reference only; capabilities and smokes gate runs",
         },
     }
     return record

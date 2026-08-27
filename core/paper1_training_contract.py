@@ -29,6 +29,15 @@ CHANNEL_NAMES = (
     "front_bogie_pitch_rate",
     "rear_bogie_pitch_rate",
 )
+# ``physical8_v1`` is the on-disk response inventory, not an assertion that
+# every stored row is an equivalent candidate sensor.  Rows 3-4 are idealized
+# constrained-wheelset kinematic proxies retained for contact/solver V&V; they
+# are not independent wheel DOFs or instrument models.  Scientific learning
+# and sensor selection are therefore restricted to the six vehicle responses
+# that have a direct accelerometer/gyroscope interpretation.
+EXCLUDED_PROXY_INDICES = (3, 4)
+ELIGIBLE_SENSOR_INDICES = (0, 1, 2, 5, 6, 7)
+ELIGIBLE_SENSOR_NAMES = tuple(CHANNEL_NAMES[index] for index in ELIGIBLE_SENSOR_INDICES)
 ANCHOR_CHANNEL_INDEX = 1
 ANCHOR_CHANNEL_NAME = CHANNEL_NAMES[ANCHOR_CHANNEL_INDEX]
 OUTER_SPLIT_SEED = 42
@@ -97,8 +106,10 @@ PAA_CNN_GAP_BASELINE_ID = _cell_id("PAA", False, False, False)
 
 
 def channel_screen_inputs() -> tuple[tuple[int, ...], ...]:
-    singles = tuple((index,) for index in range(len(CHANNEL_NAMES)))
-    pairs = tuple(itertools.combinations(range(len(CHANNEL_NAMES)), 2))
+    """Return the six measurable singles and their 15 unordered pairs."""
+
+    singles = tuple((index,) for index in ELIGIBLE_SENSOR_INDICES)
+    pairs = tuple(itertools.combinations(ELIGIBLE_SENSOR_INDICES, 2))
     return singles + pairs
 
 
@@ -223,7 +234,7 @@ def development_adjudication_jobs() -> tuple[dict[str, Any], ...]:
 
 
 def channel_screen_jobs() -> tuple[dict[str, Any], ...]:
-    """Four retained slots x (8 singles + 28 pairs) x five paired refits."""
+    """Four retained slots x (6 singles + 15 pairs) x five paired refits."""
 
     return tuple(
         _job(
@@ -287,6 +298,9 @@ def complete_job_grid() -> dict[str, Any]:
         "stage_order": list(STAGE_ORDER),
         "channel_schema_id": CHANNEL_SCHEMA_ID,
         "channel_names": list(CHANNEL_NAMES),
+        "eligible_sensor_indices": list(ELIGIBLE_SENSOR_INDICES),
+        "eligible_sensor_names": list(ELIGIBLE_SENSOR_NAMES),
+        "excluded_proxy_indices": list(EXCLUDED_PROXY_INDICES),
         "anchor_channel_index": ANCHOR_CHANNEL_INDEX,
         "anchor_channel_name": ANCHOR_CHANNEL_NAME,
         "outer_split_seed": OUTER_SPLIT_SEED,
@@ -341,8 +355,18 @@ def validate_contract() -> None:
         raise RuntimeError("factorial architecture grid is not 2x2x2x2")
     if len({cell.cell_id for cell in FACTORIAL_CELLS}) != 16:
         raise RuntimeError("factorial architecture identifiers collide")
-    if len(channel_screen_inputs()) != 36:
-        raise RuntimeError("channel screen is not 8 singles plus 28 pairs")
+    if (
+        EXCLUDED_PROXY_INDICES != (3, 4)
+        or ELIGIBLE_SENSOR_INDICES != (0, 1, 2, 5, 6, 7)
+        or set(EXCLUDED_PROXY_INDICES) & set(ELIGIBLE_SENSOR_INDICES)
+        or set(EXCLUDED_PROXY_INDICES) | set(ELIGIBLE_SENSOR_INDICES)
+        != set(range(len(CHANNEL_NAMES)))
+        or ELIGIBLE_SENSOR_NAMES
+        != tuple(CHANNEL_NAMES[index] for index in ELIGIBLE_SENSOR_INDICES)
+    ):
+        raise RuntimeError("scientific sensor eligibility drifted from physical8_v1")
+    if len(channel_screen_inputs()) != 21:
+        raise RuntimeError("channel screen is not 6 eligible singles plus 15 pairs")
     if len(HPO_RESTART_SEEDS) != HPO_RESTARTS_PER_CONFIGURATION:
         raise RuntimeError("HPO restart seed inventory drifted")
     hpo = hpo_jobs()
@@ -350,7 +374,7 @@ def validate_contract() -> None:
         raise RuntimeError("per-block HPO grid is not 160 x 100 trials")
     expected_counts = {
         "development_adjudication": 480,
-        "channel_screen": 720,
+        "channel_screen": 420,
         "post_freeze_stability": 480,
         "secondary_frozen_transfer": 60,
     }

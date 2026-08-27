@@ -1,6 +1,6 @@
 """Adversarial checks for the four-stage hyperparameter execution policy.
 
-Run: ``py -3.13 check_hyperparameter_policy.py``
+Run: ``python check_hyperparameter_policy.py`` after local capability checks.
 """
 
 from __future__ import annotations
@@ -71,28 +71,35 @@ def rejects(name: str, function) -> None:
         check(name, False, "mutation was accepted")
 
 
-def fixture_environment() -> dict:
+def fixture_environment(
+    *,
+    hostname: str = "qualification-host-a",
+    gpu_name: str = "qualification-gpu-a",
+    gpu_uuid: str = "GPU-qualification-a",
+    torch_version: str = "fixture-a",
+    cuda_runtime_version: str = "12.8",
+) -> dict:
     return {
         "schema": "ttbi-execution-environment-v1",
         "host": {
-            "hostname": "qualification-host",
+            "hostname": hostname,
             "machine": "AMD64",
             "system": "Windows",
-            "platform": "qualification-fixture",
+            "platform": f"qualification-fixture-{hostname}",
         },
         "accelerator": {
             "backend": "cuda",
             "device_index": 0,
-            "name": "qualification-gpu",
-            "uuid": "GPU-qualification",
+            "name": gpu_name,
+            "uuid": gpu_uuid,
             "compute_capability": {"major": 8, "minor": 9},
             "sm_count": 40,
             "total_memory_bytes": 8_589_934_592,
             "driver_version": "fixture",
         },
         "numeric_stack": {
-            "torch_version": "fixture",
-            "cuda_runtime_version": "fixture",
+            "torch_version": torch_version,
+            "cuda_runtime_version": cuda_runtime_version,
             "cudnn_version": 1,
             "cublas_workspace_config": ":4096:8",
             "deterministic_algorithms": True,
@@ -107,13 +114,19 @@ def fixture_environment() -> dict:
     }
 
 
-def fixture_runtime() -> dict:
-    environment = fixture_environment()
+def fixture_runtime(
+    environment: dict | None = None,
+    *,
+    execution_block: str = "f40s",
+    anchor_stage: str = "F40-S",
+) -> dict:
+    if environment is None:
+        environment = fixture_environment()
     compatibility = execution_compatibility_descriptor(environment)
     return {
         "schema": "ttbi-execution-runtime-binding-v2",
-        "execution_block": "f40s",
-        "anchor_stage": "F40-S",
+        "execution_block": execution_block,
+        "anchor_stage": anchor_stage,
         "execution_environment_sha256": execution_environment_sha256(environment),
         "execution_environment_descriptor": environment,
         "execution_compatibility_sha256":
@@ -178,11 +191,19 @@ def registered_params() -> dict[str, dict]:
     }
 
 
-def manifest_entries(runtime: dict, protocol_hash_value: str) -> list[dict]:
+def manifest_entries(
+    runtimes: tuple[dict, ...],
+    protocol_hash_value: str,
+) -> list[dict]:
+    if not runtimes:
+        raise ValueError("at least one runtime fixture is required")
     params_by_architecture = registered_params()
     entries = []
-    for architecture in ARCHITECTURES:
-        for seed in SEEDS:
+    for architecture_index, architecture in enumerate(ARCHITECTURES):
+        for seed_index, seed in enumerate(SEEDS):
+            runtime = runtimes[
+                (architecture_index + seed_index) % len(runtimes)
+            ]
             params = params_by_architecture[architecture]
             identity = {
                 "schema": STUDY_IDENTITY_SCHEMA,
@@ -232,6 +253,13 @@ def main() -> None:
         lambda: (SOURCE_SHA, SOURCE_COUNT)
     )
     runtime = fixture_runtime()
+    portable_runtime = fixture_runtime(fixture_environment(
+        hostname="qualification-host-b",
+        gpu_name="qualification-gpu-b",
+        gpu_uuid="GPU-qualification-b",
+        torch_version="fixture-b",
+        cuda_runtime_version="13.0",
+    ))
     anchor = anchor_config()
     plan = derive_execution_plan(
         anchor,
@@ -274,8 +302,22 @@ def main() -> None:
             execution_runtime=runtime,
         ),
     )
+    proxy_input = anchor_config(dofs=[3])
+    proxy_input["hyperparameter_mode"] = FROZEN_SINGLETON_MODE
+    rejects(
+        "constrained-wheelset proxy cannot enter a campaign learning plan",
+        lambda: derive_execution_plan(
+            proxy_input,
+            dataset_name="F40-S_fixture",
+            requested_n_trials=1,
+            requested_use_pruner=False,
+            execution_runtime=runtime,
+        ),
+    )
 
-    entries = manifest_entries(runtime, anchor["protocol_hash"])
+    entries = manifest_entries(
+        (runtime, portable_runtime), anchor["protocol_hash"]
+    )
     manifest, manifest_sha = build_manifest(
         entries,
         execution_runtime=runtime,
@@ -288,12 +330,26 @@ def main() -> None:
         source_file_count=SOURCE_COUNT,
     )
     check(
-        "anchor manifest is exact 16 cells x five restarts",
+        "anchor manifest is exact 16 cells x five portable-host restarts",
         len(entries) == len(ARCHITECTURES) * len(SEEDS) == 80
+        and {
+            entry["study_identity"]["execution_environment_sha256"]
+            for entry in entries
+        } == {
+            runtime["execution_environment_sha256"],
+            portable_runtime["execution_environment_sha256"],
+        }
+        and {
+            entry["study_identity"]["execution_compatibility_sha256"]
+            for entry in entries
+        } == {
+            runtime["execution_compatibility_sha256"],
+            portable_runtime["execution_compatibility_sha256"],
+        }
         and manifest_sha == canonical_json_sha256(manifest)
         and validate_manifest(
             manifest,
-            expected_runtime=runtime,
+            expected_runtime=portable_runtime,
             expected_run_tag=RUN_TAG,
             expected_execution_receipt_sha256=EXECUTION_RECEIPT_SHA,
             expected_source_root_sha256=SOURCE_SHA,
@@ -312,13 +368,77 @@ def main() -> None:
     wrong_dof = deepcopy(manifest)
     wrong_dof["entries"][0]["study_identity"]["active_dofs"] = [0]
     rejects("anchor identity on wrong input", lambda: validate_manifest(wrong_dof))
+    rejects(
+        "portable host cannot substitute the logical run tag",
+        lambda: validate_manifest(
+            manifest,
+            expected_runtime=portable_runtime,
+            expected_run_tag=f"{RUN_TAG}-other",
+            expected_execution_receipt_sha256=EXECUTION_RECEIPT_SHA,
+            expected_source_root_sha256=SOURCE_SHA,
+            expected_source_file_count=SOURCE_COUNT,
+        ),
+    )
+    rejects(
+        "portable host cannot substitute the block receipt",
+        lambda: validate_manifest(
+            manifest,
+            expected_runtime=portable_runtime,
+            expected_run_tag=RUN_TAG,
+            expected_execution_receipt_sha256="f" * 64,
+            expected_source_root_sha256=SOURCE_SHA,
+            expected_source_file_count=SOURCE_COUNT,
+        ),
+    )
+    rejects(
+        "portable host cannot substitute the reviewed source root",
+        lambda: validate_manifest(
+            manifest,
+            expected_runtime=portable_runtime,
+            expected_run_tag=RUN_TAG,
+            expected_execution_receipt_sha256=EXECUTION_RECEIPT_SHA,
+            expected_source_root_sha256="c" * 64,
+            expected_source_file_count=SOURCE_COUNT,
+        ),
+    )
+    foreign_block_runtime = fixture_runtime(
+        fixture_environment(
+            hostname="qualification-host-l99",
+            gpu_name="qualification-gpu-l99",
+            gpu_uuid="GPU-qualification-l99",
+        ),
+        execution_block="l99s",
+        anchor_stage="L99-S",
+    )
+    rejects(
+        "portable execution does not permit a foreign logical block/stage",
+        lambda: validate_manifest(
+            manifest,
+            expected_runtime=foreign_block_runtime,
+            expected_run_tag=RUN_TAG,
+            expected_execution_receipt_sha256=EXECUTION_RECEIPT_SHA,
+            expected_source_root_sha256=SOURCE_SHA,
+            expected_source_file_count=SOURCE_COUNT,
+        ),
+    )
+    wrong_protocol = deepcopy(manifest)
+    identity = deepcopy(wrong_protocol["entries"][0]["study_identity"])
+    identity["protocol_hash"] = "c" * 64
+    wrong_protocol["entries"][0] = build_manifest_entry(
+        study_identity=identity,
+        params=wrong_protocol["entries"][0]["params"],
+    )
+    rejects(
+        "restart from a portable host cannot substitute protocol identity",
+        lambda: validate_manifest(wrong_protocol),
+    )
 
     with tempfile.TemporaryDirectory(prefix="paper1-hpo-manifest-") as td:
         path = Path(td).resolve() / "manifest.json"
         written_sha = write_manifest(
             path,
             manifest,
-            expected_runtime=runtime,
+            expected_runtime=portable_runtime,
             expected_run_tag=RUN_TAG,
             expected_execution_receipt_sha256=EXECUTION_RECEIPT_SHA,
             expected_source_root_sha256=SOURCE_SHA,
@@ -327,7 +447,7 @@ def main() -> None:
         loaded = load_manifest(
             path,
             expected_sha256=written_sha,
-            expected_runtime=runtime,
+            expected_runtime=portable_runtime,
             expected_run_tag=RUN_TAG,
             expected_execution_receipt_sha256=EXECUTION_RECEIPT_SHA,
             expected_source_root_sha256=SOURCE_SHA,
@@ -344,7 +464,7 @@ def main() -> None:
         manifest,
         architecture=ARCHITECTURES[0],
         seed=SEEDS[0],
-        expected_runtime=runtime,
+        expected_runtime=portable_runtime,
         expected_run_tag=RUN_TAG,
         expected_execution_receipt_sha256=EXECUTION_RECEIPT_SHA,
         expected_source_root_sha256=SOURCE_SHA,
@@ -358,7 +478,7 @@ def main() -> None:
         dataset_name="F40-S_fixture",
         requested_n_trials=100,
         requested_use_pruner=True,
-        execution_runtime=runtime,
+        execution_runtime=portable_runtime,
     )
     check(
         "F40-S frozen screen derives one unpruned authenticated trial",

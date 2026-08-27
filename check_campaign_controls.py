@@ -1,6 +1,6 @@
 """Adversarial checks for the four-block training/dispatch controls.
 
-Run: ``py -3.13 check_campaign_controls.py``
+Run: ``python check_campaign_controls.py``
 """
 
 from __future__ import annotations
@@ -11,7 +11,9 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from unittest import mock
 
+import capacity_preflight_compute as capacity_publication
 import comprehensive_ablation_multidamage as driver
 from training import paper1_executor as executor
 from core.campaign_contract import (
@@ -25,6 +27,7 @@ from core.paper1_dispatch import (
     validate_training_manifests,
 )
 from core.paper1_training_contract import (
+    ELIGIBLE_SENSOR_INDICES,
     FACTORIAL_CELLS,
     HPO_RESTART_SEEDS,
     RETAINED_PIPELINE_SLOTS,
@@ -86,8 +89,12 @@ def main() -> None:
     )
     check("architecture comparison is exact 2x2x2x2", len(FACTORIAL_CELLS) == 16)
     check(
-        "channel screen is all 8 singles plus 28 pairs",
-        Counter(map(len, channel_screen_inputs())) == {1: 8, 2: 28},
+        "channel screen is all 6 eligible singles plus 15 pairs",
+        Counter(map(len, channel_screen_inputs())) == {1: 6, 2: 15}
+        and all(
+            set(selector) <= set(ELIGIBLE_SENSOR_INDICES)
+            for selector in channel_screen_inputs()
+        ),
     )
     hpo_counts = Counter((job["stage"], job["phase"]) for job in hpo_jobs())
     check(
@@ -259,16 +266,72 @@ def main() -> None:
         and executor.validate_secondary_frozen_transfer_job(secondary)
         == secondary,
     )
+    execution_events: list[str] = []
+    execution_role = assigned_training_host(screen_job)
+
+    def record_source_auth(role: str):
+        assert role == execution_role
+        execution_events.append("bundle-auth")
+        return object()
+
+    def record_execution(job: dict, manifest: dict) -> dict:
+        assert job is screen_job
+        assert manifest is manifests[execution_role]
+        execution_events.append("executor")
+        return {"schema": "fixture-completion"}
+
+    with (
+        mock.patch.object(
+            capacity_publication,
+            "authenticate_training_execution_source",
+            side_effect=record_source_auth,
+        ),
+        mock.patch.object(
+            executor, "execute_manifest_job", side_effect=record_execution
+        ),
+    ):
+        driver.execute_registered_job(screen_job, manifests[execution_role])
+    check(
+        "execute-job authenticates bundle/source before executor output",
+        execution_events == ["bundle-auth", "executor"],
+    )
+    refused_executor = mock.Mock()
+    with (
+        mock.patch.object(
+            capacity_publication,
+            "authenticate_training_execution_source",
+            side_effect=RuntimeError("mutated bundle identity"),
+        ),
+        mock.patch.object(
+            executor, "execute_manifest_job", refused_executor
+        ),
+    ):
+        raises(
+            "execute-job rejects bundle identity before executor opens evidence",
+            lambda: driver.execute_registered_job(
+                screen_job, manifests[execution_role]
+            ),
+            driver.TrainingManifestError,
+        )
+    check(
+        "bundle rejection creates no executor-side receipt/output",
+        refused_executor.call_count == 0,
+    )
     saved_run_tag = os.environ.get(executor.RUN_TAG_ENV)
     os.environ[executor.RUN_TAG_ENV] = "campaign-controls-fixture"
     try:
-        raises(
-            "post-freeze phase refuses to open data without a deposited freeze",
-            lambda: driver.execute_registered_job(
-                nonfactorial, manifests["labA"]
-            ),
-            executor.Paper1ExecutionDependencyError,
-        )
+        with mock.patch.object(
+            capacity_publication,
+            "authenticate_training_execution_source",
+            return_value=object(),
+        ):
+            raises(
+                "post-freeze phase refuses to open data without an authenticated freeze",
+                lambda: driver.execute_registered_job(
+                    nonfactorial, manifests["labA"]
+                ),
+                executor.Paper1ExecutionDependencyError,
+            )
     finally:
         if saved_run_tag is None:
             os.environ.pop(executor.RUN_TAG_ENV, None)
@@ -347,6 +410,12 @@ def main() -> None:
                 "return _complete_selected_alias(",
             )
         ),
+    )
+    check(
+        "protocol registers no unexecuted full-array control",
+        "control_sets=[]" in executor_source
+        and "control_sets=[list(range(8))]" not in executor_source
+        and "control_sets=[list(ELIGIBLE_SENSOR_INDICES)]" not in executor_source,
     )
     check(
         "adjudication and channel-screen adapters execute authenticated refits",

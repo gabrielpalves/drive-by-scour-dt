@@ -73,10 +73,14 @@ check_generation_release_comparison.py
 check_hyperparameter_policy.py
 check_import_path_guard.py
 check_loader_provenance.py
+check_modern_architecture_cuda.py
+check_modern_architecture_integration.py
+check_modern_tcn.py
 check_numerical_vv_package.py
 check_paa.py
 check_paper1_benchmark_contract.py
 check_paper1_campaign_contract.py
+check_paper1_challenger_contract.py
 check_paper1_dispatch.py
 check_paper1_freeze_contract.py
 check_paper1_refit_contract.py
@@ -94,6 +98,7 @@ check_split_grouping.py
 check_statistical_inference.py
 check_track_prior_stats.py
 check_training_policy_mutation_guards.py
+check_tslanet.py
 check_weighted_head_mse.py
 compare_generation_refactor.py
 compare_generation_releases.py
@@ -114,6 +119,7 @@ core/__init__.py
 core/artifact_provenance.py
 core/campaign_contract.py
 core/capacity_preflight.py
+core/challenger_policy.py
 core/cross_rung_inference.py
 core/dataset.py
 core/environment.py
@@ -125,6 +131,8 @@ core/f25_training_contract.py
 core/generation_state_contract.py
 core/hyperparameter_policy.py
 core/models.py
+core/modern_tcn.py
+core/paper1_challenger_contract.py
 core/paper1_dispatch.py
 core/paper1_freeze_contract.py
 core/paper1_refit_contract.py
@@ -135,6 +143,8 @@ core/protocol.py
 core/source_provenance.py
 core/statistical_inference.py
 core/task.py
+core/temporal_pooling.py
+core/tslanet.py
 core/utils.py
 dispatch_authorization.py
 dispatch_manifest.py
@@ -159,6 +169,7 @@ qualification_path_safety.py
 qualification_receipt_inventory.py
 qualification_receipt_schema.py
 requirements-campaign-py313-cu128.txt
+requirements-portable.txt
 scour_MATLAB/+ttbi/apply_track_model_form_arm.m
 scour_MATLAB/+ttbi/assert_dataset_consumer_rejected.m
 scour_MATLAB/+ttbi/assert_generation_output_directory.m
@@ -194,6 +205,7 @@ scour_MATLAB/+ttbi/dry_ballast_stiffness_arm.m
 scour_MATLAB/+ttbi/ensure_generation_output_directory.m
 scour_MATLAB/+ttbi/execute_generation_state.m
 scour_MATLAB/+ttbi/expected_state_metadata.m
+scour_MATLAB/+ttbi/f25_bundle_source_binding.m
 scour_MATLAB/+ttbi/f25_damage_for_state.m
 scour_MATLAB/+ttbi/f25_execute_generation_state.m
 scour_MATLAB/+ttbi/f25_experiment_config.m
@@ -213,6 +225,7 @@ scour_MATLAB/+ttbi/hash_reviewed_source_entries.m
 scour_MATLAB/+ttbi/inspect_numbered_state_inventory.m
 scour_MATLAB/+ttbi/java_boolean_value.m
 scour_MATLAB/+ttbi/list_matlab_executable_files.m
+scour_MATLAB/+ttbi/load_generation_bundle_manifest.m
 scour_MATLAB/+ttbi/named_stream_seed_ids.m
 scour_MATLAB/+ttbi/nofollow_link_options.m
 scour_MATLAB/+ttbi/path_component_is_link_alias.m

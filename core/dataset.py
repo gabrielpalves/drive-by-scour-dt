@@ -701,13 +701,15 @@ def _load_multi_output(
             if 'release_qualification_run' in names else None
         )
         if (frelease != manifest_release
-                or fcampaign_release != _EXPECTED_MATLAB_RELEASE
+                or fcampaign_release
+                != manifest_generation["campaign_matlab_release"]
                 or fqualification is not manifest_qualification):
             raise RuntimeError(
                 f"{fname}: per-state MATLAB release/qualification provenance "
                 f"({frelease!r}, {fcampaign_release!r}, {fqualification!r}) "
                 f"does not match the campaign manifest/policy "
-                f"({manifest_release!r}, {_EXPECTED_MATLAB_RELEASE!r}, "
+                f"({manifest_release!r}, "
+                f"{manifest_generation['campaign_matlab_release']!r}, "
                 f"{manifest_qualification!r}). Regenerate; never mix or "
                 f"restamp state files.")
         # Family identity (Feature A): the file must declare its state_family
@@ -1543,7 +1545,7 @@ def _validate_campaign_generation_metadata(
     expected_target_supports: list[int] | None = None,
     expected_bearing_targets: list[str] | None | object = _UNSET,
 ) -> dict:
-    """Reject data outside the locked stack and, when supplied, rung contract."""
+    """Validate coherent provenance and, when supplied, the rung contract."""
     metadata = _read_manifest_generation_metadata(dataset_path)
     if metadata is None:
         raise RuntimeError(
@@ -1605,6 +1607,46 @@ def _validate_campaign_generation_metadata(
             raise RuntimeError(
                 f"{dataset_path}: case_info.{field} is not lowercase SHA-256."
             )
+
+    # Actual MATLAB versions may differ between qualified PCs.  What remains
+    # fail-closed is the provenance itself: each descriptor must authenticate
+    # its SHA and the actual release must agree with its descriptor.  The
+    # campaign descriptor is the immutable known-good reference carried by the
+    # generation contract, not a live-host allow-list.
+    descriptor_fields = tuple(sorted(_EXPECTED_MATLAB_ENVIRONMENT))
+    parsed_descriptors: dict[str, dict[str, str]] = {}
+    for prefix in ("actual", "campaign"):
+        descriptor = metadata[f"{prefix}_matlab_environment_descriptor"]
+        descriptor_sha = hashlib.sha256(descriptor.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(
+            descriptor_sha,
+            metadata[f"{prefix}_matlab_environment_sha256"],
+        ):
+            raise RuntimeError(
+                f"{dataset_path}: {prefix} MATLAB environment descriptor/SHA "
+                "is internally inconsistent."
+            )
+        rows = descriptor.split("\n")
+        if any(row.count("=") != 1 for row in rows):
+            raise RuntimeError(
+                f"{dataset_path}: malformed {prefix} MATLAB descriptor."
+            )
+        parsed = dict(row.split("=", 1) for row in rows)
+        if tuple(sorted(parsed)) != descriptor_fields or len(rows) != len(parsed):
+            raise RuntimeError(
+                f"{dataset_path}: {prefix} MATLAB descriptor fields differ "
+                "from the provenance contract."
+            )
+        parsed_descriptors[prefix] = parsed
+    if (
+        re.fullmatch(r"R\d{4}[ab]", metadata["matlab_release"]) is None
+        or parsed_descriptors["actual"]["release"]
+        != metadata["matlab_release"]
+    ):
+        raise RuntimeError(
+            f"{dataset_path}: actual MATLAB release disagrees with its "
+            "authenticated descriptor."
+        )
 
     digest_blob = metadata["generator_source_digest_lines"]
     digest_rows = digest_blob.split("\n")
@@ -1684,12 +1726,7 @@ def _validate_campaign_generation_metadata(
         "channel_schema_id": _EXPECTED_CHANNEL_SCHEMA_ID,
         "generation_behavior_version":
             _EXPECTED_GENERATION_BEHAVIOR_VERSION,
-        "matlab_release": _EXPECTED_MATLAB_RELEASE,
         "campaign_matlab_release": _EXPECTED_MATLAB_RELEASE,
-        "actual_matlab_environment_descriptor":
-            _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
-        "actual_matlab_environment_sha256":
-            _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
         "campaign_matlab_environment_descriptor":
             _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
         "campaign_matlab_environment_sha256":
@@ -1787,7 +1824,7 @@ def _validate_campaign_generation_metadata(
             "use_crack_eov": contract["scenario"]["use_crack_eov"],
             "crack_draw": "per_state",
             "profile_mode": contract["scenario"]["profile_mode"],
-            "profile_draw": "per_state",
+            "profile_draw": "fixed_shared",
             "profile_jitter_sd_mm": 0.0,
             "rail_end_clearance_m":
                 contract["scenario"]["rail_end_clearance_m"],

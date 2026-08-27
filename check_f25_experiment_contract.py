@@ -18,11 +18,15 @@ from core.f25_experiment_contract import (
     DEVIATION_CLASSIFICATIONS,
     DEVIATION_ROWS,
     DAMAGED_ENTRANCE_BEARING_KR_NM_PER_RAD,
+    ELIGIBLE_SENSOR_CHANNELS,
+    ELIGIBLE_SENSOR_INDICES,
+    EXCLUDED_PROXY_INDICES,
     F25ContractError,
     F25_R_CHANNELS,
     F25_R_EXPERIMENT,
     F25_R_UNFROZEN,
     F25_X_EXPERIMENT,
+    F25_X_CHANNELS,
     F25_X_FROZEN_PAIRS,
     F25_X_FROZEN_SINGLES,
     F25_X_TIERS,
@@ -90,7 +94,7 @@ from core.f25_experiment_contract import (
 # seed/allocation rule or any canonical contract datum requires an explicit
 # acceptance-fixture update rather than silently blessing itself.
 EXPECTED_PARTITION_SHA256 = "96e61a6ef27c997a65d1755f3b2ed28505fac775ed12a8fa60f7cf8e8c1360cb"
-EXPECTED_CONTRACT_SHA256 = "614ecca52a5dac91c081d826dda1a2ddda028c229824cee60348d841ec9a2b1e"
+EXPECTED_CONTRACT_SHA256 = "a80b9c754f911737b1ce6d841bfb837d6ac3200c334508abd3f901f9167d48ce"
 
 
 class Checks:
@@ -142,6 +146,14 @@ def main() -> None:
         "physical8_v1 channel order drifted",
     )
     checks.require(F25_R_CHANNELS == CHANNELS[:2], "F25-R source sensors drifted")
+    checks.require(
+        EXCLUDED_PROXY_INDICES == (3, 4)
+        and ELIGIBLE_SENSOR_INDICES == (0, 1, 2, 5, 6, 7)
+        and ELIGIBLE_SENSOR_CHANNELS
+        == tuple(CHANNELS[index] for index in ELIGIBLE_SENSOR_INDICES)
+        and F25_X_CHANNELS == ELIGIBLE_SENSOR_CHANNELS,
+        "F25-X eligible sensor inventory drifted",
+    )
 
     expected_scenarios = (
         ("Healthy", None, 0.00, 0.00, 0.0),
@@ -322,12 +334,22 @@ def main() -> None:
     )
 
     pairs = lexicographic_sensor_pairs()
-    checks.require(len(pairs) == 28 and len(set(pairs)) == 28, "8C2 pair count drifted")
+    checks.require(len(pairs) == 15 and len(set(pairs)) == 15, "eligible 6C2 pair count drifted")
     checks.require(
         pairs == tuple(sorted(pairs))
-        and pairs[0] == tuple(sorted(CHANNELS))[:2]
-        and pairs[-1] == tuple(sorted(CHANNELS))[-2:],
+        and pairs[0] == tuple(sorted(F25_X_CHANNELS))[:2]
+        and pairs[-1] == tuple(sorted(F25_X_CHANNELS))[-2:]
+        and all(not set(pair) & set(CHANNELS[3:5]) for pair in pairs),
         "pair inventory is not lexicographic and pre-outcome",
+    )
+    extension_row = next(
+        row for row in DEVIATION_ROWS
+        if row.item_id == "extension_channels_and_pairs"
+    )
+    checks.require(
+        "six learning-eligible singles plus 15" in extension_row.implemented_choice
+        and "wheelset proxies excluded" in extension_row.implemented_choice,
+        "F25-X deviation metadata reintroduced proxy channels",
     )
     checks.require(
         F25_R_UNFROZEN.configuration_count == 4
@@ -353,11 +375,11 @@ def main() -> None:
             F25_X_FROZEN_PAIRS.configuration_count,
             F25_X_FROZEN_PAIRS.core_table_fit_budget,
         )
-        == (24, 480, 24, 12000, 84, 1680),
-        "F25-X 480/12000/1680 core budgets drifted",
+        == (18, 360, 18, 9000, 45, 900),
+        "F25-X 360/9000/900 core budgets drifted",
     )
     checks.require(
-        F25_X_UNFROZEN_SINGLES.report_fit_budget == 480,
+        F25_X_UNFROZEN_SINGLES.report_fit_budget == 360,
         "post-HPO 20-seed report budget became hidden",
     )
     checks.require(
@@ -529,7 +551,7 @@ def main() -> None:
     print(
         "F25 EXPERIMENT CONTRACT: PASS "
         f"({checks.count} checks; 10 classes/2,000 passages; "
-        "F25-X budgets 480 + 12,000 + 1,680)"
+        "F25-X budgets 360 + 9,000 + 900)"
     )
 
 

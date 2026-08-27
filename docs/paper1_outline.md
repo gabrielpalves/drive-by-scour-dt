@@ -1,5 +1,11 @@
-# Paper 1 — R11 manuscript outline
+# Paper 1 — R11 manuscript outline (archival)
 
+> **ARCHIVAL / SUPERSEDED (2026-08-25).** This preserves the former R11
+> planning history and is not an executable or reporting authority. The live
+> campaign design is `docs/paper1_campaign_plan.md`; the current manuscript is
+> under `paper1/sections/`. Counts and policies below must not be used to launch
+> Paper 1 jobs.
+>
 > **Planning document; no R11 results yet (2026-07-27).**
 >
 > All pre-R11 numerical results, champions, figures, and datasets are excluded.

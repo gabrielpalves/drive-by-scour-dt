@@ -17,8 +17,9 @@ damaged-response parity is closed. The older repository-only
 and must not be used as the current contract.
 
 Here, “damage” is only shorthand for the mechanism collection. Nominal bearing
-fixity, rail-profile phase, operational variability, and wheel polygonization
-are nuisance or design variables, not measurements of physical damage.
+fixity, the fixed rail-profile realization, operational variability, and wheel
+polygonization are nuisance or design conditions, not measurements of physical
+damage.
 
 ## Reading the model
 
@@ -113,7 +114,7 @@ layers and an isolated contract test are present.
 | Unsupported sleepers | Active nuisance on track rungs | Per state | Selected sleeper-ballast \(c,k\) multiplied by \(10^{-6}\) | `track_log.hanging_groups` |
 | Pad service/failure | Active nuisance on track rungs | Per state | Rail-sleeper pad blocks of global \(C\) and \(K\) | `track_log.pad_*` |
 | Wheel polygonization | Active nuisance on wheel rungs | Per passage/train | Wheel path \(h,\dot h,\ddot h\), then time-varying coupling and forcing | `oor_log.poly` |
-| FRA rail profile | Active EOV, not damage | Fixed or per state by rung | Common wheel path \(h,\dot h,\ddot h\) | `profile_mode`, `profile_log`, named seed |
+| FRA rail profile | Fixed excitation geometry, not damage | Primary campaign: one generated FRA-v2 class-4 realization (phase seed `20260728`) shared by every state and passage; F25 Fernandes reproduction: exact stored fixed Type-2 realization | Common wheel path \(h,\dot h,\ddot h\) | `profile_mode`, `profile_log`, registered seed |
 | Wheel flats | Dormant/unsupported | None in production | Code path exists, but production sampling is disabled | Empty `oor_log.flats` |
 
 Every active mechanism can affect all coupled vehicle, track, and bridge
@@ -361,15 +362,16 @@ These variables are not damage mechanisms.
 
 | EOV | Generation/persistence | First direct effect | Evidence status |
 |---|---|---|---|
-| FRA-v2 class-4 profile | Same PSD/cutoffs in every rung; fixed phase in early rungs or named per-state phase later | Common rail irregularity path \(h,\dot h,\ddot h\) in `B19_GenerateProfile`/`B25_WheelProfiles` | Profile convention is implementation/source provenance; phase persistence is author-chosen |
+| FRA-v2 class-4 profile | In all four primary stages, one generated phase (seed `20260728`) is shared by every state and passage; F25 instead reuses the exact stored fixed Type-2 realization | Common rail irregularity path \(h,\dot h,\ddot h\) in `B19_GenerateProfile`/`B25_WheelProfiles` | Profile convention and fixed phase are implementation/source provenance; no transport to other profiles is tested |
 | Speed | 70--90 km/h LHS, per passage | Vehicle kinematics, excitation frequencies, traversal time | Envelope and rounding are author-chosen |
 | Temperature | 3--33 °C LHS, per passage | Deck \(E(T)=E_{15}[1-0.003(T-15)]\), hence bridge \(K\); bearing \(k_r\) is not remapped | Envelope and linear modulus law are author-chosen |
 | Vehicle variability | Per-passage Gaussian draws | Car-body mass COV 10%; primary and secondary suspension-stiffness COVs 5%; damping is fixed | All three COVs and the independence model are author-chosen |
 | Measurement stress | Loader-side, not generator damage | Symmetric multiplicative 5% stress before PAA; not a calibrated sensor model | Author-chosen robustness stress |
 
-The rail-profile phase rule is a nuisance contrast, not a roughness-class or
-measured-profile contrast. The optional profile-intensity branch exists for
-legacy/sensitivity use and is not an active rail-damage mechanism.
+Rail-profile phase is not an EOV in the primary campaign. The optional
+`psd_fra` and profile-intensity branches remain available for separately
+authorized distribution-shift/sensitivity work and are not active rail-damage
+mechanisms.
 
 ## 9. Dormant or unsupported mechanisms
 

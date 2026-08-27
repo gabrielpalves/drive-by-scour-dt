@@ -54,7 +54,7 @@ config.experiment_id = experiment_id;
 config.dataset_id = 'fernandes-2025-f25-data-v1';
 config.python_contract_schema = 'f25-experiment-contract-v1';
 config.python_contract_sha256 = ...
-    '614ecca52a5dac91c081d826dda1a2ddda028c229824cee60348d841ec9a2b1e';
+    'a80b9c754f911737b1ce6d841bfb837d6ac3200c334508abd3f901f9167d48ce';
 config.shared_data_contract_id = 'f25-shared-data-and-partition-v1';
 config.generation_schema = 'f25-generation-v1';
 config.state_design_kind = 'f25-ten-scenario-v1';

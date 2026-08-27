@@ -1,21 +1,21 @@
 # Drive-by Digital Twin for Railway-Bridge Scour
 
-> **Paper 1 status (2026-08-09): DISPATCH BLOCKED.** The current production
+> **Paper 1 status (2026-08-26): source under final audit.** The current production
 > campaign is the four-block `F40-S`/`F40-M`/`L99-S`/`L99-M` design using
 > `physical8_v1` and an explicit 6 m rail-end clearance. Implementation is
-> complete, but clean commit A and the external benchmark, qualification,
-> contact, and authorization gates remain. Historical model names, metrics,
-> plots, datasets, and ZIPs are nonqualifying and must not be used as evidence
-> or deployment assets. See [README_CAMPAIGN.md](README_CAMPAIGN.md) for the
-> concise operator guide, [docs/paper1_campaign_plan.md](docs/paper1_campaign_plan.md)
-> for the controlling specification, and
-> [docs/audit_r5_results.md](docs/audit_r5_results.md) for the sole dispatch
-> verdict.
+> complete. After the source-sensitive checks pass, all six ZIPs are built from
+> one clean commit; each destination PC then passes its local capability,
+> physics-smoke, and (for training) CUDA-capacity checks. Runtime versions and
+> hardware identities are provenance rather than equality gates. Historical
+> model names, metrics, plots, datasets, and ZIPs remain nonqualifying and must
+> not be used as evidence or deployment assets. See
+> [README_CAMPAIGN.md](README_CAMPAIGN.md) for the concise operator guide and
+> [docs/paper1_campaign_plan.md](docs/paper1_campaign_plan.md) for the controlling
+> specification.
 >
 > In current Paper 1 documentation, “registered” means prospectively specified in
-> versioned, hash-identified repository source. It denotes no external registry
-> deposit and must not be described as externally preregistered. No OSF/Zenodo
-> protocol deposit is required or planned for this numerical SHM study.
+> versioned, hash-identified repository source; it must not be described as
+> externally preregistered.
 
 > **Dispatch-ZIP boundary.** Production dispatch ZIPs are execution subsets,
 > not repository snapshots: only paths listed in `bundle_source_files.txt` are
@@ -27,7 +27,7 @@ A physics-informed **Digital Twin (DT)** that monitors **scour** (and, later,
 bearing/crack) damage on railway bridges from **drive-by** vibration — sensors on
 the *passing train*, not on the structure. Two parts:
 
-1. **Ablation study** *(Paper 1, dispatch pending)* — compares registered
+1. **Ablation study** *(Paper 1, final source audit pending)* — compares registered
    neural architectures and simulated response channels for continuous
    support-stiffness-loss estimation and conditional localisation.
 2. **DT framework** *(Paper 2, in progress)* — evolve the bridge over its life
@@ -80,9 +80,9 @@ the online loop is cheap and free of train/serve skew.
 | `TTBI_2D/` | Train–Track–Bridge Interaction physics engine (Cantero 2022, Python port). |
 | `TTBI_2D/damage_config.py` | Development builder for the nonqualifying Python TTBI mirror; not the Paper 1 campaign authority. |
 | `scour_MATLAB/` | Authoritative MATLAB generator of the Paper 1 observation dataset (`A00_Run.m`). |
-| `README_CAMPAIGN.md` | Current four-block production and authorization guide. |
+| `README_CAMPAIGN.md` | Current four-block production and portable dispatch guide. |
 | `docs/paper1_campaign_plan.md` | Controlling Paper 1 scientific and compute contract. |
-| `docs/audit_r5_results.md` | Legacy-filename, fail-closed dispatch report; pending until report-only commit B. |
+| `docs/audit_r5_results.md` | Historical audit record; not a gate for the current portable bundle flow. |
 | `docs/damage_model_reference.md` | Canonical damage/EOV map: priors, units, function path, exact `M/C/K/f` effect, logs, limitations, and tests. |
 | `docs/shm_reviewer_readiness_plan.md` | Active scientific V&V and reviewer-readiness queue. |
 | `docs/numerical_vv_protocol.md` | Prospective code-, mesh-, time-step-, contact-, upstream-, and mechanism-level V&V protocol. |
@@ -91,6 +91,8 @@ the online loop is cheap and free of train/serve skew.
 | `core/task.py` | Classification vs multi-output-regression task switch (head size, loss, label dtype, metrics). |
 | `training/` | Offline ablation pipeline (Optuna HPO, champion export); regression-capable via `core/task.py`. |
 | `comprehensive_ablation_multidamage.py` | Manifest-gated Paper 1 training entry point; executes one assigned job through `training/paper1_executor.py`. |
+| `requirements-portable.txt` | Unpinned direct dependencies for a locally qualified MATLAB/Python/CUDA host. |
+| `requirements-campaign-py313-cu128.txt` | Optional fully pinned known-good reference environment; not an eligibility gate. |
 | `plotting/aggregate_ablation.py` | Master tables + winner-only ablation figures. |
 | `digital_twin/assets.py` | `ScourModel` (gradual + flood shock), `PhysicalAsset`, `DigitalAsset` (the classifier). |
 | `digital_twin/scour_multi.py` | `MultiScourModel` — correlated multi-foundation scour (Gaussian copula). |
@@ -138,7 +140,7 @@ and [LICENSE](LICENSE).
 The following packages and values predate the current Paper 1 generation and
 evaluation contracts. They are retained only for software-development
 continuity; none is a production champion, current scientific result, or
-dispatch-authorized digital-twin asset.
+campaign-qualified digital-twin asset.
 
 | Folder | DOFs | Role |
 |--------|------|------|
@@ -177,14 +179,14 @@ Each folder holds `DT_champion_weights.pth`, `DT_metadata.json` (architecture +
 |--------|-------|-------------|-------|-----|
 | `mock` | `MultiScourModel` | banded confusion matrix | instant | develop/sanity-check policies |
 | `library` | `MultiScourModel` | held-out `.mat` signals + configured estimator | fast | software integration / nonqualifying historical studies |
-| `live` | `PhysicalAsset` (TTBI) | live passage + configured estimator | ~min/passage | one-off software checks; not production-authorized |
+| `live` | `PhysicalAsset` (TTBI) | live passage + configured estimator | ~min/passage | one-off software checks; not Paper-1 evidence |
 
 `library` mode needs a held-out dataset under `observations/<case>/` and a
 matching `LIBRARY_DIR` (see `observations/README.md`). A Paper 1 dataset may enter
-that path only after authorized bundle generation and exact dataset/geometry/
-preprocessing/estimator matching. Direct development runs and the currently
-committed 40 m / two-span packages are nonqualifying fixtures; they do not
-authorize a Paper 1 `library` or `live` deployment.
+that path only after bundle generation from the clean campaign source and exact
+dataset/geometry/preprocessing/estimator identity checks. Direct development
+runs and the currently committed 40 m / two-span packages are nonqualifying
+fixtures; they are not evidence for a Paper 1 `library` or `live` deployment.
 
 ---
 
@@ -307,7 +309,7 @@ entries are not automatically current evidence.
 
 ## Status & known limitations
 
-- **Ablation (Paper 1):** authorized generation and training have not started; no
+- **Ablation (Paper 1):** retained generation and training have not started; no
   current champion, sensor-channel recommendation, or performance estimate
   exists yet.
 - **DT framework:** the full loop has software-integration checks in `mock` and
@@ -317,7 +319,7 @@ entries are not automatically current evidence.
   damaged-response parity is demonstrated under the current production source.
 - **Historical train/serve observation:** the legacy package behaved
   differently on live and held-out-library signals. Its quoted historical
-  scores are not Paper 1 evidence; the authorized campaign must re-estimate this
+  scores are not Paper 1 evidence; the complete campaign must re-estimate this
   behavior before any production claim.
 - **Sensor-health fault rates are placeholders** in `SensorHealthParams` — replace
   with vendor MTBF / field data; the model and wiring are final.

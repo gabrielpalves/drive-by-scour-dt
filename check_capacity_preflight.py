@@ -99,6 +99,7 @@ from core.capacity_preflight import (
     validate_capacity_receipt,
     write_capacity_receipt,
 )
+from core.campaign_contract import STAGE_ORDER
 from core.execution_environment import (
     EXECUTION_BLOCK_POLICY,
     current_execution_runtime_for_stage,
@@ -108,6 +109,7 @@ from core.execution_environment import (
     execution_environment_sha256,
 )
 from core.hyperparameter_policy import canonical_json_sha256
+from core.paper1_training_contract import ELIGIBLE_SENSOR_INDICES
 
 
 SOURCE_SHA = "a" * 64
@@ -191,9 +193,61 @@ def main() -> None:
     assert "require_absent=True" in publication_source
     assert "set_global_seed(CAPACITY_SETUP_SEED" in publication_source
     assert '"--receipt-dir"' in publication_source
+    assert '"--all-stages"' in publication_source
+    assert "paper1_bundle_identity.json" in publication_source
+    assert "source_identity_mode" in publication_source
     assert list(inspect.signature(
         publication.create_f40s_capacity_receipt
     ).parameters) == ["receipt_dir"]
+    assert list(inspect.signature(
+        publication.create_stage_capacity_receipt
+    ).parameters) == ["stage", "receipt_dir"]
+    requested_stages = []
+    with mock.patch.object(
+        publication,
+        "create_stage_capacity_receipt",
+        side_effect=lambda stage, receipt_dir: (
+            requested_stages.append((stage, receipt_dir))
+            or {"stage": stage, "status": "PASS"}
+        ),
+    ):
+        publication_set = publication.create_all_stage_capacity_receipts(
+            "receipts"
+        )
+    assert requested_stages == [
+        (stage, "receipts") for stage in STAGE_ORDER
+    ]
+    assert publication_set["stages"] == list(STAGE_ORDER)
+    assert publication_set["status"] == "PASS"
+    _expect_error(
+        "capacity publication rejects a foreign stage",
+        lambda: publication.create_stage_capacity_receipt(
+            "FOREIGN", "receipts"
+        ),
+    )
+    clean_source = SimpleNamespace(
+        mode="git-clean",
+        source_commit="d" * 40,
+        source_snapshot=SimpleNamespace(),
+        bundle_identity=None,
+    )
+    clean_repo = Path("clean-source-fixture")
+    with (
+        mock.patch.object(
+            publication, "_authenticate_source", return_value=clean_source
+        ) as authenticate_mock,
+        mock.patch.object(
+            publication, "_assert_authenticated_source_unchanged"
+        ) as unchanged_mock,
+    ):
+        assert (
+            publication.authenticate_training_execution_source(
+                "labA", repo=clean_repo
+            )
+            is clean_source
+        )
+    authenticate_mock.assert_called_once_with(clean_repo)
+    unchanged_mock.assert_called_once_with(clean_source, clean_repo)
     manifest_names = {
         line
         for line in (Path(__file__).resolve().parent / "bundle_source_files.txt")
@@ -203,15 +257,21 @@ def main() -> None:
     }
     assert "capacity_preflight_compute.py" in manifest_names
     assert CAPACITY_PREFLIGHT_POLICY["batch_size"] == 32
+    assert CAPACITY_PREFLIGHT_POLICY["input_scope"] == {
+        "selector": "authenticated_selected_pair",
+        "input_channels": 2,
+        "eligible_sensor_indices": list(ELIGIBLE_SENSOR_INDICES),
+        "diagnostic_proxy_inputs_permitted": False,
+    }
     assert CAPACITY_PREFLIGHT_POLICY["representation_input_shapes"] == {
-        "RAW": [32, 8, 11791],
-        "PAA": [32, 8, 512],
+        "RAW": [32, 2, 11791],
+        "PAA": [32, 2, 512],
     }
     assert CAPACITY_PREFLIGHT_POLICY["output_heads"] == 5
     cases = registered_capacity_cases()
     assert [case[0] for case in cases] == list(ARCHITECTURES)
     for architecture, config, params in cases:
-        assert config["dofs"] == list(range(8))
+        assert config["dofs"] == list(ELIGIBLE_SENSOR_INDICES[:2])
         assert params["n_conv_layers"] == 4
         assert params["n_dense_layers"] == 3
         for index in range(4):
@@ -284,8 +344,8 @@ def main() -> None:
         (item["representation"], tuple(item["input_shape"]))
         for item in validated["receipt"]["measurements"]
     } == {
-        ("RAW", (32, 8, 11791)),
-        ("PAA", (32, 8, 512)),
+        ("RAW", (32, 2, 11791)),
+        ("PAA", (32, 2, 512)),
     }
     assert (
         validated["receipt"]["worst_peak_reserved_bytes"]
@@ -711,8 +771,11 @@ def main() -> None:
                 publication, "load_capacity_receipt", return_value=envelope
             ),
         ):
-            result = publication.create_f40s_capacity_receipt(receipt_dir)
+            result = publication.create_stage_capacity_receipt(
+                "F40-S", receipt_dir
+            )
         assert result["status"] == "PASS"
+        assert result["source_identity_mode"] == "git-clean"
         assert result["architecture_probe_count"] == 16
         assert events[0] == "seed" and events.count("runtime") == 3
         assert clean_mock.call_count == 3

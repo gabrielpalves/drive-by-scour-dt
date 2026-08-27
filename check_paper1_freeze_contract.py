@@ -1,6 +1,6 @@
 """Mutation checks for block-local freezes and sealed report adapters.
 
-Run: ``py -3.13 check_paper1_freeze_contract.py``
+Run: ``python check_paper1_freeze_contract.py``
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ def params_for(pipeline: str) -> dict:
 def selection_artifact() -> dict:
     return build_selection_artifact(
         campaign_run_tag="paper1-freeze-fixture",
-        selected_pair=[1, 3],
+        selected_pair=[1, 5],
         # Baseline-equal winners deliberately exercise slot alias deduplication.
         best_raw="RAW_POS0_LSTM0_MR0",
         best_paa="PAA_POS0_LSTM0_MR0",

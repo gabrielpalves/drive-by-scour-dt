@@ -2,7 +2,7 @@
 
 Example::
 
-    py -3.13 analyze_cross_rung_contrasts.py \
+    python analyze_cross_rung_contrasts.py \
       --payload F40-S=D:/runs/F40-S/matched_metrics.json \
       --payload F40-M=D:/runs/F40-M/matched_metrics.json \
       --payload L99-S=D:/runs/L99-S/matched_metrics.json \

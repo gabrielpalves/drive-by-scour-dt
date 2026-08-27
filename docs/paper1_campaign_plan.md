@@ -1,7 +1,7 @@
 # Paper 1 campaign plan (bridge damages)
 
 **Opened:** 2026-08-06
-**Status:** implementation complete; final source-control and external qualification gates in progress
+**Status:** implementation complete; final source audit and portable bundle publication in progress
 **Supersedes:** the retired 10-rung campaign throughout the Paper-1 production
 code. It does **not** supersede
 [`shm_reviewer_readiness_plan.md`](shm_reviewer_readiness_plan.md), which remains
@@ -14,8 +14,12 @@ model-form sensitivity harnesses are implemented. The final source-locked
 18-case clearance matrix selected 6 m, and the track-parameter and
 fixed-Rayleigh response sensitivities are complete; their exact hashes are in
 [`paper1_model_form_freeze_20260809.json`](evidence/paper1_model_form_freeze_20260809.json).
-Clean commit A, locked-host qualification, genuine CUDA benchmark/capacity
-receipts, contact authorization, and dispatch authorization remain gates.
+The remaining release work is the final integrated check suite, one clean
+campaign commit, one six-ZIP publication, and per-PC capability/smoke checks.
+Every training PC must also pass its own genuine CUDA capacity preflight.
+Runtime versions and hardware identities are recorded as provenance, not exact
+matching gates; timing benchmarks and MATLAB release comparisons are optional
+diagnostics.
 
 ---
 
@@ -25,8 +29,8 @@ receipts, contact authorization, and dispatch authorization remain gates.
 |---|---|---|
 | D1 | Geometry set | **F40 + L99.6. L60 dropped** from the Paper 1 campaign; it becomes a later frozen-model length sensitivity, not a coequal block. |
 | D2 | Finite rail domain | **Complete.** The final source-locked 6 / 15 / 30 m coupled matrix passed all 18 cases and rule-selected 6 m under decision ID `paper1-rail-domain-clearance-c06-v1`. |
-| D3 | Response channels | **Implement `physical8_v1`.** Add total wheelset accelerations; retain `acc_under` separately as virtual rail-field diagnostics. |
-| D4 | HPO budget | **5 Optuna restarts × 100 trials on all 16 factorial cells** (8,000 trials), 2,000 selected-pair trials on F40-S, and 2,000 independently in each remaining block: **16,000 trials / 160 studies**. |
+| D3 | Response channels | **Keep the eight-response `physical8_v1` payload.** Indices 3/4 are constrained-wheelset kinematic diagnostics, not sensors or independent DOFs, and are excluded from every learning/selection input. The eligible set is indices 0/1/2/5/6/7; `acc_under` remains a separate virtual rail-field diagnostic. |
+| D4 | Primary HPO budget | **5 Optuna restarts × 100 trials on all 16 factorial cells** (8,000 trials), 2,000 selected-pair trials on F40-S, and 2,000 independently in each remaining block: **16,000 trials / 160 studies**. The six-ZIP dispatch contains only this primary grid (1,600 listed jobs total). Contemporary challengers remain contract/model-only until a separate executor and manifest are audited. |
 
 Scope: scour, bearing fixity, local flexural-stiffness loss (crack surrogate).
 Track, rail, wheel-polygonization and suspension mechanisms are **deferred**, not
@@ -36,7 +40,8 @@ deleted — see §7.
 
 ## 2. Branch strategy: single line, no solver fork
 
-**Decision: do not fork the solver.** One `main`, one commit A, one source root.
+**Decision: do not fork the solver.** One `main`, one clean campaign commit, one
+source root.
 
 > **Settled 2026-08-09 (author).** This was briefly reversed: on 2026-08-06 the
 > author chose to strip the deferred mechanisms to a branch, and the sequencing
@@ -47,16 +52,16 @@ deleted — see §7.
 > in "Claude handoff — 2026-08-06" is superseded and must not be executed.**
 > Deferring the mechanisms costs nothing extra later: stripping onto a branch
 > stays available at any time, whereas stripping `main` had to happen before
-> commit A or not at all.
+> the campaign source freeze or not at all.
 
 Reasons specific to this repository:
 
 1. `generator_source_root_sha256` hashes the whole MATLAB tree and
    `python_runtime_source_root_sha256` the whole Python runtime tree. Two branches
-   produce two roots by construction. `compare_generation_releases` refuses
-   cross-root comparison and qualification receipts are per-root, so data
-   generated on one branch could never be pooled with, or cross-checked against,
-   the other.
+   produce two roots by construction, so source identity would diverge even
+   though comparing MATLAB releases is only an optional portability diagnostic.
+   Scientific data are pooled only when their source and protocol identities
+   agree.
 2. The gate suite is single-tree: 89 campaign controls, the generation /
    damage-physics / bridge-mesh mutation anchors, ~30 Python checkers, the MATLAB
    smokes. Two branches means maintaining all of it twice; the realistic outcome
@@ -74,9 +79,11 @@ Reasons specific to this repository:
 
 - Paper 1 scope = the stage list in §3 plus a scope paragraph plus
   [`damage_model_reference.md`](damage_model_reference.md). Not a code fork.
-- Tag the exact tree the three hosts run (e.g. `campaign-p1-a`) so hosts cannot
-  silently diverge.
-- Unfinished mechanisms get an experimental branch cut **off commit A**
+- Bind every dispatched ZIP to the same reviewed source revision (for example,
+  `campaign-p1-a`) so any number of capable hosts cannot silently run different
+  scientific code.
+- Unfinished mechanisms get an experimental branch cut **off the clean campaign
+  commit**
   (`exp/track-train-damage`), rebased forward. The branch carrying the campaign
   must always be the one with green gates.
 
@@ -108,12 +115,11 @@ it stronger, raise replicas at the four anchor severities only; that complicates
 the state matrix and every checker that pins exact state counts, so it is offered
 as an option, not assumed.
 
-**EOV set for all four stages — author-decided 2026-08-06:**
+**EOV set for all four stages — author-confirmed 2026-08-26:**
 
-- **Profile: `fixed`.** One shared FRA-v2 class-4 phase realization across every
-  state and passage. This matches Fernandes et al. (2025), who generate a single
-  class-4 PSD profile (their Fig. 3a), and it makes every paired
-  healthy/damaged comparison exact — which the V&V ladder in §C needs.
+- **Profile: `fixed`.** One generated FRA-v2 class-4 phase realization (seed
+  `20260728`) is shared by every state and passage. This keeps the excitation
+  geometry controlled across healthy/damaged states and matched S–M blocks.
 - **Operational variability on**: speed 70–90 km/h, temperature 3–33 °C, vehicle
   property variability.
 - **Track-damage EOVs off**: ballast fouling, hanging sleepers, pad failures,
@@ -122,16 +128,14 @@ as an option, not assumed.
 
 Profile *phase* variation is not track damage: track damage changes mechanical
 properties via `B54`, whereas phase changes excitation geometry. `psd_fra`
-remains implemented but disabled in all four production blocks.
+remains implemented but is disabled in all four production blocks.
 
-**Consequence to state in limitations:** with a single fixed realization,
-rail-profile irregularity is not a source of operational variability in this
-data (already recorded at `framework_rationale.md:51`), so no claim of transport
-to another track section is available. **Deferred to the track/train-damage work:**
-re-running with `psd_fra` alongside the track mechanisms. When that happens,
-evaluating the Paper 1 frozen model on varied-phase data measures *distribution
-shift*, not robustness to an EOV it was trained under — a legitimate and
-interesting experiment, but it must be framed that way.
+**Consequence to state in limitations:** rail-profile phase is not a source of
+operational variability in Paper 1, so the results are conditional on this one
+generated FRA-class-4 realization and support no claim of transport to another
+profile or measured track section. A later frozen-model evaluation under other
+phases would be a distribution-shift experiment, not robustness to an EOV seen
+during training.
 
 ### Generation budget
 
@@ -173,7 +177,7 @@ optional sensitivity arm. Only (b) items may be deferred past generation.
 | Rail-domain clearance (6/15/30 m) | **(a)** | **Closed:** 18/18 final source-locked cases passed and selected 6 m for production. |
 | Per-rail-seat vs two-rail scaling | **(b)** | **Closed:** retain the inherited hybrid baseline; the prospective consistent 1×/2× sensitivity is complete and recorded. **Do not silently double** the remaining parameters. |
 | 0.545 → 0.600 m spacing transfer of `Mb`/`Kb`/`Kf` | **(b)** | **Closed:** retain the baseline; the spacing-consistent Zhai-equation sensitivity is complete and recorded. |
-| Ballast topology (`Kw`/`Cw` omitted; on-bridge `Mb` condensed to deck) | **(b)** | Freeze as an explicit inherited simplified topology. **If a wheelset channel wins the selection, topology sensitivity becomes mandatory before publication.** |
+| Ballast topology (`Kw`/`Cw` omitted; on-bridge `Mb` condensed to deck) | **(b)** | Freeze as an explicit inherited simplified topology. Wheelset proxies remain diagnostic-only payload rows and cannot win learning-channel selection or support a headline sensor claim. |
 | Rayleigh handling under refinement | **(a)** | **Closed for the model-form freeze:** recalibrate per grid for production; the fixed-healthy-coefficient sensitivity is complete. Save α, β and reference modes at every level. |
 | Rail 0.1 % Rayleigh target | **(b)** | **Closed:** retain as inherited author-chosen, not a Zhai property; the 0.05 % / 0.20 % damping sensitivity is complete. |
 
@@ -184,16 +188,19 @@ supports calling this a simplified 2-D lumped track model but does not validate
 every scaling and bridge-condensation choice.
 
 **Critical ordering consequence:** any sensitivity code needed for these
-cross-model comparisons must exist **before commit A**. Adding it afterwards
-moves the source root.
+cross-model comparisons must exist **before the clean campaign commit**. Adding
+it afterwards moves the source root.
 
-**Step 2 — `physical8_v1` channels (D3): complete.** Total constrained-wheelset acceleration is
+**Step 2 — `physical8_v1` response payload (D3): complete.** Total constrained-wheelset acceleration is
 `z̈_w = u_tt + 2v·u_xt + v²·u_xx + ḧ_w`; `B66_ContactForce.m` includes the
 `−m·hdd_path` profile-inertia term; schema identity propagates through MAT,
 loader, cache, protocol, result and plotting paths. `acc_under` remains a
 separately named virtual rail-field diagnostic. Old MAT files cannot be
 back-converted. The manufactured four-term fixture verifies the helper and the
 saved D01 field exactly, including masking and legacy-channel preservation.
+Payload indices 3/4 are kinematic diagnostics, not sensors or independent DOFs,
+and never enter learning or selection. The eligible screen set is exactly
+indices 0/1/2/5/6/7.
 
 **Step 3 — contract rewrite: complete; focused mutation suites green.**
 `_STAGE_INPUTS`, MATLAB setup/state matrices, semantic pairing, descriptors,
@@ -201,7 +208,7 @@ loader contracts, four-stage inference, and training-job enumeration now use
 F40-S/F40-M/L99-S/L99-M. Retired ten-rung entrypoints fail closed.
 
 **Step 4 — training side (implemented 2026-08-09; focused checks green; the
-final integrated gate suite remains a commit-A closure step).**
+final integrated gate suite remains a source-freeze closure step).**
 - `MultiRatePooling1D` is now fixed-width adaptive temporal-pyramid pooling,
   shared identically by RAW and PAA; sequence length no longer changes dense
   width or parameter count.
@@ -220,67 +227,51 @@ scaling/topology, damping closure, and final finite-domain decision without
 claiming physical validation.
 
 **Step 6 — closure.** Full MATLAB/Python gate suite → disposition every untracked
-path deliberately → clean commit A → recompute both source roots.
+path deliberately → create one clean campaign commit → recompute both source
+roots.
 
-**Step 7 — dispatch.** Clearance and response-sensitivity evidence is closed.
-Next: clean commit A → genuine RAW benchmark/capacity preflight → host
-qualification on all three PCs → contact authorization → six bundles →
-generation.
+**Step 7 — portable dispatch.** Clearance and response-sensitivity evidence is
+closed. From the clean commit, build and hash the complete six-ZIP set in one
+operation. Verify each archive, extract it into a fresh workspace on its assigned
+PC, run the local capability/physics smokes, and run a local CUDA capacity
+preflight on every training PC before production.
 
-### Production compute-benchmark gate (settled 2026-08-09)
+The six ZIPs do not dispatch the Modern-TCN or TSLANet challengers. Their
+current code fixes model/contract semantics only; without a separate audited
+executor and job manifest they are neither runnable campaign arms nor claimable
+results. If a later package activates them, it must consume the already
+authenticated F40-S selected pair and may not reopen channel selection.
 
-The benchmark capacity prerequisite is executable only through
-`capacity_preflight_compute.py`. On the benchmark RTX 5060 host, activate the
-exact locked environment at clean commit A, create one canonical absolute
-receipt directory outside the repository, and run:
+### Per-PC capability and capacity policy (settled 2026-08-26)
 
-`PYTHONPATH` and `PYTHONHOME` must be absent, not empty;
-`CUBLAS_WORKSPACE_CONFIG` must be `:4096:8`. If `CUDA_VISIBLE_DEVICES` is
-needed, set it once and keep it unchanged through both the capacity and
-benchmark commands. The selected physical GPU must otherwise be idle.
+The reviewed MATLAB and Python descriptors are known-good setup references. A
+different MATLAB release or Update, Python/package set, CUDA version, or GPU
+model does not by itself disqualify a PC. Each run records those exact values as
+provenance. Eligibility depends on the capabilities actually used by the code,
+the local physics/numerical smokes, source/protocol identity, and authenticated
+artifact/resume contracts.
 
-`.\.venv-campaign-py313\Scripts\python.exe -B capacity_preflight_compute.py --receipt-dir "<canonical-absolute-external-directory>"`
+Every generation PC must run the included capability check and the local healthy
+and damaged physics micro/smoke suite before retained generation. Comparing
+outputs across MATLAB releases remains available as an optional portability
+diagnostic; it is not required before dispatch and does not demand bytewise or
+exact-version equality.
 
-The CLI establishes the registered deterministic mode with F40-S seed 104729,
-derives the live F40-S execution-runtime binding, and freshly executes all 16
-registered worst-case RAW/PAA CUDA probes. It refuses a dirty or changing
-worktree, an environment-lock mismatch, an internal/aliased/noncanonical
-directory, an existing content-addressed receipt, or runtime/source drift. The
-printed create-once receipt path is the exact value supplied to
-`benchmark_paper1_compute.py --capacity-receipt`; there is no qualifying
-receipt-reuse mode in the publication CLI.
+Every training PC must execute
+`capacity_preflight_compute.py --all-stages --receipt-dir <dir>` locally under
+the environment that will run its jobs. This creates one distinct receipt for
+each of the four independent execution blocks. Every block-bound preflight
+exercises the genuine forward/loss/backward/optimizer path for the registered
+worst-case two-channel RAW/PAA workload and must finish without OOM with the
+required headroom. The results are specific to that PC and environment; they are
+not permission for another host. `CUBLAS_WORKSPACE_CONFIG=:4096:8` remains a
+deterministic execution capability, while the exact library versions are
+provenance.
 
-`benchmark_paper1_compute.py` is the dispatch-gating, non-scientific sizing
-run. It must execute one **fresh, uninterrupted** 100-trial registered F40-S
-anchor-HPO study for `RAW_POS1_LSTM1_MR1` on physical channel 1, with the
-registered pruner and 50-epoch cap. It uses a deterministic, non-transcendental
-fixture with the full F40-S population shape: **305 state groups × 50 passages,
-one RAW channel × 5,831 samples**. Groups are split exactly 183/61/61
-(60/20/20) into train, inner validation, and sealed-unused test; the sealed 61
-groups are never returned to the selection objective.
-
-The benchmark calls the same registered HPO helper as
-`execute_ablation_pipeline`: live execution-plan derivation, exact
-execution-block attestation, CUDA-capacity validation before study creation,
-v6 protocol/capacity stamping, `training.trainer.Objective`, terminal-state
-validation, and registered model construction. Any pre-existing trial,
-interruption, `FAIL`, `RUNNING`, `WAITING`, OOM, retry, or replacement makes
-that directory permanently nonqualifying; preserve it for diagnosis and choose
-a new directory.
-
-The receipt verifier reopens a copied database through real Optuna and checks
-the sole study/name/minimize direction, exact contract attributes, all 100
-terminal trials, parameters and distributions against the live search space,
-finite intermediate/objective values and timestamps, selected trial equal to
-`best_trial`, and strict loading of the champion state dictionary into the
-registered one-output model. JSON, CSV, progress display, and console output
-contain no objective values. The authenticated SQLite database necessarily
-retains objective values because Optuna needs them to define the champion.
-The receipt additionally binds the exact capacity/environment SHA, execution
-receipt, external evidence directory, clean tested commit A, CUDA memory
-arithmetic, call ledger, canonical artifact inventory, and root hash. Full
-revalidation is permitted from clean A or from clean report-only B only when A
-is an ancestor and `A..B` changes exactly `docs/audit_r5_results.md`.
+`benchmark_paper1_compute.py` is an optional, non-scientific timing and planning
+tool. Its full-size F40-S fixture can estimate runtime and expose throttling, but
+its result neither controls eligibility nor vetoes generation or learning. Scheduling may
+be revised from those measurements without changing the scientific protocol.
 
 ---
 
@@ -323,12 +314,22 @@ generation via the existing `hyperparameter_policy_sha256` mechanism.
    > the 480 fits above.
 6. Channel screen: four retained pipelines — best RAW, best PAA, RAW CNN-GAP
    baseline, PAA CNN-GAP baseline (deduplicate if a winner *is* its baseline) —
-   over 8 singles + 28 pairs at frozen hyperparameters, 5 paired refits:
-   **720 prospectively listed jobs (at most 720 fits)**. An authenticated slot
+   over 6 eligible singles + 15 eligible pairs at frozen hyperparameters, 5
+   paired refits: **420 prospectively listed jobs (at most 420 fits)**. Singles
+   are diagnostics; only pairs are selection-eligible. An authenticated slot
    alias cites its canonical result and performs no duplicate fit.
+   The `physical8_v1` payload still stores eight responses, but wheelset-proxy
+   indices 3/4 are excluded from all 21 learning selectors.
+   **Contemporary challengers may enter only after this screen authenticates the
+   primary F40-S pair.** Every challenger uses that exact pair, performs no
+   independent channel screen, and cannot change the primary pair. Challenger
+   budgets remain secondary and are not included in the primary counts below.
+   In the current six-ZIP publication they are contract/model definitions only:
+   no challenger executor or manifest is dispatched, so they must not be run or
+   reported from this campaign.
 7. Re-HPO the four pipelines on the selected pair: 4 × 5 × 100 = **2,000 trials**.
    These are final-pair optimization and cannot be cited as evidence that the
-   pair beats the other 27, which received frozen-parameter screening only.
+   pair beats the other 14, which received frozen-parameter screening only.
    The count is the pre-outcome four-slot maximum; an authenticated
    winner-equals-baseline alias completes from its canonical slot without a
    duplicate Optuna study.
@@ -346,7 +347,7 @@ generation via the existing `hyperparameter_policy_sha256` mechanism.
    checkpoint epoch, selected pair, architecture, protocol/source lineage, and
    campaign run. Retained-slot aliases cite the canonical frozen pipeline and
    never duplicate compute. No outer-test index is loaded before this artefact
-   and its independently deposited SHA-256 authenticate.
+   and its independently recorded SHA-256 authenticate.
 10. Post-freeze sealed-test stability: 30 disjoint initialization seeds for four
    retained slots in each of four blocks = **480 prospectively listed jobs**
    (at most 480 fits; 120 per block before alias deduplication).
@@ -359,8 +360,8 @@ generation via the existing `hyperparameter_policy_sha256` mechanism.
     downstream development partition and report its sealed outer test without
     making any downstream choice.
 
-**Pre-outcome maxima: 16,000 Optuna trial slots (160 listed study jobs) +
-1,740 listed refit jobs.** Actual compute can only decrease through the
+**Pre-outcome primary maxima: 16,000 Optuna trial slots (160 listed study jobs) +
+1,440 listed refit jobs = 1,600 listed primary jobs.** Actual compute can only decrease through the
 authenticated retained-slot alias mapping; aliases remain in the complete job
 inventory but never duplicate a canonical study or fit.
 
@@ -374,28 +375,29 @@ fold refit = 157.2 s**; peak VRAM 842 MB allocated / 1,760 MB reserved.
 | Item | Count | Unit | Total |
 |---|---:|---:|---:|
 | Listed Optuna jobs, before authenticated alias dedup (80 factorial + 20 F40-S pair + 60 block-local) | ≤160 studies | 1.99 h | ≤318 h |
-| Listed refit jobs, before authenticated alias dedup (480 + 720 + 480 + 60) | ≤1,740 fits | 157.2 s | ≤76 h |
-| | | | **≈394 h ≈ 16.4 GPU-days** |
+| Listed primary refit jobs, before authenticated alias dedup (480 + 420 + 480 + 60) | ≤1,440 fits | 157.2 s | ≤63 h |
+| | | | **≈381 h ≈ 15.9 GPU-days** |
 
-**16.4 GPU-days is a single-case extrapolation, NOT a lower bound.** (Wording
-corrected 2026-08-09 — Codex is right that "floor" overclaims it.) The source
-measurement is one two-channel PAA-512 study on a laptop RTX 4070; the target
-GPUs and the RAW cells both differ. Three things push the real figure up:
+**15.9 GPU-days is a historical single-case extrapolation, NOT a lower bound or
+a dispatch gate.** (Wording corrected 2026-08-09 — "floor" overclaims it.) The
+source measurement is one two-channel PAA-512 study on a laptop RTX 4070; the
+target GPUs and the RAW cells both differ. Three things may push the real figure
+up:
 
 1. The benchmark study pruned 71/100 trials. Prune rate is dataset- and
    arm-dependent.
 2. **Eight of the sixteen cells are RAW.** RAW sequences are roughly an order of
    magnitude longer than PAA-512, so those cells will not cost what the
    benchmarked configuration cost. Treat any multiplier as planning risk, not
-   a measured bound; the required desktop benchmark will replace it.
+   a measured bound; an optional desktop benchmark can improve the estimate.
 3. The benchmark ran on a laptop with 1.54× thermal variance between two runs of
-   identical work. **Benchmark the desktops before committing to a schedule** —
-   the commit message says so explicitly.
+   identical work. An optional short benchmark on each desktop can improve
+   scheduling without becoming a scientific eligibility condition.
 
-Before launching the factorial, run one RAW multi-rate cell to measure its
-per-trial time and VRAM. That single measurement decides whether the 16,000-trial
-design is a three-week job or a three-month one, and it is also the direct test
-of whether the adaptive-pooling fix in Step 4 worked.
+The mandatory local capacity preflight establishes whether the registered
+worst-case workload fits. A separate RAW multi-rate timing cell may be run before
+the factorial to distinguish a weeks-scale from a months-scale schedule; it is
+planning evidence only.
 
 **Where the rigor comes from** (for the methods section — no paper dictates the
 specific budgets, which are prospectively chosen): Cawley & Talbot 2010 on
@@ -412,41 +414,32 @@ descriptive, not a hardware-controlled transport effect.
 
 ## 6. Fleet allocation
 
-Constraint: never confound architecture with hardware. Within each scientific
-block, all compared arms use the same GPU model and numerical stack; physical
-host/device UUID may differ across the two matched 5060 Ti machines.
+Constraint: never assign architectures, representations, channels, or outcomes
+selectively to hardware. `LabA` and `LabB` are balanced logical seed partitions,
+not certified host identities. They may run on different capable GPUs and
+Python/PyTorch/CUDA stacks because every compared family is represented under
+the same prospective partition rule; the actual runtime is retained per job as
+provenance.
 
 | Host | Role |
 |---|---|
-| Lab A — 5950X, 32 GB, RTX 5060 Ti | Generate F40-S first (gating dataset), then all neural training |
-| Lab B — 5950X, 32 GB, RTX 5060 Ti | Generate L99-S, then all neural training |
-| Home — 3700X, 64 GB, RTX 2060 6 GB | Generate F40-M and L99-M; micro studies; ablation work (see below) |
+| Lab A — 5950X, 32 GB, RTX 5060 Ti | Candidate generation host; candidate executor for logical `LabA` or `LabB` jobs after local checks |
+| Lab B — 5950X, 32 GB, RTX 5060 Ti | Candidate generation host; candidate executor for the complementary logical partition after local checks |
+| Home — 3700X, 64 GB, RTX 2060 6 GB | Candidate generation/F25/training host when its own local capacity preflight passes |
 
-**Correction to earlier advice: the 6 GB card is not disqualified.** The R5
-benchmark measured peak VRAM at 842 MB allocated / 1,760 MB reserved, and its
-commit message explicitly retracts the "keep the 6 GB card off ablation work"
-recommendation. That does not authorize method-correlated Paper-1 work on the
-2060. It may carry an entire balanced isolated F25 comparison block only after
-its own RAW capacity preflight. The registered F25 science jobs are singles or
-pairs (at most two input channels); the preflight additionally executes the
-prospectively chosen full-eight, batch-48, five-layer, no-pool RAW k2/k5 cases
-as conservative non-job 6-GB dispatch stresses. They are capacity evidence,
-not F25 arms or controls. RAW multi-rate VRAM remains an unmeasured host gate.
+**The 6 GB card is not disqualified by model name or memory size.** The R5
+benchmark measured peak VRAM at 842 MB allocated / 1,760 MB reserved, but the
+mandatory decision is its own fresh capacity result. The registered Paper-1 and
+F25 science jobs use singles or pairs (at most two input channels); the F25
+preflight includes the worst RAW pair envelope at batch 48, five layers, no
+pooling, and both extreme registered kernels (k2/k5). If a host fails capacity,
+move its entire logical assignment before starting retained jobs; never reroute
+only a slow or unsuccessful architecture after seeing outcomes.
 
-**But keep the 2060 out of the 16-cell comparison entirely** (Codex 2026-08-09,
-accepted — this supersedes my earlier "split by cell" suggestion, which was
-wrong). Assigning any subset of cells to a different card correlates hardware
-with pipeline, which is the exact confound the identical-GPU rule exists to
-prevent, and it applies to the refit workload too since refits are also compared
-across pipelines. **The full comparative 16-cell HPO and its refits run on the
-two matched 5060 Ti machines.** The 2060 takes generation, smokes, the micro
-convergence studies, and non-comparative sensitivity runs.
-
-MATLAB generation is core-bound, so the 16-core lab boxes are the faster
-generators — but they are also the two matched GPUs, which is why F40-S
-generation must finish first and free Lab A for the factorial. Every host passes
-MATLAB-environment and cross-host generation checks before it produces anything
-retained.
+MATLAB generation is core-bound, so the 16-core lab boxes are expected to be
+faster generators, but any available PC may generate a stage after its own
+capability and healthy/damaged physics smokes pass. Exact MATLAB release
+matching and pairwise cross-host comparison are optional diagnostics, not gates.
 
 Bundle set to replace the obsolete ten-stage builder:
 `bundle_f40s_generate`, `bundle_f40m_generate`, `bundle_l99s_generate`,
@@ -464,7 +457,7 @@ configuration. They are deferred because their credible parameter ranges,
 identifiability and validation are hard — not because the matrix edits are hard.
 Several of their priors are already recorded as author-chosen or
 contradicted-and-retained. Any future work on them happens on
-`exp/track-train-damage` cut off commit A.
+`exp/track-train-damage` cut from the clean campaign source revision.
 
 Also deferred: full N-HiTS as a Paper 1 arm. Authentic N-HiTS is a forecasting
 model with backcast/forecast residual stacks and hierarchical interpolation;
@@ -501,9 +494,9 @@ curiosity pilot may test implementation stability, memory and runtime — not
 
 ## 9. Settled implementation ledger
 
-- Fixed profile, operational EOV on, track/OOR off: encoded in all four stage
-  contracts. Alternative profile phases are a later frozen-model distribution-
-  shift experiment, not a production training EOV.
+- One shared fixed-phase FRA-class-4 realization (seed `20260728`), operational
+  EOV on, track/OOR off: encoded in all four stage contracts. No profile phase
+  redraw occurs by state, replica, or passage.
 - F40-M is exactly 425 states; L99-S/M are 475. F40-S/F40-M share a controlled
   30-state semantic subset; L99-S/M are completely paired.
 - The transport/rescue trigger is withdrawn. Each scientific block receives
@@ -517,7 +510,7 @@ curiosity pilot may test implementation stability, memory and runtime — not
 
 Design per Codex 2026-08-09, accepted. **Not a branch and not a second solver
 lineage**: a separate *experiment configuration* on the same tree, same clean
-commit A, same source hashes. Operational isolation comes from a dedicated
+campaign commit, same source hashes. Operational isolation comes from a dedicated
 experiment ID, separate manifests / cache / results roots, and its own `.zip`
 bundle.
 
@@ -533,7 +526,8 @@ is actually recovered. Every choice goes in a deviation table classified as
 
 **Resolved scope decision (2026-08-09):** sensor *pairs* are an exploratory
 tier only, executed after all singles in a pre-registered order. The primary
-comparison remains the complete eight-single-channel table.
+comparison remains the complete six-single learning-eligible table. The two
+wheelset-proxy payload rows remain diagnostics and are not F25-X inputs.
 
 ### Extracted from the paper (verified against the PDF)
 
@@ -739,13 +733,13 @@ The ladder is prospectively defensible on its own.
 | # | Item | Decision |
 |---|---|---|
 | 1 | Sensor pairs | **Exploratory tier only**, run after all singles. Ordering **pre-registered and documented**; block labelled exploratory. A partial set is then honest rather than a run-order selection artifact. |
-| 2 | `F25-X` channels | **All 8 singles** — his 2 plus the 6 he never tested. |
+| 2 | `F25-X` channels | **All 6 learning-eligible singles** — his 2 plus 4 additional modeled-DOF responses; wheelset-proxy indices 3/4 remain diagnostics. |
 | 3 | HPO regime | **Tiered**: frozen-HP screen first, then unfrozen singles, then frozen-HP pairs. |
 | 4 | Runs reported | **20**, matching him. Report the distribution; best-run confusion matrix for visual comparability only. |
 | 5 | Crack location | **His element 100 = 29.70–30.00 m**, reproduced exactly (below). |
 | 6 | Mesh / geometry | **0.15 m deck mesh, 39.9 m bridge, spans 19.95 m.** |
-| 7 | Profile | **His `Calc.ProfileData15_05.mat` realization** — faithfulness over convenience. |
-| 8 | Wheelset channels | **Included** (8 channels, first two wheels). ⇒ `F25` now **depends on the `physical8_v1` workstream**. |
+| 7 | Profile | **Exactly his fixed Type-2 `Calc.ProfileData15_05.mat` realization** — faithfulness over convenience; it remains distinct from the main campaign's generated fixed FRA-v2 realization. |
+| 8 | Wheelset proxies | **Payload diagnostics only.** They remain stored in `physical8_v1` but are excluded from every F25 fit and pair. |
 
 #### Why 0.15 m (items 5 + 6 resolve together)
 
@@ -780,16 +774,16 @@ table as primary; unfrozen results are a separate, labelled analysis.
 
 Corollary: his protocol tuned each (sensor, method) separately, so the
 **faithful** reconstruction of his two channels is the **unfrozen** one. Frozen
-is our economising screen for the other six.
+is our economising screen for the other four eligible responses.
 
 #### Budget, at his 500 runs per configuration (100 trials × 5 executions)
 
 | Tier | Runs | Note |
 |---|---:|---|
-| Frozen-HP singles screen | 3 arms × 8 ch × 20 | ~480 fits, hours |
-| Unfrozen singles | 3 × 8 × 500 = **12,000** | ~4–8 days on the 2060 |
-| Frozen-HP pairs (exploratory) | 3 × 28 × 20 = 1,680 | ~14–28 h |
-| ~~Unfrozen pairs~~ | 42,000 | **Not viable — do not plan for it** |
+| Frozen-HP singles screen | 3 arms × 6 ch × 20 = **360** | hours |
+| Unfrozen singles | 3 × 6 × 500 = **9,000** | ~3–6 days on the 2060 |
+| Frozen-HP pairs (exploratory) | 3 × 15 × 20 = **900** | ~8–15 h |
+| ~~Unfrozen pairs~~ | 22,500 | **Not viable — do not plan for it** |
 
 ### Remaining gaps
 
@@ -800,8 +794,9 @@ paper** — it converts several rows from "inferred" to "exactly reproduced".
   used `Profile.Type == 2` to load `Calc.ProfileData15_05.mat` in his own
   campaign, and that the file arrived with his code. Reviving that branch for
   `F25-R` is therefore *his own code path*, not a workaround, and it is the
-  faithful choice. The main campaign still generates its own FRA class-4
-  realization. Consistent with the paper: PSD-generated once, saved, reused.
+  faithful choice. `F25-R` retains exactly that one stored fixed Type-2 profile.
+  The four main Paper-1 blocks instead share one generated FRA-v2 class-4
+  realization (phase seed `20260728`) across every state and passage.
   - [x] **Executable provenance consequence — CLOSED 2026-08-09.** The asset
     was already present in `bundle_source_files.txt` and therefore already in
     the reviewed generator source root (the earlier "not hashed" statement was
@@ -865,7 +860,8 @@ The mass is not the only defect the 61-class campaign carries:
   support — whose stiffness loss *is* the label — sat off-node until the
   2026-08-03 support-alignment fix.
 
-So "2 sensors ≈ 8" and "PAA + N-HiTS wins" are **hypotheses, not results**.
+So "2 sensors ≈ 6 eligible modeled-DOF responses" and "PAA + N-HiTS wins"
+are **hypotheses, not results**.
 
 **Why "reuse them if L99-S agrees" does not work.** Agreement between a correct
 L99.6 dataset and an incorrect F40 dataset would show the architecture ranking is

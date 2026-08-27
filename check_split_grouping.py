@@ -1,7 +1,7 @@
 """Mutation-tested semantic-UID grouped split contract.
 
 Run with the exact campaign interpreter:
-    py -3.13 check_split_grouping.py
+    python check_split_grouping.py
 """
 
 from __future__ import annotations

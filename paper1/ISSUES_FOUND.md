@@ -3253,15 +3253,15 @@ operator-path defects, and both are closed in the amended source candidate:
   registered seeding helper established deterministic/cuDNN/TF32 state, so a
   genuine run could fail its final stability comparison. Capacity and benchmark
   now establish the same F40-S state (seed 104729) before runtime identity.
-- F25 capacity schema v2 retains both registered RAW pair-envelope cases and
-  adds k2/k5 full-eight, batch-48, five-layer, no-pool stresses. Full-eight is
-  conservative non-job 6-GB dispatch evidence, not a scientific arm. The
-  executor requires the exact ordered cases, finite positive memory evidence,
-  exact target environment, locked packages, and current Python source root.
+- F25 capacity schema v3 retains exactly the two worst registered RAW pair
+  envelopes: batch 48, five layers, no pooling, at the extreme registered
+  kernels k2/k5. It adds no full-array non-job workload. The executor requires
+  the exact ordered cases, finite positive memory evidence, exact target
+  environment, locked packages, and current Python source root.
 - F25 bundle schema v2 gives R and X distinct plans, manifests, and READMEs.
   Pair verification requires the two retained ZIP SHA-256s and clean-A commit,
   revalidates safe manifest paths/source bytes, and binds the generated plan
-  and README. Run all eight F25-R jobs before all 156 F25-X jobs in one new
+  and README. Run all eight F25-R jobs before all 99 F25-X jobs in one new
   shared workspace and on one RTX 2060 numeric stack.
 - Main capacity, F25 capacity, and F25 training enter through the reviewed
   import boundary before any scientific import.
@@ -3283,5 +3283,5 @@ Production remains **DISPATCH BLOCKED** until the genuine RTX 5060 capacity and
 fresh benchmark, all 12 three-host/four-block qualification-pair receipts plus
 inventory, the 420-case contact gate and receipt, and the external dispatch
 manifest pass. F25 remains blocked until both A-bound ZIPs verify on the target
-and the genuine four-case preflight passes on the RTX 2060. Archive receipts;
+and the genuine two-case preflight passes on the RTX 2060. Archive receipts;
 never commit them or replace a failed qualifying run in place.

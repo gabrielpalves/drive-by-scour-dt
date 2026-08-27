@@ -52,11 +52,11 @@ end
 %   L99-S  4 x 24.9 m; supports 2/3/4; scour-only physics
 %   L99-M  same bridge; scour + nominal bearing fixity + local EI loss
 %
-% HEADS = scour (per pier) + bearing (per abutment) ONLY. Crack, rail profile,
-% track-layer and wheel damage are NUISANCES: randomized, logged, never
-% estimated. They support an empirical robustness evaluation under confounding
-% variability; perfect invariance is neither assumed nor required. Rationale:
-% docs/framework_rationale.md.
+% HEADS = scour (per pier) + bearing (per abutment) ONLY. The local EI-loss
+% surrogate is a state-persistent nuisance in the M blocks. Rail-profile phase
+% is controlled and fixed globally; track-layer and wheel damage are disabled.
+% None of these mechanisms is inferred as an additional target. Rationale:
+% docs/paper1_campaign_plan.md.
 STAGE = char(string(inputs.STAGE));
 
 % Defaults; each rung below only switches ON what it adds.
@@ -145,10 +145,10 @@ damage_seed      = 1;       % RNG seed for a REPRODUCIBLE damage-state grid
 % bearing_only/nuisance_only row remains a latent design stratum when its
 % mechanism is OFF. Only active physics changes across paired rungs, never
 % sample size, row order, UID inventory, or scour realization.
-% (not derived from labels downstream — with per-STATE persistent nuisances a
-% zero-head state still carries a crack/profile/track fingerprint, so `y`
-% alone cannot identify families; that was the flaw in the pre-redesign
-% threshold-based probe). Families:
+% (not derived from labels downstream — a zero-head state can still carry an
+% active persistent nuisance such as the crack surrogate, so `y` alone cannot
+% identify families; that was the flaw in the pre-redesign threshold-based
+% probe). Families:
 %   target_healthy  LEGACY ID: all heads zero; nuisances follow the rung's
 %                   active policy EXCEPT crack, which is forced OFF. This is a
 %                   zero-target baseline, not a physically clean condition.
@@ -160,9 +160,9 @@ damage_seed      = 1;       % RNG seed for a REPRODUCIBLE damage-state grid
 %   nuisance_only   all heads zero, crack forced ON (the false-positive probe:
 %                   does the model report damage when only a nuisance exists?).
 %                   Always present as a latent stratum; crack activates only
-%                   when use_crack_eov=true. The FRA profile
-%                   class is FIXED at 4 — only its phase varies — and track
-%                   damage is present w.p. ~1 under its Poisson rates).
+%                   when use_crack_eov=true. The primary FRA class-4 profile
+%                   is one shared fixed-phase realization, and track damage is
+%                   disabled in all four Paper-1 production blocks.
 %   joint           the LHS block; crack drawn naturally (p = crack_p).
 % WHY: the stratified split (core/dataset.py) guarantees every family lands in
 % train / inner-val / outer-test, so the disentanglement and false-positive
@@ -256,26 +256,23 @@ crack_frac_range = [0.10 0.90];   % LEGACY uniform bounds — used only as a cla
 crack_int_range  = [0.05 0.30];   % EI-loss fraction (Fernandes 2025: 0.14/0.22)
 crack_lc         = 0.0;           % half-length [m] each side; <=0 -> single element
 
-% ===== Rail profile mode (EOV) =====
+% ===== Rail profile modes =====
 % profile_mode is set by the STAGE preset; these are its numeric knobs.
 % 'fixed'        one fixed-phase FRA-v2 class-4 realization shared by states.
 % 'fixed_scaled' that same realization x an amplitude factor (non-registered).
 % 'psd_fra'      the SAME FRA-v2 class-4 spectrum with per-state phases.
-% Therefore s13->s14 and s22->s23 do not silently change the spectral law or
-% amplitude: the profile contrast is fixed realization vs a distribution of
-% phase realizations under one executable spectrum.
-% EOV DESIGN REVIEW 2026-07-12, wording corrected 2026-07-27: ONE class + ONE
-% phase realization is drawn per damage STATE and held for its passages
-% (profile_draw='per_state'; B19 seeds the phase draw per state). This is an
-% explicit scenario-persistence assumption, not an inference from EN 13848-2
-% measurement-system repeatability. Any physical persistence claim in the paper
-% requires its own track-evolution evidence.
-% Class set FIXED at FRA class 4 by the prospectively source-locked design.
+% PAPER-1 DECISION 2026-08-26: every production block uses 'fixed'. The
+% 'psd_fra' branch remains executable for a separately authorized future
+% distribution-shift/sensitivity study; it is not a Paper-1 production EOV.
+% If that optional branch is used, one phase is drawn per state and held across
+% its passages. This is a simulation-design choice, not a physical rail-aging
+% model or an inference from EN 13848-2 measurement repeatability.
+% Class set FIXED at FRA class 4 for both registered generators.
 % It is not claimed to be the legal or physically worst permissible condition;
 % any service/speed interpretation must be conditioned on the applicable rule.
 % The old per-passage class+phase redraw over {4,5,6} is DEPRECATED (it is what
 % collapsed the sprung channels in the L100 Stage-2 pilot).
-profile_draw         = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
+profile_draw         = 'fixed_shared'; % one retained realization for all states
 % AUDIT FIX 2026-07-17: former 0.5 mm per-passage white profile perturbation
 % DISABLED. The 0.5 mm
 % white noise misread EN 13848-2 - that figure is the MEASURING SYSTEM's
@@ -290,7 +287,7 @@ profile_draw         = 'per_state';  % 'per_state' | 'per_passage' (DEPRECATED)
 % versioned and validated against an appropriate physical evolution model.
 profile_jitter_sd_mm = 0;            % per-passage additive white noise [mm] - keep 0 (see above)
 profile_int_range    = [0.5 2.0];    % 'fixed_scaled' amplitude range
-profile_fra_classes  = 4;            % 'psd_fra' class set (scalar = fixed class)
+profile_fra_classes  = 4;            % fixed and psd_fra class (scalar)
 profile_fixed_phase_seed = 20260728; % shared fixed FRA-v2 realization
 profile_spectrum_contract = 'fra-v2-class4-cycles-per-m-v1';
 % Reviewed finite-rail-domain decision.  The source-locked 18-case 6/15/30 m
@@ -307,8 +304,8 @@ rail_end_clearance_decision_id = ...
 % distributions. Randomized NUISANCES — logged, NOT labels. EOV DESIGN REVIEW
 % 2026-07-12: ballast patches / hanging sleepers / pad service-condition
 % scalars are PERSISTENT
-% infrastructure conditions (same argument as crack/profile) -> drawn once per
-% damage STATE (track_draw='per_state'). Wheel OOR stays per-PASSAGE: each
+% infrastructure conditions -> drawn once per damage STATE when that optional
+% mode is enabled (track_draw='per_state'). Wheel OOR stays per-PASSAGE: each
 % passage plausibly is a different train of the fleet (vehicle variability).
 % Track x-coords: descriptors are sampled in a BRIDGE-LOCAL WINDOW FRAME -
 % x = 0 is the window start and the deck occupies [track_L_app,

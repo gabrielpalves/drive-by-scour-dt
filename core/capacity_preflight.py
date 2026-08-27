@@ -28,11 +28,14 @@ from core.hyperparameter_policy import (
     canonical_json_bytes,
     canonical_json_sha256,
 )
-from core.paper1_training_contract import FACTORIAL_CELLS
+from core.paper1_training_contract import (
+    ELIGIBLE_SENSOR_INDICES,
+    FACTORIAL_CELLS,
+)
 from core.source_provenance import python_runtime_source_root
 
 
-CAPACITY_POLICY_SCHEMA = "ttbi-cuda-capacity-policy-v2"
+CAPACITY_POLICY_SCHEMA = "ttbi-cuda-capacity-policy-v3"
 CAPACITY_RECEIPT_SCHEMA = "ttbi-cuda-capacity-receipt-v2"
 CAPACITY_ENVELOPE_SCHEMA = "ttbi-cuda-capacity-receipt-envelope-v2"
 CAPACITY_RECEIPT_DIR_ENV = "TTBI_EXECUTION_RECEIPT_DIR"
@@ -43,13 +46,19 @@ CAPACITY_PREFLIGHT_POLICY = {
     "architectures": list(ARCHITECTURES),
     "search_point": "maximum registered structural dimensions",
     "batch_size": 32,
+    "input_scope": {
+        "selector": "authenticated_selected_pair",
+        "input_channels": 2,
+        "eligible_sensor_indices": list(ELIGIBLE_SENSOR_INDICES),
+        "diagnostic_proxy_inputs_permitted": False,
+    },
     # The longest production representation is the L99.6 RAW bridge crop:
     # 9,960 bridge samples plus the source-locked 1,831-sample post window.
     # PAA is checked separately because it exercises the same model cells with
     # its actual 512-segment preprocessing contract.
     "representation_input_shapes": {
-        "RAW": [32, 8, 11_791],
-        "PAA": [32, 8, 512],
+        "RAW": [32, 2, 11_791],
+        "PAA": [32, 2, 512],
     },
     "largest_raw_case": {
         "stage": "L99-M",
@@ -114,6 +123,7 @@ _IMPLEMENTATION_FILES = (
     "core/capacity_preflight.py",
     "core/hyperparameter_policy.py",
     "core/models.py",
+    "core/temporal_pooling.py",
     "training/trainer.py",
 )
 _HEX = frozenset("0123456789abcdef")
@@ -173,7 +183,9 @@ def _architecture_config(architecture: str) -> dict:
         "task": "regression",
         "target_supports": [2, 3, 4],
         "bearing_targets": ["left", "right"],
-        "dofs": list(range(8)),
+        # Sensor identity does not change tensor capacity; use one registered
+        # eligible pair and bind the cardinality to ``input_scope`` above.
+        "dofs": list(ELIGIBLE_SENSOR_INDICES[:2]),
         "n_segments": input_shape[2],
     }
 
@@ -191,6 +203,16 @@ def _capacity_input_shape(config: dict) -> tuple[int, int, int]:
         raise CapacityPreflightError(
             "capacity configuration sequence length differs from its "
             "registered representation"
+        )
+    expected_dofs = list(ELIGIBLE_SENSOR_INDICES[:2])
+    if (
+        config.get("dofs") != expected_dofs
+        or len(expected_dofs) != shape[1]
+        or shape[1]
+        != CAPACITY_PREFLIGHT_POLICY["input_scope"]["input_channels"]
+    ):
+        raise CapacityPreflightError(
+            "capacity configuration is not the registered eligible pair"
         )
     return tuple(shape)
 

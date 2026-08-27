@@ -6,9 +6,10 @@ Builds a tiny valid R11 dataset (with source SHA digests + exact 3-line marker) 
 temp data/ folder, exercises get_or_create_cache, then verifies that every
 tamper is caught: swapped/corrupted feature/label/GROUPS/scaler artifacts, a
 count-preserving group SWAP, a same-size source .mat overwrite, a wrong-content
-marker, full generator/environment provenance drift, qualification laundering,
+marker, incoherent/mixed environment provenance, qualification laundering,
 an interrupted publication (missing sidecar), and concurrent builds of the
-same stem. MUST print ALL PASS before trusting a multi-day campaign cache.
+same stem.  A coherent non-reference MATLAB release is accepted and recorded.
+MUST print ALL PASS before trusting a multi-day campaign cache.
 """
 import concurrent.futures as cf
 import hashlib
@@ -58,6 +59,29 @@ STATE_STREAM_NAMES = (
     "operations", "crack", "profile-state", "track", "profile-phase"
 )
 PASSAGE_STREAM_NAMES = ("profile-passage", "oor-passage")
+
+
+def _portable_actual_matlab_environment():
+    """Return a coherent live-host identity unlike the campaign reference."""
+    replacements = {
+        "matlab_product_version": "24.2",
+        "parallel_toolbox_version": "24.2",
+        "release": "R2024b",
+        "statistics_toolbox_version": "24.2",
+        "version": "24.2.0.9999999 (R2024b) Portable Fixture",
+    }
+    rows = []
+    for row in _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR.split("\n"):
+        key, value = row.split("=", 1)
+        rows.append(f"{key}={replacements.get(key, value)}")
+    descriptor = "\n".join(rows)
+    return {
+        "matlab_release": "R2024b",
+        "actual_matlab_environment_descriptor": descriptor,
+        "actual_matlab_environment_sha256": hashlib.sha256(
+            descriptor.encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def _generation_config_json(
@@ -137,18 +161,26 @@ def _state_identity(idx):
 
 def _generation_metadata(*, qualification=False,
                          qualification_source="PRODUCTION",
-                         generator_attestation=None):
-    metadata = {
-        'channel_schema_id': _EXPECTED_CHANNEL_SCHEMA_ID,
-        'generation_behavior_version':
-            _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+                         generator_attestation=None,
+                         actual_environment=None):
+    actual_environment = actual_environment or {
         'matlab_release': _EXPECTED_MATLAB_RELEASE,
-        'campaign_matlab_release': _EXPECTED_MATLAB_RELEASE,
-        'release_qualification_run': qualification,
         'actual_matlab_environment_descriptor':
             _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
         'actual_matlab_environment_sha256':
             _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+    }
+    metadata = {
+        'channel_schema_id': _EXPECTED_CHANNEL_SCHEMA_ID,
+        'generation_behavior_version':
+            _EXPECTED_GENERATION_BEHAVIOR_VERSION,
+        'matlab_release': actual_environment['matlab_release'],
+        'campaign_matlab_release': _EXPECTED_MATLAB_RELEASE,
+        'release_qualification_run': qualification,
+        'actual_matlab_environment_descriptor':
+            actual_environment['actual_matlab_environment_descriptor'],
+        'actual_matlab_environment_sha256':
+            actual_environment['actual_matlab_environment_sha256'],
         'campaign_matlab_environment_descriptor':
             _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
         'campaign_matlab_environment_sha256':
@@ -287,13 +319,16 @@ def _foreign_generator_attestation():
 def _build_dataset(data_dir, *, qualification=False,
                    qualification_source="PRODUCTION",
                    generator_attestation=None,
-                   metadata_overrides=None, metadata_drop=()):
+                   metadata_overrides=None, metadata_drop=(),
+                   actual_environment=None,
+                   state_generation_overrides=None):
     shutil.rmtree(data_dir, ignore_errors=True)
     os.makedirs(data_dir)
     generation = _generation_metadata(
         qualification=qualification,
         qualification_source=qualification_source,
         generator_attestation=generator_attestation,
+        actual_environment=actual_environment,
     )
     generation_config_json = _generation_config_json(
         generator_source_root_sha256=
@@ -331,7 +366,7 @@ def _build_dataset(data_dir, *, qualification=False,
         'use_crack_eov': False,
         'crack_draw': 'per_state',
         'profile_mode': 'fixed',
-        'profile_draw': 'per_state',
+        'profile_draw': 'fixed_shared',
         'profile_jitter_sd_mm': 0.0,
         'use_track_eov': False,
         'track_draw': 'per_state',
@@ -394,10 +429,14 @@ def _build_dataset(data_dir, *, qualification=False,
     })
     clog = np.column_stack([np.zeros(NP)] * 3 + [-1e5 * np.ones(NP)])
     for i in range(1, NST + 1):
+        state_generation = dict(generation)
+        state_generation.update(
+            (state_generation_overrides or {}).get(i, {})
+        )
         d = {'scour_vector': np.array([[0.0, 0.1, 0.2, 0.0]]), 'gen_schema': _EXPECTED_GEN_SCHEMA,
              'gen_fingerprint': fingerprint, 'state_family': 'joint',
              **_state_identity(i),
-             **generation,
+             **state_generation,
              **_complete_payload_defaults(clog)}
         # generation_behavior_version belongs to case_info/fingerprint, not
         # the per-state payload written by A00.
@@ -478,6 +517,109 @@ def main():
         X2, y2, sc2, g2 = get_or_create_cache(CFG, ds, cache_dir)
         check("fast-path reuse identical", tuple(X2.shape) == shape)
         del X2, y2, g2
+        gc.collect()
+
+        # 2b. A different actual MATLAB release is admissible when its
+        # descriptor/SHA and every state stamp are coherent.  The existing
+        # reference-host cache must be replaced, while the immutable campaign
+        # reference remains exact in the new sidecar.
+        portable_environment = _portable_actual_matlab_environment()
+        _build_dataset(
+            data_dir,
+            actual_environment=portable_environment,
+        )
+        Xp, yp, scp, gp = get_or_create_cache(CFG, ds, cache_dir)
+        portable_prov = json.load(open(_art(cache_dir, '_prov.json')))
+        check(
+            "coherent different MATLAB release rebuilds portable cache",
+            tuple(Xp.shape) == shape
+            and portable_prov['source']['matlab_release']
+                == portable_environment['matlab_release']
+            and portable_prov['source'][
+                'actual_matlab_environment_descriptor'
+            ] == portable_environment[
+                'actual_matlab_environment_descriptor'
+            ]
+            and portable_prov['source'][
+                'actual_matlab_environment_sha256'
+            ] == portable_environment['actual_matlab_environment_sha256']
+            and portable_prov['source']['actual_matlab_environment_sha256']
+                != _EXPECTED_MATLAB_ENVIRONMENT_SHA256
+            and portable_prov['source']['campaign_matlab_release']
+                == _EXPECTED_MATLAB_RELEASE
+            and portable_prov['source'][
+                'campaign_matlab_environment_descriptor'
+            ] == _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR
+            and portable_prov['source'][
+                'campaign_matlab_environment_sha256'
+            ] == _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+        )
+        del Xp, yp, gp
+        gc.collect()
+
+        default_actual = {
+            'matlab_release': _EXPECTED_MATLAB_RELEASE,
+            'actual_matlab_environment_descriptor':
+                _EXPECTED_MATLAB_ENVIRONMENT_DESCRIPTOR,
+            'actual_matlab_environment_sha256':
+                _EXPECTED_MATLAB_ENVIRONMENT_SHA256,
+        }
+        portable_rejections = (
+            (
+                "actual descriptor/SHA incoherence rejected on cache path",
+                {
+                    "actual_environment": portable_environment,
+                    "metadata_overrides": {
+                        "actual_matlab_environment_sha256": "0" * 64,
+                    },
+                },
+            ),
+            (
+                "actual release/descriptor disagreement rejected on cache path",
+                {
+                    "actual_environment": portable_environment,
+                    "metadata_overrides": {
+                        "matlab_release": _EXPECTED_MATLAB_RELEASE,
+                    },
+                },
+            ),
+            (
+                "coherent foreign campaign/reference rejected on cache path",
+                {
+                    "metadata_overrides": {
+                        "campaign_matlab_environment_descriptor":
+                            portable_environment[
+                                "actual_matlab_environment_descriptor"
+                            ],
+                        "campaign_matlab_environment_sha256":
+                            portable_environment[
+                                "actual_matlab_environment_sha256"
+                            ],
+                    },
+                },
+            ),
+            (
+                "mixed actual MATLAB environments rejected on cache path",
+                {
+                    "actual_environment": portable_environment,
+                    "state_generation_overrides": {2: default_actual},
+                },
+            ),
+        )
+        for label, build_kwargs in portable_rejections:
+            _build_dataset(data_dir, **build_kwargs)
+            try:
+                get_or_create_cache(CFG, ds, cache_dir)
+                check(label, False)
+            except RuntimeError:
+                check(label, True)
+
+        _build_dataset(data_dir)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        X, y, sc, g = get_or_create_cache(CFG, ds, cache_dir)
+        check("reference fixture restored after portability checks",
+              tuple(X.shape) == shape)
+        del X, y, g
         gc.collect()
 
         # 3. Tamper each artifact (feat/labels/groups/scaler) -> rebuild

@@ -1,12 +1,13 @@
-"""Mutation and behaviour checks for four-block execution qualification.
+"""Mutation and behaviour checks for portable four-block execution.
 
-Run with the locked campaign interpreter::
+Run with a campaign interpreter whose local capability checks pass::
 
-    py -3.13 check_execution_blocking.py
+    python check_execution_blocking.py
 
-The four Paper-1 stages are independent HPO blocks. Within one block the GPU
-model and numeric stack must match exactly, while hostname, device index, and
-physical GPU UUID may differ across the two matched lab machines.
+The four Paper-1 stages are independent HPO blocks.  A logical receipt binds
+the protocol, block, stage and run tag; each participating PC separately
+authenticates its own hardware/numeric-stack descriptor and capacity preflight.
+Consequently, qualified hosts in one block may use different GPUs and stacks.
 """
 
 from __future__ import annotations
@@ -114,6 +115,10 @@ def fixture_environment(
     uuid: str = "GPU-lab-a",
     device_index: int = 0,
     gpu_name: str = "NVIDIA GeForce RTX 5060 Ti",
+    compute_capability: tuple[int, int] = (12, 0),
+    torch_version: str = "fixture-torch",
+    cuda_runtime_version: str = "12.8",
+    cudnn_version: int = 90701,
 ) -> dict:
     return {
         "schema": "ttbi-execution-environment-v1",
@@ -128,15 +133,18 @@ def fixture_environment(
             "device_index": device_index,
             "name": gpu_name,
             "uuid": uuid,
-            "compute_capability": {"major": 12, "minor": 0},
+            "compute_capability": {
+                "major": compute_capability[0],
+                "minor": compute_capability[1],
+            },
             "sm_count": 36,
             "total_memory_bytes": 17_179_869_184,
             "driver_version": "fixture-driver",
         },
         "numeric_stack": {
-            "torch_version": "fixture-torch",
-            "cuda_runtime_version": "12.8",
-            "cudnn_version": 90701,
+            "torch_version": torch_version,
+            "cuda_runtime_version": cuda_runtime_version,
+            "cudnn_version": cudnn_version,
             "cublas_workspace_config": ":4096:8",
             "deterministic_algorithms": True,
             "deterministic_warn_only": False,
@@ -168,7 +176,7 @@ def fixture_runtime(stage: str, environment: dict) -> dict:
     }
 
 
-print("\n--- A. exact four-block policy ---")
+print("\n--- A. portable four-block policy ---")
 policy = canonical_execution_block_policy(EXECUTION_BLOCK_POLICY)
 expected_blocks = {
     "F40-S": ("f40s", "F40-S"),
@@ -177,8 +185,10 @@ expected_blocks = {
     "L99-M": ("l99m", "L99-M"),
 }
 check(
-    "policy is v2 and contains exactly four independent stage blocks",
-    policy["schema"] == "ttbi-execution-block-policy-v2"
+    "policy is v3 and contains exactly four independent stage blocks",
+    policy["schema"] == "ttbi-execution-block-policy-v3"
+    and policy["portable_hosts_within_block"] is True
+    and policy["capacity_preflight_per_host"] is True
     and set(policy["blocks"]) == {"f40s", "f40m", "l99s", "l99m"}
     and all(
         execution_block_for_stage(stage, policy) == expected
@@ -217,12 +227,26 @@ rejects(
     "confirmatory cross-block relabelling is rejected",
     lambda: canonical_execution_block_policy(mutant),
 )
+mutant = copy.deepcopy(policy)
+mutant["portable_hosts_within_block"] = False
+rejects(
+    "policy cannot restore a same-host or same-GPU restriction",
+    lambda: canonical_execution_block_policy(mutant),
+    "permit qualified local hosts",
+)
 
 
-print("\n--- B. exact and compatibility runtime identities ---")
+print("\n--- B. independently authenticated runtime identities ---")
 lab_a_environment = fixture_environment()
 lab_b_environment = fixture_environment(
-    hostname="lab-b", uuid="GPU-lab-b", device_index=1
+    hostname="lab-b",
+    uuid="GPU-lab-b",
+    device_index=1,
+    gpu_name="NVIDIA GeForce RTX 2060",
+    compute_capability=(7, 5),
+    torch_version="fixture-torch-newer",
+    cuda_runtime_version="13.0",
+    cudnn_version=99999,
 )
 lab_a_runtime = fixture_runtime("F40-S", lab_a_environment)
 lab_b_runtime = fixture_runtime("F40-S", lab_b_environment)
@@ -231,11 +255,11 @@ check(
     validate_execution_runtime(lab_a_runtime) == lab_a_runtime,
 )
 check(
-    "host/device UUID changes preserve the registered compatibility class",
+    "different qualified GPU/stack has a distinct authenticated identity",
     lab_a_runtime["execution_environment_sha256"]
     != lab_b_runtime["execution_environment_sha256"]
     and lab_a_runtime["execution_compatibility_sha256"]
-    == lab_b_runtime["execution_compatibility_sha256"]
+    != lab_b_runtime["execution_compatibility_sha256"]
     and validate_execution_runtime(lab_b_runtime) == lab_b_runtime,
 )
 mutant = copy.deepcopy(lab_a_runtime)
@@ -259,16 +283,9 @@ rejects(
     lambda: validate_execution_runtime(mutant),
     "wrong block anchor",
 )
-for field in ("uuid", "driver_version"):
-    mutant_environment = fixture_environment()
-    mutant_environment["accelerator"][field] = None
-    rejects(
-        f"CUDA environment missing {field} is rejected",
-        lambda value=mutant_environment: execution_environment_sha256(value),
-    )
 
 
-print("\n--- C. atomic receipts and same-block matched hardware ---")
+print("\n--- C. protocol-only receipts across portable hosts ---")
 with tempfile.TemporaryDirectory(prefix="paper1-execution-") as temporary:
     receipt_root = Path(temporary)
     lab_a = enforce_execution_block(
@@ -282,11 +299,11 @@ with tempfile.TemporaryDirectory(prefix="paper1-execution-") as temporary:
     receipt_path = Path(lab_a["receipt_path"])
     receipt_value = json.loads(receipt_path.read_text(encoding="ascii"))
     check(
-        "F40-S publishes one regular canonical v2 receipt",
+        "F40-S publishes one regular canonical v3 receipt",
         receipt_path.is_file()
         and not receipt_path.is_symlink()
         and stat.S_ISREG(os.lstat(receipt_path).st_mode)
-        and receipt_value["schema"] == "ttbi-execution-block-receipt-v2"
+        and receipt_value["schema"] == "ttbi-execution-block-receipt-v3"
         and receipt_value["execution_block"] == "f40s"
         and receipt_value["anchor_stage"] == "F40-S"
         and receipt_path.read_bytes()
@@ -310,15 +327,15 @@ with tempfile.TemporaryDirectory(prefix="paper1-execution-") as temporary:
         descriptor=lab_b_environment,
     )
     check(
-        "matched lab host/UUID may differ without moving the F40-S block",
+        "same block/run tag accepts different GPU and numeric stack",
         lab_b["receipt_sha256"] == lab_a["receipt_sha256"]
         and lab_b["runtime"]["execution_environment_sha256"]
         != lab_a["runtime"]["execution_environment_sha256"]
         and lab_b["runtime"]["execution_compatibility_sha256"]
-        == lab_a["runtime"]["execution_compatibility_sha256"],
+        != lab_a["runtime"]["execution_compatibility_sha256"],
     )
     check(
-        "reference validation accepts exact receipt plus matched compatibility",
+        "reference validation accepts shared receipt across portable hosts",
         validate_block_reference_execution(
             selection_runtime=lab_a["runtime"],
             selection_environment_sha256=lab_a["runtime"][
@@ -328,19 +345,7 @@ with tempfile.TemporaryDirectory(prefix="paper1-execution-") as temporary:
             current_attestation=lab_b,
             current_stage="F40-S",
             policy=policy,
-        ) == "same_block_compatible_hardware_exact_stack",
-    )
-    rejects(
-        "same block rejects a different GPU model",
-        lambda: enforce_execution_block(
-            stage="F40-S",
-            policy=policy,
-            protocol_core_hash=CORE_SHA,
-            run_tag=RUN_TAG,
-            receipt_dir=receipt_root,
-            descriptor=fixture_environment(gpu_name="NVIDIA GeForce RTX 2060"),
-        ),
-        "receipt mismatch",
+        ) == "same_block_portable_host_capability_qualified",
     )
     rejects(
         "reference receipt substitution is rejected",
@@ -354,7 +359,30 @@ with tempfile.TemporaryDirectory(prefix="paper1-execution-") as temporary:
             current_stage="F40-S",
             policy=policy,
         ),
-        "compatibility differs",
+        "different logical",
+    )
+
+    other_run = enforce_execution_block(
+        stage="F40-S",
+        policy=policy,
+        protocol_core_hash=CORE_SHA,
+        run_tag=f"{RUN_TAG}-other",
+        receipt_dir=receipt_root,
+        descriptor=lab_b_environment,
+    )
+    rejects(
+        "same block with a different run tag cannot reuse the reference",
+        lambda: validate_block_reference_execution(
+            selection_runtime=lab_a["runtime"],
+            selection_environment_sha256=lab_a["runtime"][
+                "execution_environment_sha256"
+            ],
+            selection_receipt_sha256=lab_a["receipt_sha256"],
+            current_attestation=other_run,
+            current_stage="F40-S",
+            policy=policy,
+        ),
+        "different logical",
     )
 
     l99 = enforce_execution_block(
@@ -370,7 +398,7 @@ with tempfile.TemporaryDirectory(prefix="paper1-execution-") as temporary:
         ),
     )
     check(
-        "L99-S has an independent receipt and may use another hardware block",
+        "L99-S has an independent block/stage receipt",
         l99["runtime"]["execution_block"] == "l99s"
         and l99["receipt_sha256"] != lab_a["receipt_sha256"],
     )

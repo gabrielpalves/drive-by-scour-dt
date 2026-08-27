@@ -202,7 +202,13 @@ def verify(text: dict[str, str]) -> int:
     checks.require(
         '"channel_schema_id": generation["channel_schema_id"]' in protocol
         and '"expected_channel_schema_id": _EXPECTED_CHANNEL_SCHEMA_ID' in protocol
-        and '"protocol_version": 7' in protocol,
+        # Tripwire: bumping the protocol version must force a re-read of the
+        # two channel-semantics conjuncts above. v8 (2026-08-26) carries the
+        # capability-based environment lock, execution-block policy v3, and the
+        # exclusion of the wheelset proxies from learning; physical8_v1 remains
+        # the on-disk response inventory. check_protocol_hash.py pins the same
+        # number independently.
+        and '"protocol_version": 8' in protocol,
         "protocol descriptor/provenance does not expose physical8_v1",
     )
     for token in (
