@@ -68,8 +68,17 @@ if ($PreExistingStates.Count -gt 0) {
 }
 $LogOut = Join-Path $BundleRoot "a00_run.log"
 $LogErr = Join-Path $BundleRoot "a00_run.err.log"
-$Proc = Start-Process -FilePath $MatlabExe `
-    -ArgumentList @("-batch", "cd('$ScourDir'); A00_Run") `
+# matlab.exe is only a launcher: started directly it returns immediately (exit 0,
+# empty log) while the real MATLAB runs detached. Going through a PowerShell
+# child makes the call operator hold the output pipe until MATLAB itself exits,
+# and gives us one PID whose process tree can be killed if the parity gate fails.
+$Launcher = Join-Path $BundleRoot "a00_run_launcher.ps1"
+Set-Content -Path $Launcher -Encoding ascii -Value @(
+    "& '$MatlabExe' -batch 'cd(''$ScourDir''); A00_Run'",
+    'exit $LASTEXITCODE'
+)
+$Proc = Start-Process -FilePath "powershell.exe" `
+    -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $Launcher) `
     -WorkingDirectory $ScourDir `
     -RedirectStandardOutput $LogOut -RedirectStandardError $LogErr `
     -PassThru -NoNewWindow
@@ -87,6 +96,8 @@ function Find-FirstState {
 }
 
 $FirstState = $null
+$Started = Get-Date
+$Polls = 0
 while ($true) {
     $FirstState = Find-FirstState
     if ($FirstState) { break }
@@ -95,6 +106,16 @@ while ($true) {
         # short stage can finish entirely inside one poll interval.
         $FirstState = Find-FirstState
         break
+    }
+    $Polls++
+    # The run folder and case_info appear within minutes but the first state is
+    # a full 50-passage solve, so report progress instead of going silent.
+    if ($Polls % 30 -eq 0) {
+        $RunFolder = Get-ChildItem -Path $ResultsDir -Directory -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime | Select-Object -Last 1
+        $Where = if ($RunFolder) { $RunFolder.Name } else { "run folder not created yet" }
+        Write-Host ("  still generating state 1 after {0:N0} min ({1})" -f `
+            ((Get-Date) - $Started).TotalMinutes, $Where)
     }
     Start-Sleep -Seconds 10
 }
