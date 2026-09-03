@@ -45,6 +45,28 @@ function Invoke-MatlabBatch {
     }
 }
 
+Write-Host "== Prerequisite check ==" -ForegroundColor Cyan
+# check_raw_parity.py imports core.dataset, which pulls in numpy, scipy, torch,
+# scikit-learn and joblib. Probe that here, in seconds: discovering it at the
+# parity gate would waste the smokes plus a full first-state solve, and the
+# failure surfaces as an obscure numpy error rather than a missing package.
+Push-Location $BundleRoot
+$SavedPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    $Probe = & $PythonExe -c "import core.dataset" 2>&1
+    $ProbeCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $SavedPreference
+    Pop-Location
+}
+if ($ProbeCode -ne 0) {
+    Write-Host ($Probe | Out-String)
+    throw "'$PythonExe' cannot import core.dataset, which check_raw_parity.py needs. Install requirements-portable.txt into that interpreter (or pass -PythonExe) before generating."
+}
+Write-Host "Python parity-check dependencies OK." -ForegroundColor Green
+
 Write-Host "== Capability/physics smokes ==" -ForegroundColor Cyan
 $Smokes = @(
     'smoke_audit', 'smoke_geometry', 'smoke_stage3',
