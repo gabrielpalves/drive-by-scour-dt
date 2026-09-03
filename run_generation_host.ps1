@@ -57,6 +57,15 @@ foreach ($smoke in $Smokes) {
 Write-Host "All smokes passed." -ForegroundColor Green
 
 Write-Host "== A00_Run (production generation) ==" -ForegroundColor Cyan
+# A leftover Results/ from an earlier attempt must never be mistaken for this
+# run's first state: the parity gate would then check stale data.
+$PreExistingStates = @(
+    Get-ChildItem -Path $ResultsDir -Filter "0001.mat" -Recurse `
+        -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+)
+if ($PreExistingStates.Count -gt 0) {
+    Write-Warning "$($PreExistingStates.Count) pre-existing 0001.mat under $ResultsDir; only a newly written state will be gated."
+}
 $LogOut = Join-Path $BundleRoot "a00_run.log"
 $LogErr = Join-Path $BundleRoot "a00_run.err.log"
 $Proc = Start-Process -FilePath $MatlabExe `
@@ -64,17 +73,35 @@ $Proc = Start-Process -FilePath $MatlabExe `
     -WorkingDirectory $ScourDir `
     -RedirectStandardOutput $LogOut -RedirectStandardError $LogErr `
     -PassThru -NoNewWindow
+# Touching .Handle once makes Windows PowerShell keep the process handle, without
+# which $Proc.ExitCode stays $null after the process ends.
+$null = $Proc.Handle
 Write-Host "A00_Run started (PID $($Proc.Id)); log: $LogOut"
 Write-Host "Waiting for the first state (0001.mat)..."
 
+function Find-FirstState {
+    return Get-ChildItem -Path $ResultsDir -Filter "0001.mat" -Recurse `
+        -ErrorAction SilentlyContinue |
+        Where-Object { $PreExistingStates -notcontains $_.FullName } |
+        Select-Object -First 1
+}
+
 $FirstState = $null
-while (-not $Proc.HasExited) {
-    $FirstState = Get-ChildItem -Path $ResultsDir -Filter "0001.mat" -Recurse `
-        -ErrorAction SilentlyContinue | Select-Object -First 1
+while ($true) {
+    $FirstState = Find-FirstState
     if ($FirstState) { break }
+    if ($Proc.HasExited) {
+        # The state may have landed between the last poll and the exit, and a
+        # short stage can finish entirely inside one poll interval.
+        $FirstState = Find-FirstState
+        break
+    }
     Start-Sleep -Seconds 10
 }
 if (-not $FirstState) {
+    # WaitForExit() first: ExitCode is not materialised on a -PassThru object
+    # until the handle has been waited on.
+    $Proc.WaitForExit()
     Write-Host "---- last 60 lines of $LogOut / $LogErr ----"
     Get-Content $LogOut, $LogErr -ErrorAction SilentlyContinue -Tail 60
     throw "A00_Run exited (code $($Proc.ExitCode)) before producing 0001.mat."

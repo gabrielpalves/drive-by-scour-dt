@@ -63,16 +63,30 @@ try {
         throw "capacity_preflight_compute.py failed (exit $LASTEXITCODE)."
     }
 
+    Write-Host "== Manifest authentication ==" -ForegroundColor Cyan
+    & $PythonExe -B comprehensive_ablation_multidamage.py --validate-manifest
+    if ($LASTEXITCODE -ne 0) {
+        throw "--validate-manifest failed (exit $LASTEXITCODE)."
+    }
+
     Write-Host "== Assigned jobs on this host ==" -ForegroundColor Cyan
-    $Jobs = & $PythonExe -B comprehensive_ablation_multidamage.py --list-jobs
+    $Listed = & $PythonExe -B comprehensive_ablation_multidamage.py --list-jobs
     if ($LASTEXITCODE -ne 0) {
         throw "--list-jobs failed (exit $LASTEXITCODE)."
     }
-    $Jobs = @($Jobs | Where-Object { $_ -ne "" })
+    # Only canonical job ids may be executed: anything else on stdout (a warning,
+    # a banner from an imported package) must never be dispatched as a job.
+    $Jobs = @($Listed | ForEach-Object { "$_".Trim() } |
+        Where-Object { $_ -match '^[0-9a-f]{24}$' })
     if ($Jobs.Count -eq 0) {
-        throw "No jobs listed for this host's manifest partition."
+        throw "No canonical job ids listed for this host's manifest partition."
     }
-    Write-Host "$($Jobs.Count) jobs assigned to this host."
+    $Expected = (Get-Content $env:TTBI_TRAINING_JOB_MANIFEST -Raw |
+        ConvertFrom-Json).assigned_job_count
+    if ($Jobs.Count -ne $Expected) {
+        throw "Listed $($Jobs.Count) canonical job ids but the manifest assigns $Expected -- refusing to run a partial partition."
+    }
+    Write-Host "$($Jobs.Count) jobs assigned to this host (matches the manifest)."
 
     $i = 0
     foreach ($job in $Jobs) {
