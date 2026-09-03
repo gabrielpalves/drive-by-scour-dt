@@ -26,7 +26,8 @@
 param(
     [string]$BundleRoot = $PSScriptRoot,
     [string]$MatlabExe = "matlab",
-    [string]$PythonExe = "python"
+    [string]$PythonExe = "python",
+    [switch]$SkipSmokes
 )
 
 $ErrorActionPreference = "Stop"
@@ -67,16 +68,21 @@ if ($ProbeCode -ne 0) {
 }
 Write-Host "Python parity-check dependencies OK." -ForegroundColor Green
 
-Write-Host "== Capability/physics smokes ==" -ForegroundColor Cyan
-$Smokes = @(
-    'smoke_audit', 'smoke_geometry', 'smoke_stage3',
-    'smoke_familytable', 'smoke_b54_overlap_parity', 'smoke_generation_worker'
-)
-foreach ($smoke in $Smokes) {
-    Write-Host "-- $smoke"
-    Invoke-MatlabBatch "cd('$ScourDir'); $smoke"
+if ($SkipSmokes) {
+    Write-Warning "Skipping the physics/capability smokes at your request; nothing else verifies that the generated physics is right before the run."
 }
-Write-Host "All smokes passed." -ForegroundColor Green
+else {
+    Write-Host "== Capability/physics smokes ==" -ForegroundColor Cyan
+    $Smokes = @(
+        'smoke_audit', 'smoke_geometry', 'smoke_stage3',
+        'smoke_familytable', 'smoke_b54_overlap_parity', 'smoke_generation_worker'
+    )
+    foreach ($smoke in $Smokes) {
+        Write-Host "-- $smoke"
+        Invoke-MatlabBatch "cd('$ScourDir'); $smoke"
+    }
+    Write-Host "All smokes passed." -ForegroundColor Green
+}
 
 Write-Host "== A00_Run (production generation) ==" -ForegroundColor Cyan
 # A leftover Results/ from an earlier attempt must never be mistaken for this

@@ -170,6 +170,7 @@ qualification_receipt_inventory.py
 qualification_receipt_schema.py
 requirements-campaign-py313-cu128.txt
 requirements-portable.txt
+run_campaign.ps1
 run_generation_host.ps1
 run_training_host.ps1
 scour_MATLAB/+ttbi/apply_track_model_form_arm.m
