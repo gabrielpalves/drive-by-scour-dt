@@ -81,12 +81,26 @@ try {
     if ($Jobs.Count -eq 0) {
         throw "No canonical job ids listed for this host's manifest partition."
     }
-    $Expected = (Get-Content $env:TTBI_TRAINING_JOB_MANIFEST -Raw |
-        ConvertFrom-Json).assigned_job_count
+    $Manifest = Get-Content $env:TTBI_TRAINING_JOB_MANIFEST -Raw | ConvertFrom-Json
+    $Expected = $Manifest.assigned_job_count
     if ($Jobs.Count -ne $Expected) {
         throw "Listed $($Jobs.Count) canonical job ids but the manifest assigns $Expected -- refusing to run a partial partition."
     }
     Write-Host "$($Jobs.Count) jobs assigned to this host (matches the manifest)."
+
+    # This partition spans several stages, and the datasets usually arrive from
+    # another machine. Check they are all here before starting hundreds of jobs.
+    $Stages = @($Manifest.jobs | ForEach-Object { $_.stage } | Sort-Object -Unique)
+    $Missing = @()
+    foreach ($stage in $Stages) {
+        $hit = Get-ChildItem -Path $DataRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "${stage}_*" }
+        if (-not $hit) { $Missing += $stage }
+    }
+    if ($Missing.Count -gt 0) {
+        throw "No dataset under '$DataRoot' for stage(s): $($Missing -join ', '). This host's partition needs all of: $($Stages -join ', '). Copy the missing datasets in before starting."
+    }
+    Write-Host "Datasets present for all $($Stages.Count) stage(s): $($Stages -join ', ')." -ForegroundColor Green
 
     $i = 0
     foreach ($job in $Jobs) {
