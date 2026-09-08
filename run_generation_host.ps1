@@ -40,9 +40,20 @@ $ResultsDir = Join-Path $ScourDir "Results"
 
 function Invoke-MatlabBatch {
     param([string]$Command)
-    & $MatlabExe -batch $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "MATLAB command failed (exit $LASTEXITCODE): $Command"
+    # MATLAB's JVM fixes user.dir when the process starts and, on R2023b and
+    # older, does NOT follow a later cd(). Relative paths inside the generator
+    # then resolve against whatever directory MATLAB was launched from, so the
+    # process itself must start in scour_MATLAB -- the cd() below is not enough.
+    Push-Location $ScourDir
+    try {
+        & $MatlabExe -batch $Command
+        $code = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+    if ($code -ne 0) {
+        throw "MATLAB command failed (exit $code): $Command"
     }
 }
 
