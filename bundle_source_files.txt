@@ -170,9 +170,8 @@ qualification_receipt_inventory.py
 qualification_receipt_schema.py
 requirements-campaign-py313-cu128.txt
 requirements-portable.txt
-run_campaign.ps1
-run_generation_host.ps1
-run_training_host.ps1
+run_ablation.py
+run_f25.py
 scour_MATLAB/+ttbi/apply_track_model_form_arm.m
 scour_MATLAB/+ttbi/assert_dataset_consumer_rejected.m
 scour_MATLAB/+ttbi/assert_generation_output_directory.m
