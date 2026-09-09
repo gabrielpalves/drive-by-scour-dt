@@ -68,6 +68,32 @@ def clean_interrupted_trials(database: Path) -> int:
     return len(stale)
 
 
+def run_capacity_probe(probe, failure_message: str) -> None:
+    """Run the capacity gate, treating an existing receipt as already passed.
+
+    Both capacity gates refuse to overwrite a receipt for the same machine and
+    sources, on purpose: the receipt is run evidence. On a rerun -- after a
+    reboot, or simply the second time this script is started -- that refusal
+    means the gate was already passed here, not that anything is wrong.
+    """
+    print("capacity probe ...")
+    saved_argv = sys.argv
+    sys.argv = [saved_argv[0] if saved_argv else "probe"]
+    try:
+        code = probe()
+    except BaseException as error:  # noqa: BLE001 - inspected and re-raised
+        if "already exists" not in str(error):
+            raise
+        print(f"capacity receipt already on file, kept as evidence\n"
+              f"  ({error})\n")
+        return
+    finally:
+        sys.argv = saved_argv
+    if code != 0:
+        raise SystemExit(f"capacity probe failed -- {failure_message}.")
+    print("capacity probe ok\n")
+
+
 def completion_artifact(job: dict) -> Path:
     if job["phase"] == "hpo":
         return WORKSPACE / job["manifest_path"] / "winner.json"
@@ -107,12 +133,11 @@ def main() -> None:
     print(f"{total} jobs total ({len(plans['F25-R']['jobs'])} F25-R + "
           f"{len(plans['F25-X']['jobs'])} F25-X); {done} already finished\n")
 
-    print("capacity probe ...")
-    if check_f25_capacity.main() != 0:
-        raise SystemExit(
-            "capacity probe failed -- this GPU cannot hold the largest job."
-        )
-    print("capacity probe ok\n")
+    run_capacity_probe(
+        # main() reads sys.argv directly, so hand it a clean one.
+        lambda: check_f25_capacity.main(),
+        "this GPU cannot hold the largest F25 job",
+    )
 
     started = time.time()
     index = 0

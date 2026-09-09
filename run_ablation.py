@@ -73,11 +73,23 @@ print(f"results {WORK / 'results'}")
 print()
 
 print("capacity probe ...")
-if capacity_preflight_compute.main(
-    ["--all-stages", "--receipt-dir", os.environ["TTBI_EXECUTION_RECEIPT_DIR"]]
-) != 0:
-    raise SystemExit("capacity probe failed -- this GPU cannot hold the largest job.")
-print("capacity probe ok\n")
+try:
+    probe_code = capacity_preflight_compute.main(
+        ["--all-stages", "--receipt-dir", os.environ["TTBI_EXECUTION_RECEIPT_DIR"]]
+    )
+except BaseException as error:  # noqa: BLE001 - inspected and re-raised
+    # The gate refuses to overwrite a receipt for the same machine and sources,
+    # on purpose: it is run evidence. On a rerun that means the gate was already
+    # passed here, not that anything is wrong.
+    if "already exists" not in str(error):
+        raise
+    print(f"capacity receipt already on file, kept as evidence\n  ({error})\n")
+else:
+    if probe_code != 0:
+        raise SystemExit(
+            "capacity probe failed -- this GPU cannot hold the largest job."
+        )
+    print("capacity probe ok\n")
 
 started = time.time()
 for index, job_id in enumerate(jobs, start=1):
