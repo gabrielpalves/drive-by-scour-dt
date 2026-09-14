@@ -11,8 +11,8 @@ if ttbi.path_entry_exists(alias_path)
         'Directory-alias path already exists: %s', alias_path);
 end
 
-alias_nio = javaObject('java.io.File', alias_path).toPath();
-target_nio = javaObject('java.io.File', target_path).toPath().toAbsolutePath();
+alias_nio = ttbi.java_file(alias_path).toPath();
+target_nio = ttbi.java_file(target_path).toPath().toAbsolutePath();
 attributes = javaArray('java.nio.file.attribute.FileAttribute', 0);
 try
     javaMethod('createSymbolicLink', 'java.nio.file.Files', ...

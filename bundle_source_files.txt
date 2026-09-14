@@ -226,6 +226,7 @@ scour_MATLAB/+ttbi/hardlink_count.m
 scour_MATLAB/+ttbi/hash_reviewed_source_entries.m
 scour_MATLAB/+ttbi/inspect_numbered_state_inventory.m
 scour_MATLAB/+ttbi/java_boolean_value.m
+scour_MATLAB/+ttbi/java_file.m
 scour_MATLAB/+ttbi/list_matlab_executable_files.m
 scour_MATLAB/+ttbi/load_generation_bundle_manifest.m
 scour_MATLAB/+ttbi/named_stream_seed_ids.m

@@ -12,7 +12,7 @@ if ~ttbi.regular_nonsymlink_file(path)
          'symlink, junction, or hard-link aliases: %s'], path);
 end
 
-file = javaObject('java.io.File', path);
+file = ttbi.java_file(path);
 options = ttbi.nofollow_link_options();
 try
     file_identity = ttbi.filesystem_identity(path);

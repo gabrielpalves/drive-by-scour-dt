@@ -26,7 +26,7 @@ if ~isfile(executable)
         'Windows file-ID query tool is missing: %s', executable);
 end
 
-file = javaObject('java.io.File', path);
+file = ttbi.java_file(path);
 absolute_nio = file.toPath().toAbsolutePath().normalize();
 try
     store = javaMethod( ...

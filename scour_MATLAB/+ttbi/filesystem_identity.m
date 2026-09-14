@@ -13,7 +13,7 @@ if ~(ischar(path) && isrow(path) && ~isempty(path) && ...
         'Filesystem identity requires one existing character-row path.');
 end
 
-file = javaObject('java.io.File', path);
+file = ttbi.java_file(path);
 options = ttbi.nofollow_link_options();
 java_diagnostic = 'Java NIO returned no fileKey';
 try

@@ -11,7 +11,7 @@ tf = ischar(path) && isrow(path) && isfile(path);
 if ~tf
     return
 end
-file = javaObject('java.io.File', path);
+file = ttbi.java_file(path);
 absolute = char(file.getAbsolutePath());
 canonical = char(file.getCanonicalPath());
 absolute = strrep(absolute, '\', '/');

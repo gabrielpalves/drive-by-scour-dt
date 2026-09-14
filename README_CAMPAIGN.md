@@ -150,8 +150,10 @@ scientific manifests, and resume identity checks remain fail-closed.
 After local qualification:
 
 1. For a generation bundle, A00 must use its own directory as MATLAB's current
-   working directory; it rejects every other directory. In MATLAB, replace the
-   placeholder and run exactly:
+   working directory; it rejects every other directory. MATLAB itself may be
+   launched from any folder (Start menu, VS Code, or `-batch`): the generator
+   resolves every path against the current folder, never against the folder
+   MATLAB was started in. In MATLAB, replace the placeholder and run exactly:
 
    ```matlab
    cd('<ABSOLUTE_EXTRACTED_BUNDLE>\scour_MATLAB')

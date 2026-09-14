@@ -40,10 +40,12 @@ $ResultsDir = Join-Path $ScourDir "Results"
 
 function Invoke-MatlabBatch {
     param([string]$Command)
-    # MATLAB's JVM fixes user.dir when the process starts and, on R2023b and
-    # older, does NOT follow a later cd(). Relative paths inside the generator
-    # then resolve against whatever directory MATLAB was launched from, so the
-    # process itself must start in scour_MATLAB -- the cd() below is not enough.
+    # MATLAB's JVM pins user.dir when it starts (every release, R2025b
+    # included) and never follows a later cd(). The generator no longer
+    # depends on that: ttbi.java_file resolves every relative path against
+    # MATLAB's pwd before it reaches Java. Starting the process inside
+    # scour_MATLAB is kept only so any residual JVM-relative query would still
+    # agree with pwd.
     Push-Location $ScourDir
     try {
         & $MatlabExe -batch $Command

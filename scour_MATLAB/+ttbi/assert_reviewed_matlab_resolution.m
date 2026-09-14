@@ -22,10 +22,10 @@ for entry_index = 1:numel(matlab_entries)
     end
     native_parts = strsplit(relative_name, '/');
     expected = fullfile(repository_root, native_parts{:});
-    resolved_nio = javaObject( ...
-        'java.io.File', resolved).toPath().toAbsolutePath().normalize();
-    expected_nio = javaObject( ...
-        'java.io.File', expected).toPath().toAbsolutePath().normalize();
+    resolved_nio = ttbi.java_file(resolved).toPath();
+    resolved_nio = resolved_nio.toAbsolutePath().normalize();
+    expected_nio = ttbi.java_file(expected).toPath();
+    expected_nio = expected_nio.toAbsolutePath().normalize();
     resolved_absolute = ttbi.comparison_path(char(resolved_nio.toString()));
     expected_absolute = ttbi.comparison_path(char(expected_nio.toString()));
     if ~strcmp(resolved_absolute, expected_absolute) || ...

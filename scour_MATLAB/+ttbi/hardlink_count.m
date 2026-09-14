@@ -13,7 +13,7 @@ end
 if ispc
     count = ttbi.windows_hardlink_count(path);
 elseif isunix
-    file = javaObject('java.io.File', path);
+    file = ttbi.java_file(path);
     options = ttbi.nofollow_link_options();
     try
         value = javaMethod('getAttribute', 'java.nio.file.Files', ...

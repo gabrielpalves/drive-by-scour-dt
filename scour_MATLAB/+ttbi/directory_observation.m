@@ -13,9 +13,9 @@ if ~(ischar(path) && isrow(path) && ~isempty(path))
         char(string(path)));
 end
 
-file = javaObject('java.io.File', path);
+file = ttbi.java_file(path);
 absolute_nio = file.toPath().toAbsolutePath().normalize();
-cursor = javaObject('java.io.File', char(absolute_nio.toString()));
+cursor = ttbi.java_file(char(absolute_nio.toString()));
 while ~isempty(cursor)
     if ttbi.path_component_is_link_alias(char(cursor.getPath()))
         error('ttbi:DirectoryObservationLinked', ...
@@ -52,8 +52,7 @@ try
         char(confirmed_nio.toString()));
     confirmed_canonical = ttbi.comparison_path( ...
         char(file.getCanonicalPath()));
-    confirmed_cursor = javaObject( ...
-        'java.io.File', char(confirmed_nio.toString()));
+    confirmed_cursor = ttbi.java_file(char(confirmed_nio.toString()));
     while ~isempty(confirmed_cursor)
         if ttbi.path_component_is_link_alias( ...
                 char(confirmed_cursor.getPath()))

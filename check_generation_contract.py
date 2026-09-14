@@ -687,6 +687,7 @@ def _validate_helpers(a00: str, source_root: str) -> None:
         "scour_MATLAB/+ttbi/generation_publication_credential_names.m",
         "scour_MATLAB/+ttbi/hash_reviewed_source_entries.m",
         "scour_MATLAB/+ttbi/java_boolean_value.m",
+        "scour_MATLAB/+ttbi/java_file.m",
         "scour_MATLAB/+ttbi/list_matlab_executable_files.m",
         "scour_MATLAB/+ttbi/publish_generation_completion.m",
         "scour_MATLAB/+ttbi/require_generation_worker_attestation.m",
@@ -945,8 +946,8 @@ def _validate_helpers(a00: str, source_root: str) -> None:
     for token in (
         "resolved = which(symbol);",
         "if isempty(resolved)",
-        "resolved_nio = javaObject( ...",
-        "expected_nio = javaObject( ...",
+        "resolved_nio = ttbi.java_file(resolved).toPath();",
+        "expected_nio = ttbi.java_file(expected).toPath();",
         "resolved_absolute = ttbi.comparison_path(char(resolved_nio.toString()));",
         "expected_absolute = ttbi.comparison_path(char(expected_nio.toString()));",
         "~ttbi.regular_nonsymlink_file(resolved)",
@@ -981,6 +982,116 @@ def _validate_helpers(a00: str, source_root: str) -> None:
         "'file_key', file_identity",
     ):
         _once(directory_observer, token, f"source-directory identity {token}")
+
+    # Every Java path query must resolve a relative spelling against MATLAB's
+    # pwd.  The JVM pins user.dir when it starts and never follows cd(), so a
+    # java.io.File built directly from a relative path names an entry below
+    # the folder MATLAB was LAUNCHED from: on a lab PC that opened MATLAB from
+    # the Start menu, ttbi.directory_observation('Results') looked for
+    # Documents\MATLAB\Results and A00 aborted at its first output write.
+    java_file = ttbi_block(a00, "java_file")
+    for token in (
+        "function file = java_file(path)",
+        "file = javaObject('java.io.File', path);",
+        "if file.isAbsolute()",
+        r"if ~isempty(regexp(path, '^([A-Za-z]:|[\\/])', 'once'))",
+        "error('ttbi:JavaFileAmbiguousPath', ...",
+        "file = javaObject('java.io.File', fullfile(pwd, path));",
+    ):
+        _once(java_file, token, f"pwd-resolved Java file {token}")
+    if not (
+        java_file.index("if file.isAbsolute()")
+        < java_file.index("error('ttbi:JavaFileAmbiguousPath', ...")
+        < java_file.index(
+            "file = javaObject('java.io.File', fullfile(pwd, path));"
+        )
+    ):
+        raise ContractError(
+            "pwd-resolved Java file does not refuse ambiguous spellings before "
+            "resolving against pwd"
+        )
+    lexical_absolute_probe = "javaObject('java.io.File', run_folder).isAbsolute()"
+    for block in a00.split(TTBI_MARK)[1:]:
+        owner, _, body = block.partition("\n")
+        if "java.io.File(" in body:
+            raise ContractError(
+                f"ttbi.{owner} constructs java.io.File directly instead of "
+                "through ttbi.java_file"
+            )
+        literal_count = body.count("'java.io.File'")
+        if owner == "java_file":
+            expected = 2
+        elif owner == "ensure_generation_output_directory":
+            # A purely lexical absolute-path test; it never touches the
+            # filesystem, so the JVM working directory cannot affect it.
+            expected = 1
+            if body.count(lexical_absolute_probe) != 1:
+                raise ContractError(
+                    "generation output creation lost its lexical "
+                    "absolute-path refusal"
+                )
+        else:
+            expected = 0
+        if literal_count != expected:
+            raise ContractError(
+                f"ttbi.{owner} names java.io.File {literal_count} time(s); "
+                f"expected {expected} (route Java path queries through "
+                "ttbi.java_file)"
+            )
+    for owner, token in (
+        ("directory_observation", "file = ttbi.java_file(path);"),
+        ("directory_observation",
+         "cursor = ttbi.java_file(char(absolute_nio.toString()));"),
+        ("directory_observation",
+         "confirmed_cursor = ttbi.java_file(char(confirmed_nio.toString()));"),
+        ("filesystem_identity", "file = ttbi.java_file(path);"),
+        ("windows_file_identity", "file = ttbi.java_file(path);"),
+        ("file_observation", "file = ttbi.java_file(path);"),
+        ("regular_nonsymlink_file", "file = ttbi.java_file(path);"),
+        ("delete_file_entry_if_present", "file = ttbi.java_file(path);"),
+        ("hardlink_count", "file = ttbi.java_file(path);"),
+        ("windows_hardlink_count",
+         "char(ttbi.java_file(path).getAbsolutePath())}, 10);"),
+        ("path_entry_exists", "file_obj = ttbi.java_file(path);"),
+        ("path_component_is_link_alias",
+         "nio_path = ttbi.java_file(path).toPath();"),
+        ("canonical_execution_path", "file_ = ttbi.java_file(char(raw_path));"),
+        ("assert_no_shadow_matlab_sources",
+         "root_prefix = [strrep(char(ttbi.java_file( ..."),
+        ("assert_no_shadow_matlab_sources",
+         "absolute_posix = strrep(char(ttbi.java_file( ..."),
+        ("assert_reviewed_matlab_resolution",
+         "resolved_nio = ttbi.java_file(resolved).toPath();"),
+        ("assert_reviewed_matlab_resolution",
+         "expected_nio = ttbi.java_file(expected).toPath();"),
+        ("create_directory_alias",
+         "alias_nio = ttbi.java_file(alias_path).toPath();"),
+        ("create_directory_alias",
+         "target_nio = ttbi.java_file(target_path).toPath().toAbsolutePath();"),
+        ("create_hardlink", "alias_nio = ttbi.java_file(alias_path).toPath();"),
+        ("create_hardlink", "target_nio = ttbi.java_file(target_path).toPath();"),
+        ("create_windows_junction",
+         "alias_path = char(ttbi.java_file(alias_path).getPath());"),
+        ("create_windows_junction",
+         "target_path = char(ttbi.java_file(target_path).getPath());"),
+    ):
+        _once(
+            ttbi_block(a00, owner),
+            token,
+            f"pwd-resolved Java path in ttbi.{owner}: {token}",
+        )
+    junction_creator = ttbi_block(a00, "create_windows_junction")
+    if not (
+        junction_creator.index(
+            "target_path = char(ttbi.java_file(target_path).getPath());"
+        )
+        < junction_creator.index("unsafe_pattern = ")
+        < junction_creator.index("command = sprintf('mklink /J")
+    ):
+        raise ContractError(
+            "junction creation must resolve both paths against pwd before "
+            "screening and handing them to cmd.exe"
+        )
 
 
 def _semantic_state_uids(stage: str) -> tuple[list[str], list[str]]:
@@ -1775,7 +1886,7 @@ def validate_contract(
         "expected_working_dir_ = ttbi.canonical_execution_path(script_dir_);",
         "if ~strcmp(current_working_dir_, expected_working_dir_)",
         "error('A00:WorkingDirectory', ...",
-        "file_ = javaObject('java.io.File', char(raw_path));",
+        "file_ = ttbi.java_file(char(raw_path));",
         "normalized = char(file_.getCanonicalPath());",
         r"normalized = strrep(normalized, '\', '/');",
         "is_drive_root_ = ~isempty(regexp(normalized, '^[A-Za-z]:/$', 'once'));",
@@ -3945,6 +4056,48 @@ def main() -> None:
             "directory_observation",
             "file_identity = ttbi.filesystem_identity(path);",
             "file_identity = path; % MUTANT",
+        ))
+    add("Java path resolution reverted to the JVM working directory",
+        ma=_replace_ttbi_once(
+            a00,
+            "java_file",
+            "file = javaObject('java.io.File', fullfile(pwd, path));",
+            "file = javaObject('java.io.File', path); % MUTANT",
+        ))
+    add("Java path resolution accepted a drive-relative spelling",
+        ma=_replace_ttbi_once(
+            a00,
+            "java_file",
+            r"if ~isempty(regexp(path, '^([A-Za-z]:|[\\/])', 'once'))",
+            "if false",
+        ))
+    add("directory observation built java.io.File from the raw path",
+        ma=_replace_ttbi_once(
+            a00,
+            "directory_observation",
+            "file = ttbi.java_file(path);",
+            "file = javaObject('java.io.File', path); % MUTANT",
+        ))
+    add("path existence probe used the JVM working directory",
+        ma=_replace_ttbi_once(
+            a00,
+            "path_entry_exists",
+            "file_obj = ttbi.java_file(path);",
+            "file_obj = java.io.File(path); % MUTANT",
+        ))
+    add("credential deletion resolved against the JVM working directory",
+        ma=_replace_ttbi_once(
+            a00,
+            "delete_file_entry_if_present",
+            "file = ttbi.java_file(path);",
+            "file = javaObject('java.io.File', path); % MUTANT",
+        ))
+    add("junction creation handed cmd.exe a JVM-relative path",
+        ma=_replace_ttbi_once(
+            a00,
+            "create_windows_junction",
+            "alias_path = char(ttbi.java_file(alias_path).getPath());",
+            "% MUTANT",
         ))
     add("filesystem identity followed symbolic links",
         ma=_replace_ttbi_once(

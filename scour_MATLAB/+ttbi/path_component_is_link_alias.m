@@ -1,7 +1,7 @@
 function tf = path_component_is_link_alias(path)
 %PATH_COMPONENT_IS_LINK_ALIAS Detect symbolic/reparse-like path components.
 
-nio_path = javaObject('java.io.File', path).toPath();
+nio_path = ttbi.java_file(path).toPath();
 options = ttbi.nofollow_link_options();
 if ~javaMethod('exists', 'java.nio.file.Files', nio_path, options)
     tf = false;

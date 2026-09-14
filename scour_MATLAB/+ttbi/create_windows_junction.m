@@ -5,6 +5,10 @@ if ~ispc
     error('ttbi:WindowsJunctionPlatform', ...
         'Windows junction creation is available only on Windows.');
 end
+% The child cmd.exe inherits the JVM working directory, not MATLAB's pwd, so
+% both spellings are made absolute against pwd before they reach mklink.
+alias_path = char(ttbi.java_file(alias_path).getPath());
+target_path = char(ttbi.java_file(target_path).getPath());
 unsafe_pattern = '["&|<>^%!\r\n]';
 if ~isempty(regexp(alias_path, unsafe_pattern, 'once')) || ...
         ~isempty(regexp(target_path, unsafe_pattern, 'once'))

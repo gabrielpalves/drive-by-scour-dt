@@ -3,7 +3,7 @@ function normalized = canonical_execution_path(raw_path)
     % Resolve dot/parent components and normalize case/separators before the
     % fail-closed execution-root comparison. Do not mutate MATLAB's cwd here:
     % an implicit cd would make unreviewed path shadowing hard to diagnose.
-    file_ = javaObject('java.io.File', char(raw_path));
+    file_ = ttbi.java_file(char(raw_path));
     normalized = char(file_.getCanonicalPath());
     normalized = strrep(normalized, '\', '/');
     is_drive_root_ = ~isempty(regexp(normalized, '^[A-Za-z]:/$', 'once'));

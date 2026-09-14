@@ -4,7 +4,7 @@ function delete_file_entry_if_present(path)
 % Java NIO deletes a symlink/junction itself rather than its target. Real
 % directories are rejected, so malformed credentials cannot trigger recursion.
 
-file = javaObject('java.io.File', path);
+file = ttbi.java_file(path);
 nio_path = file.toPath();
 options = ttbi.nofollow_link_options();
 exists = javaMethod('exists', 'java.nio.file.Files', nio_path, options);

@@ -12,13 +12,13 @@ matlab_root = fullfile(repository_root, 'scour_MATLAB');
 ttbi.assert_results_not_on_matlab_path(matlab_root);
 listed = ttbi.list_matlab_executable_files(matlab_root);
 actual = cell(0, 1);
-root_prefix = [strrep(char(javaObject( ...
-    'java.io.File', matlab_root).getAbsolutePath()), '\', '/'), '/'];
+root_prefix = [strrep(char(ttbi.java_file( ...
+    matlab_root).getAbsolutePath()), '\', '/'), '/'];
 for entry_index = 1:numel(listed)
     absolute_path = listed{entry_index};
     [~, name] = fileparts(absolute_path);
-    absolute_posix = strrep(char(javaObject( ...
-        'java.io.File', absolute_path).getAbsolutePath()), '\', '/');
+    absolute_posix = strrep(char(ttbi.java_file( ...
+        absolute_path).getAbsolutePath()), '\', '/');
     comparison_path = absolute_posix;
     comparison_prefix = root_prefix;
     if ispc
