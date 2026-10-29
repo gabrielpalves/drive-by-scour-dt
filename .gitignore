@@ -294,3 +294,17 @@ multidamage_*.zip
 # Local manuscript scratch/export artefacts (unused by paper1/main.tex)
 /paper1/out.txt
 /paper1/sample.bib
+
+# Four-block regression draft LaTeX build products (split from paper1/ 2026-10-29)
+/paper_regression/*.aux
+/paper_regression/*.bbl
+/paper_regression/*.bcf
+/paper_regression/*.blg
+/paper_regression/*.fdb_latexmk
+/paper_regression/*.fls
+/paper_regression/*.log
+/paper_regression/*.out
+/paper_regression/*.pdf
+/paper_regression/*.run.xml
+/paper_regression/*.synctex.gz
+/paper_regression/*.toc

@@ -1,5 +1,11 @@
-\section{Data processing and learning methodology}
+\section{Prospective regression methods}
 \label{sec:data_processing}
+
+The methods in this section apply to the prospective F40/L99 regression
+campaign. F25 classification instead uses its separately specified
+class-stratified passage split, Min--Max scaling, PAA-583 representation,
+noise equation, search protocol, and 20-seed reporting design. Its observed
+results must be interpreted under those dedicated methods.
 
 \subsection{From generated responses to model inputs}
 \label{sec:preprocessing}
@@ -89,11 +95,13 @@ is universally beneficial outside the registered search spaces and budget.
 
 \begin{figure}[htbp]
 \centering
-\framebox[0.95\linewidth]{\rule{0pt}{4.0cm}\parbox{0.9\linewidth}{\centering
-\footnotesize Figure placeholder --- RAW/PAA processing followed by the
-$2\times2\times2$ position/LSTM/fixed-width-multi-rate neural factorial and
-multi-head regression.}}
-\caption{Processing chain and 16-cell factorial architecture grid.}
+\includegraphics[width=\textwidth]{regression_architecture.pdf}
+\caption{Processing chain and prospective 16-cell regression architecture
+grid. RAW/PAA inputs are standardized using training states only. Optional
+spatial-coordinate encoding (legacy Space2Vec) and LSTM precede global-average
+or N-HiTS-inspired adaptive pyramid pooling and the block-specific dense
+regression heads. Dashed boxes denote components that can be bypassed.
+These prospective cells are separate from the executed F25 classifier arms.}
 \label{fig:architectures}
 \end{figure}
 
@@ -127,14 +135,14 @@ incomplete terminal accounting fail the publication contract.
 \subsection{State-grouped split and sealed-test firewall}
 \label{sec:split}
 
-States, never passages, are assigned by semantic identity to a deterministic
-60/20/20 train/inner-validation/outer-test split (outer split seed 42). All 50
-passages of one state remain together. The replicated controlled cells allocate
-their five semantic replicas 3/1/1 across the three partitions; joint-state
-strata preserve registered severity and nuisance balance. The identical split
-is used wherever a semantic state is paired across blocks. The outer test stays
-sealed through factorial HPO, development adjudication, channel screening, and
-selected-pair HPO.
+Structural states are assigned by semantic identity to a deterministic split:
+60\% for training, 20\% for inner validation, and 20\% for the outer test
+(split seed 42). All 50 passages of one state remain together. Each controlled
+cell assigns its five semantic replicas 3/1/1 to these partitions. Joint-state
+strata preserve the specified severity and nuisance balance. States paired
+across blocks receive the same assignment. The outer test stays sealed during
+factorial HPO, development adjudication, channel screening, and selected-pair
+HPO.
 
 \subsection{F40-S factorial HPO and Option-C adjudication}
 \label{sec:hpo}

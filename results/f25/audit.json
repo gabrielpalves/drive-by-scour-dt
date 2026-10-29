@@ -1,0 +1,429 @@
+{
+  "archive": "f25.zip",
+  "archive_sha256": "684128d76b447b255b31ce5ba276f26f50976313abd433863036bf7df3fcacaa",
+  "checks": {
+    "best_epoch_1000": 53,
+    "best_epoch_at_least_950": 379,
+    "bundle_sources": {
+      "files": 525,
+      "source_commit": "02b45a3d7b647375d04e378176e2162c34a81887",
+      "source_root_sha256": "45ce853b8d12cc902219cb4759a2a159d5cf5082ba94a0237fde302d18820d6a"
+    },
+    "case_info_fields": [
+      "case_info"
+    ],
+    "completed_hpo_proposals": 2200,
+    "constant_class_fits": 90,
+    "driver_continuations": [
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-R/F25-R-unfrozen-source-singles/hpo/RAW__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-R/F25-R-unfrozen-source-singles/report/RAW__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-R/F25-R-unfrozen-source-singles/hpo/RAW__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-R/F25-R-unfrozen-source-singles/report/RAW__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-R/F25-R-unfrozen-source-singles/hpo/PAA__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-R/F25-R-unfrozen-source-singles/report/PAA__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-R/F25-R-unfrozen-source-singles/hpo/PAA__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-R/F25-R-unfrozen-source-singles/report/PAA__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/RAW__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/RAW__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/RAW__S02",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/RAW__S05",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/RAW__S06",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/RAW__S07",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA__S02",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA__S05",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA__S06",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA__S07",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA-MR__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA-MR__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA-MR__S02",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA-MR__S05",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA-MR__S06",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/PAA-MR__S07",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/RAW__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/RAW__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/RAW__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/RAW__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/RAW__S02",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/RAW__S02",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/RAW__S05",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/RAW__S05",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/RAW__S06",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/RAW__S06",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/RAW__S07",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/RAW__S07",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA__S02",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA__S02",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA__S05",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA__S05",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA__S06",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA__S06",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA__S07",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA__S07",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA-MR__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA-MR__S00",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA-MR__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA-MR__S01",
+        "previous_driver": "591.86"
+      },
+      {
+        "current_driver": "610.88",
+        "job_id": "F25-X/F25-X-02-unfrozen-singles/hpo/PAA-MR__S02",
+        "previous_driver": "591.86"
+      }
+    ],
+    "f25_contract_sha256": "a80b9c754f911737b1ce6d841bfb837d6ac3200c334508abd3f901f9167d48ce",
+    "fits_at_or_below_10pct": 132,
+    "identical_anchor_control_rows": [
+      "RAW__S01",
+      "PAA__S01"
+    ],
+    "partition_sha256": "96e61a6ef27c997a65d1755f3b2ed28505fac775ed12a8fa60f7cf8e8c1360cb",
+    "python_runtime_source_sha256": "32ec47ca3499807346892d4cc228ad28f71e59080985c223d60f410aa45ba60c",
+    "reported_seed_fits": 1700,
+    "retained_hpo_studies": 22,
+    "retained_report_configurations": 85,
+    "runtime_stacks": [
+      "{\"accelerator\":{\"backend\":\"cuda\",\"compute_capability\":{\"major\":7,\"minor\":5},\"driver_version\":\"591.86\",\"name\":\"NVIDIA GeForce RTX 2060\",\"sm_count\":30,\"total_memory_bytes\":6442123264},\"host_machine\":\"AMD64\",\"host_system\":\"Windows\",\"numeric_stack\":{\"cublas_workspace_config\":\":4096:8\",\"cuda_matmul_allow_tf32\":false,\"cuda_runtime_version\":\"11.8\",\"cudnn_allow_tf32\":false,\"cudnn_benchmark\":false,\"cudnn_deterministic\":true,\"cudnn_enabled\":true,\"cudnn_version\":90100,\"deterministic_algorithms\":true,\"deterministic_warn_only\":false,\"float32_matmul_precision\":\"highest\",\"torch_version\":\"2.6.0+cu118\"},\"schema\":\"ttbi-execution-compatibility-v1\"}",
+      "{\"accelerator\":{\"backend\":\"cuda\",\"compute_capability\":{\"major\":7,\"minor\":5},\"driver_version\":\"610.88\",\"name\":\"NVIDIA GeForce RTX 2060\",\"sm_count\":30,\"total_memory_bytes\":6442123264},\"host_machine\":\"AMD64\",\"host_system\":\"Windows\",\"numeric_stack\":{\"cublas_workspace_config\":\":4096:8\",\"cuda_matmul_allow_tf32\":false,\"cuda_runtime_version\":\"11.8\",\"cudnn_allow_tf32\":false,\"cudnn_benchmark\":false,\"cudnn_deterministic\":true,\"cudnn_enabled\":true,\"cudnn_version\":90100,\"deterministic_algorithms\":true,\"deterministic_warn_only\":false,\"float32_matmul_precision\":\"highest\",\"torch_version\":\"2.6.0+cu118\"},\"schema\":\"ttbi-execution-compatibility-v1\"}"
+    ],
+    "state_file_hashes_verified": 10
+  },
+  "descriptive_best_by_tier": {
+    "F25-R-unfrozen-source-singles": {
+      "arm": "PAA-CNN",
+      "bearing_present_absent_accuracy_max_pct": 100.0,
+      "bearing_present_absent_accuracy_mean_pct": 99.92,
+      "bearing_present_absent_accuracy_min_pct": 99.7,
+      "bearing_present_absent_accuracy_sd_pp": 0.10563093645728051,
+      "configuration": "PAA__S00",
+      "crack_level_accuracy_max_pct": 69.69999999999999,
+      "crack_level_accuracy_mean_pct": 61.794999999999995,
+      "crack_level_accuracy_min_pct": 51.9,
+      "crack_level_accuracy_sd_pp": 4.562948608082279,
+      "flattened_units": 8896,
+      "job_id": "F25-R/F25-R-unfrozen-source-singles/report/PAA__S00",
+      "n_seeds": 20,
+      "overall_ten_class_accuracy_max_pct": 66.60000000000001,
+      "overall_ten_class_accuracy_mean_pct": 57.33,
+      "overall_ten_class_accuracy_min_pct": 41.5,
+      "overall_ten_class_accuracy_sd_pp": 6.776748172204253,
+      "parameter_count": 662730,
+      "scour_level_accuracy_max_pct": 92.10000000000001,
+      "scour_level_accuracy_mean_pct": 84.54,
+      "scour_level_accuracy_min_pct": 66.5,
+      "scour_level_accuracy_sd_pp": 7.178945824972825,
+      "sensor_codes": "S00",
+      "sensor_names": "Carbody vertical",
+      "tier": "F25-R-unfrozen-source-singles"
+    },
+    "F25-X-01-frozen-hp-singles": {
+      "arm": "RAW-CNN",
+      "bearing_present_absent_accuracy_max_pct": 100.0,
+      "bearing_present_absent_accuracy_mean_pct": 99.95,
+      "bearing_present_absent_accuracy_min_pct": 99.8,
+      "bearing_present_absent_accuracy_sd_pp": 0.07608859102526831,
+      "configuration": "RAW__S05",
+      "crack_level_accuracy_max_pct": 79.0,
+      "crack_level_accuracy_mean_pct": 72.99,
+      "crack_level_accuracy_min_pct": 58.3,
+      "crack_level_accuracy_sd_pp": 4.910772262132133,
+      "flattened_units": 23040,
+      "job_id": "F25-X/F25-X-01-frozen-hp-singles/report/RAW__S05",
+      "n_seeds": 20,
+      "overall_ten_class_accuracy_max_pct": 79.0,
+      "overall_ten_class_accuracy_mean_pct": 72.61,
+      "overall_ten_class_accuracy_min_pct": 58.199999999999996,
+      "overall_ten_class_accuracy_sd_pp": 4.951012655587692,
+      "parameter_count": 1529530,
+      "scour_level_accuracy_max_pct": 99.9,
+      "scour_level_accuracy_mean_pct": 98.72,
+      "scour_level_accuracy_min_pct": 93.0,
+      "scour_level_accuracy_sd_pp": 1.5689755289762546,
+      "sensor_codes": "S05",
+      "sensor_names": "Carbody pitch rate",
+      "tier": "F25-X-01-frozen-hp-singles"
+    },
+    "F25-X-02-unfrozen-singles": {
+      "arm": "PAA-multirate",
+      "bearing_present_absent_accuracy_max_pct": 100.0,
+      "bearing_present_absent_accuracy_mean_pct": 99.97,
+      "bearing_present_absent_accuracy_min_pct": 99.9,
+      "bearing_present_absent_accuracy_sd_pp": 0.047016234598160046,
+      "configuration": "PAA-MR__S05",
+      "crack_level_accuracy_max_pct": 81.2,
+      "crack_level_accuracy_mean_pct": 77.755,
+      "crack_level_accuracy_min_pct": 72.5,
+      "crack_level_accuracy_sd_pp": 2.1204455837592757,
+      "flattened_units": 560,
+      "job_id": "F25-X/F25-X-02-unfrozen-singles/report/PAA-MR__S05",
+      "n_seeds": 20,
+      "overall_ten_class_accuracy_max_pct": 81.10000000000001,
+      "overall_ten_class_accuracy_mean_pct": 77.63000000000001,
+      "overall_ten_class_accuracy_min_pct": 71.7,
+      "overall_ten_class_accuracy_sd_pp": 2.237032809208146,
+      "parameter_count": 43642,
+      "scour_level_accuracy_max_pct": 98.8,
+      "scour_level_accuracy_mean_pct": 97.63000000000001,
+      "scour_level_accuracy_min_pct": 94.69999999999999,
+      "scour_level_accuracy_sd_pp": 0.9537184843382366,
+      "sensor_codes": "S05",
+      "sensor_names": "Carbody pitch rate",
+      "tier": "F25-X-02-unfrozen-singles"
+    },
+    "F25-X-03-frozen-hp-pairs": {
+      "arm": "PAA-CNN",
+      "bearing_present_absent_accuracy_max_pct": 100.0,
+      "bearing_present_absent_accuracy_mean_pct": 99.89,
+      "bearing_present_absent_accuracy_min_pct": 99.6,
+      "bearing_present_absent_accuracy_sd_pp": 0.12096106376586062,
+      "configuration": "PAA__S05-S00",
+      "crack_level_accuracy_max_pct": 89.2,
+      "crack_level_accuracy_mean_pct": 75.79499999999999,
+      "crack_level_accuracy_min_pct": 70.5,
+      "crack_level_accuracy_sd_pp": 4.58894266000809,
+      "flattened_units": 4448,
+      "job_id": "F25-X/F25-X-03-frozen-hp-pairs/report/PAA__S05-S00",
+      "n_seeds": 20,
+      "overall_ten_class_accuracy_max_pct": 89.0,
+      "overall_ten_class_accuracy_mean_pct": 75.67999999999999,
+      "overall_ten_class_accuracy_min_pct": 70.0,
+      "overall_ten_class_accuracy_sd_pp": 4.5913648928120905,
+      "parameter_count": 390378,
+      "scour_level_accuracy_max_pct": 99.9,
+      "scour_level_accuracy_mean_pct": 99.66499999999999,
+      "scour_level_accuracy_min_pct": 99.3,
+      "scour_level_accuracy_sd_pp": 0.15985190514644276,
+      "sensor_codes": "S05+S00",
+      "sensor_names": "Carbody pitch rate + Carbody vertical",
+      "tier": "F25-X-03-frozen-hp-pairs"
+    }
+  },
+  "limitations": [
+    "No checkpoints were deserialized and no model was retrained.",
+    "No per-passage predictions are retained: confusion-based metrics can be recomputed, paired passage tests cannot.",
+    "Historical repeated/aborted fits and wall-clock/GPU time are not reconstructed.",
+    "SD measures initialization variability conditional on this data, profile and split.",
+    "Channel rankings read the shared test set and are descriptive/exploratory."
+  ],
+  "scope": "internal archive consistency; not external authentication or a numerical V&V verdict"
+}

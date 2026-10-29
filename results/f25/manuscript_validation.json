@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-29",
+  "manuscript": "standalone F25 paper (paper1/); four-block regression draft preserved in paper_regression/",
+  "pdf_sha256": "7e15631bc1f921885175a3fee3b1de108435f563675a8e148dd4b8fccb329b82",
+  "pages": 28,
+  "compiler": "MiKTeX pdfLaTeX + Biber (pdflatex, biber, pdflatex x2)",
+  "undefined_references": false,
+  "overfull_boxes": 0,
+  "verification": "all numbers recomputed from f25.zip raw artifacts (1,700 confusion matrices, 22 Optuna databases, run records); independent Fable 5.1 numeric verification; published best-run values recomputed from the printed matrices of Fernandes et al. (2025) Figs. 9 and 12",
+  "author_items_pending": [
+    "acknowledgments",
+    "author contributions",
+    "funding",
+    "repository link or DOI",
+    "target journal and final title"
+  ],
+  "source_sha256": {
+    "paper1/main.tex": "0a64f7af5abbff244ae07e3ace0ea7cf5e0d59d2315b00c2eb23230a555ce190",
+    "paper1/references.bib": "4f54f15d644a4d57715406512fdecdd1f511a7f6b5c30c8b8392e6ba5187ab15",
+    "paper1/sections/abstract.tex": "d14c30cb171c6ac0210f1c468914038399395f3b08182ff7743c7ff21ceafb87",
+    "paper1/sections/conclusion.tex": "294e9dfcd3c2b8efa701ba94daae9072402d143789cf9391fa1fec8877eddf34",
+    "paper1/sections/introduction.tex": "0f8397037f410040ec26946258171e52d5b2f028bb247e924a9ef86af0d71755",
+    "paper1/sections/limitations.tex": "432ddbfb2563625fbe712948b9bb99afcd6f1a612ed72ce170bfecbe80b0660c",
+    "paper1/sections/methodology.tex": "7cc47485128dfe17820c14983cce8150ae6520b66854ee077eb45e65502ca5fd",
+    "paper1/sections/numerical_model.tex": "109d08e74741ae99165c4de1284de5df8e6812722a4c4797f4c46515fd2371a5",
+    "paper1/sections/results.tex": "a8d5e5ee7f3994ac1e42d9de88d3d9fef01ba3c7848a915906458e7410a0c6c1",
+    "paper1/tables/f25_exploratory_pairs.tex": "b0fb44983931078d2ba20e954101cc5317b3179d17d75188bcca8a2512cd33a6",
+    "paper1/tables/f25_frozen_singles.tex": "bb75afa743aa34b503cecfd9f439ac83de4ab9f7de3b1be6dcaea5b1e0cf7389",
+    "paper1/tables/f25_hyperparameters.tex": "e342b3ae5cd1acef523a89bc4c2c642c7df77ca2ef2aadbdcf9037dd2b3e3cae",
+    "paper1/tables/f25_reconstruction.tex": "dbd5651f350da30bf7b21966ea2e8637092e1406b33feb424bc109432e5910ff",
+    "paper1/tables/f25_tuned_singles.tex": "92b849d5576bf0e7d4299e4ec03f6b341a492095b5b92c7ee36c2779642f4fd0"
+  },
+  "figure_sha256": {
+    "paper1/figures/f25_architecture.pdf": "27381fb009975bd230d7930ebf020094529d7b5df1a0de5a344d4b2c47e87907",
+    "paper1/figures/f25_confusion.pdf": "782d8f9ead266998342d944e24ca9adbddbf331225fb1eef160b778f42d82a59",
+    "paper1/figures/f25_pairs.pdf": "ea0bb6b1e8b5803e93cdefd5a295d0257382d770ee5028cd9e1d3099b9feef3f",
+    "paper1/figures/f25_singles.pdf": "08b378257f9e173608182f3e66582b8ba32eafa450062eaa6e03195f998951cc",
+    "paper1/figures/ttbi_model.pdf": "3ec5b0babb50d465786ce5a6bde1c8b736588fc4ded5f2d9d9caa7a0ff0afb78"
+  }
+}

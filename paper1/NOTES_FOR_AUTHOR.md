@@ -1,5 +1,107 @@
 # Paper 1 — draft notes (Claude, 2026-07-28)
 
+> **Standalone F25 paper — 2026-10-29 (Claude; CONTROLLING, supersedes the
+> two notes below).** At the author's request the manuscript was split. This
+> folder is now a complete, submittable-format paper on the F25 study only
+> (reconstruction of Fernandes et al. 2025 + six-channel / multi-rate
+> extension), 28 pages, structured like Fernandes et al. (Introduction;
+> Numerical model and benchmark scenarios; Data processing and
+> classification; Results and discussion; Limitations and practical
+> feasibility; Conclusions). The prospective four-block regression design
+> (F40/L99) is preserved unchanged in `../paper_regression/` for the future
+> regression paper. Section files now: abstract, introduction,
+> numerical_model, methodology, results, limitations, conclusion.
+>
+> **Verification.** Every number was recomputed independently from the raw
+> `f25.zip` artifacts (1,700 confusion matrices, 22 Optuna databases, run
+> records) and cross-checked by an independent Fable 5.1 verifier. Errors
+> found in the Codex draft and fixed:
+> - Table means were rounded by binary float formatting: ten values were
+>   0.01 low (e.g. shared PAA/CP 72.285 → printed 72.28, correct 72.29), which
+>   made the text (−5.03) disagree with the table. `analyze_f25_results.py` now
+>   rounds exact ratios half-up; confusion-matrix labels likewise (39.55 → 39.6).
+> - The best-pair claim (+3.40 pp over the single channel) was an artefact of
+>   one collapsed single-channel run: both medians are 74.55%, and the pair wins
+>   in only 9/20 seed-paired runs. Pairs now reported as giving no consistent
+>   gain (RAW 11/15 and PAA-MR 11/15 pairs below their better member).
+> - The published confusion matrices are the BEST of 20 runs (source §5.1), so
+>   the like-for-like comparator is our best run; table now has a "Source, best
+>   run" column.
+> - Front-bogie PAA reconstruction had three runs at 10%, not one.
+> - Monitoring window is 0.09 m (not 0.10 m) longer than the exact 39.9 m crop
+>   after the tail sample is discarded.
+> - Source inconsistencies now disclosed in the deviation table: padding
+>   (carbody finalist implies none, front-bogie finalist implies padding), the
+>   96-unit dense finalist outside the reported 16–64 range, 1 kHz vs
+>   100 samples/m, unreported weight restoration.
+> - Driver: all 1,700 reported runs were computed under driver 610.88
+>   (run_f25.py re-runs every report on each launch); 18 optimizations ran
+>   under 591.86, one across the update, three under 610.88. Four
+>   optimizations were interrupted and resumed (not one).
+> - The published reference accuracies are EXACT, not approximate: rendering
+>   Figs. 9 and 12 of the source at 200 dpi, the printed diagonals sum to 651,
+>   867, 822 and 821 (65.1/86.7/82.2/82.1%), and DC9→DC10 = 56, DC4→Healthy =
+>   28 are printed counts. Captions now say "computed from the printed counts".
+> - Contact: the stored contact logs of all 2,000 passages are zero (no tensile
+>   force, no loss of contact), so the bilateral formulation was never engaged.
+> - New findings added: validation objective exceeds the 20-run test mean by
+>   10.5 pp on average (selection optimism); PAA-MR's advantage on CP is
+>   stability (median +1.45 pp vs tuned PAA-CNN, 12/20) and the flatten winners
+>   hit the 1,000-epoch cap (19/20, 18/20 runs ≥ epoch 950); all eight >10%
+>   confusions are crack-only scenario pairs; on informative channels only
+>   PAA-CNN collapsed (14/320); physical reading of the channel ranking
+>   (16 m bogie base vs 2.3 m wheelbase; McGeown 2024 apparent profile).
+>
+> **Still for the authors (red [Authors: …] markers in the PDF):**
+> acknowledgments, author contributions (CRediT), funding (e.g. CNPq SWE
+> 201404/2025-7), repository link/DOI, target journal and final title
+> (alternative in a main.tex comment). Line numbers are on (`\linenumbers`)
+> for review; remove before submission if the journal does not want them.
+>
+> **Cheapest decisive follow-up (optional, 40 training runs, no new
+> simulations):** retrain the two published finalist architectures (carbody: 48–48 filters,
+> kernels 2–3, no pooling, dense 48, lr 1e-3, batch 24; front bogie: 128–96–96,
+> kernel 3, pooling, dense 96, lr 5e-4, batch 32) on the existing passages for
+> 20 seeds. It would split the reconstruction gap into "optimization outcome"
+> versus "data/model differences".
+
+> **Coauthors and schematic figures — 2026-10-29.** Rafael Holdorf Lopez
+> (affiliation 1, UFSC Civil Engineering) and Michael D. Todd (affiliation 2,
+> UC San Diego Structural Engineering) were added at the author's request,
+> following Gabriel in that order. Names are printed without honorifics.
+> Institutional affiliations were checked against the official profiles:
+> https://core.ufsc.br/team/rafael-holdorf-lopez/ and
+> https://jacobsschool.ucsd.edu/people/profile/michael-todd .
+> Author contributions remain unassigned pending the authors' actual roles.
+> The TTBI model and prospective-regression architecture placeholders are
+> replaced by reproducible vector schematics, and a separate F25 architecture
+> diagram distinguishes the executed arms from the planned factorial.
+> Schematics explain geometry and operations; they are not simulated outputs
+> or additional validation evidence. Figure sources and regeneration commands
+> are documented in `figures/README.md`.
+
+> **F25 results integration — 2026-10-29 (current manuscript status).**
+> The manuscript now includes separate methods and observed results for the
+> isolated F25-R/F25-X classification campaign imported from `f25.zip`.
+> F25 is a publication-faithful reconstruction and extension, not an exact
+> replication and not completion of the four-block F40/L99 regression plan.
+> The abstract and conclusion report the 20-seed PAA-multirate carbody-pitch
+> single-channel result (77.63% mean; 2.24 percentage-point standard deviation)
+> as a descriptive, separately reoptimized configuration. Frozen pairs remain
+> exploratory. The dedicated analysis records the evidence, full tables,
+> reconstruction deviations, and artifact-accounting limits.
+>
+> Existing four-block architecture selection, selected-pair performance,
+> multi-pier localization, bearing leakage, S–M comparisons, classification
+> comparability, sensitivities, and transfer results remain pending until their
+> own authenticated artifacts are available. The prospective framework,
+> numerical-model configuration, and learning methodology are explicitly scoped
+> to those four blocks; F25 uses a distinct profile, 39.9 m geometry, 0.15 m
+> deck mesh, passage split, preprocessing, HPO semantics, and report seeds.
+> F25 passage holdout recognizes fixed classes under operational variation;
+> it does not estimate generalization to unseen structural states. Earlier
+> notes below are historical and do not change this separation.
+
 > **Sixth pass — Codex scientific continuation, 2026-08-03 (controlling).**
 > The “P1-R1 only” queue below is superseded. P1-S4 remains closed: no
 > external preregistration/Zenodo/OSF deposit is required. The numerical

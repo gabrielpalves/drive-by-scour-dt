@@ -1,44 +1,45 @@
-\section{Conclusion}
+\section{Conclusions}
 \label{sec:conclusion}
 
-This paper established a prospectively specified, source-locked framework for
-pre-deployment design of drive-by railway-bridge scour monitoring. The design
-asks which RAW/PAA processing and neural components are useful, which pair of
-modeled vehicle-response channels should be retained, how accurately one
-passage can estimate several pier-specific support-stiffness-loss targets, and
-how performance changes when nominal bearing fixity and a local
-flexural-rigidity-loss surrogate are added to the task.
+This paper reconstructed the ten-class drive-by multi-damage benchmark of
+Fernandes et al.~\cite{fernandes2025early}, training every configuration with
+20 random initializations, and extended it to six responses of the leading
+vehicle, 15 two-channel inputs, and a CNN with multi-rate pooling. The main
+conclusions are as follows:
+\begin{enumerate}
+  \item The published best-run accuracies were not recovered. With the two
+  source channels, the best of 20 runs reached at most 71.8\% for the carbody
+  and 73.8\% for the front bogie, against published values of up to 86.7\% and
+  82.2\%, and the validation score used for tuning exceeded the subsequent test
+  mean by 10.5 percentage points on average. The benefit of PAA for the carbody
+  channel and the confusion between DC9 and DC10 were reproduced qualitatively.
+  Drive-by classifiers should therefore be reported with their complete run
+  distributions, including collapsed runs, rather than with their best run.
+  \item The carbody pitch rate, which the source study did not use, was the
+  most informative response: it had the highest median accuracy in all six
+  combinations of network and tuning strategy and the highest mean in five. The
+  bogie pitch rates stayed near the chance level. Both findings are consistent
+  with the vehicle geometry: the 16~m bogie base of the carbody is comparable to
+  the 19.95~m spans, whereas the 2.3~m wheelbase of a bogie is not.
+  \item With channel-specific tuning, PAA with multi-rate pooling on the
+  carbody pitch rate reached a mean accuracy of 77.63\% with a standard
+  deviation of 2.24 percentage points, no collapsed run, and 43,642 parameters.
+  Its advantage over the flatten-based CNNs on the same channel lies mainly in
+  stability: the median gain over tuned PAA-CNN was 1.45 points, and the
+  flatten-based networks were still improving at the 1,000-epoch limit.
+  \item Bearing damage and scour level were recognized in 99.97\% and 97.63\% of
+  the test passages, whereas the crack label limited the accuracy (77.76\%):
+  all major confusions involved scenarios that differ only in the crack.
+  \item With shared hyperparameters, two-channel inputs did not systematically
+  outperform the better of their two single channels; among the best pairs,
+  the only consistent gain was obtained by the rear-bogie vertical acceleration
+  combined with the carbody pitch rate in PAA-MR (4.65 points, higher accuracy
+  in 15 of 20 paired runs).
+\end{enumerate}
 
-The framework's defining safeguards are four explicit scientific blocks
-(F40-S, F40-M, L99-S, and L99-M); semantic state grouping and authenticated
-common-random-number pairing only where the catalogues actually overlap; a
-sealed outer test; Option-C grouped-development out-of-fold adjudication; a
-prospectively fixed channel screen; independent selected-pair hyperparameter
-optimization in every block; and a disjoint, report-only post-freeze stability
-set. The earlier transport/rescue policy is not part of the experiment.
-Track-layer damage, wheel polygonization, suspension damage, and alternative
-rail-profile phases are likewise deferred rather than silently treated as
-active. One generated FRA-class-4 profile realization is shared by every state
-and passage.
-
-The physical claim boundary is equally important. The primary label is modeled
-vertical support-stiffness loss, not scour depth; bearing fixity is a nominal
-design coordinate; the crack is a local $EI$-loss surrogate; and the two
-wheelset rows in \texttt{physical8\_v1} are idealized constrained-motion
-acceleration proxies, not validated axle-box sensor observations. They remain
-diagnostic payload rows and are excluded from learning and channel selection;
-the eligible screen contains six singles and 15 pairs. Optional contemporary
-challengers enter only after that screen and use exactly the authenticated
-primary F40-S pair.
-
-\pending{Summarize only authenticated four-block outcomes: the RAW/PAA
-factorial winners, selected physical channel pair, block-local sealed-test
-performance and stability, multi-pier localization, bearing leakage, and the
-two registered S--M paired comparisons.}
-
-Within those boundaries, the study is designed to provide auditable answers
-conditional on the simulated distribution. Field validation remains the
-essential next step: the selected configurations must be confronted with
-measured crossings, hardware-specific observation models, varied track
-profiles, and the simulation-to-field gap that no simulation study can close
-from within.
+These conclusions are conditional on one simulated bridge, one rail profile,
+and a passage-level split. Future work should retrain the published finalist
+architectures on the present data to apportion the reconstruction gap, vary
+the rail profile and the operational ranges, estimate support-stiffness loss
+as a continuous quantity on unseen damage states, and validate the pitch-rate
+response with instrumented trains.

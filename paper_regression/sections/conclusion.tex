@@ -1,0 +1,41 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+The completed F25 reconstruction and extension provide classification evidence
+for ten prescribed bridge-damage configurations under operational variation.
+In the separately reoptimized F25-X single-channel table, PAA with multi-rate
+pooling on carbody pitch rate achieved $77.63\%$ mean test accuracy with a
+$2.24$ percentage-point standard deviation over 20 initialization seeds. In the
+exploratory frozen-hyperparameter pair table, PAA-CNN using carbody pitch rate
+and carbody vertical acceleration achieved a mean of $75.68\%$ with a $4.59$
+percentage-point standard deviation. These are descriptive summaries of
+different analysis tiers; the latter is not a selected pair for the
+four-block regression campaign. Comparisons remain conditional on one
+partition, one profile, the specified search budget, and the modeled
+observation channels.
+
+F25 is a publication-faithful reconstruction rather than an exact replication.
+Its support-aligned mesh, local uniform-$EI$ crack surrogate, software
+framework, and explicitly assigned seeds impose documented deviations.
+Passage-level test performance measures recognition of the ten fixed
+configurations under new operational draws, not generalization to unseen
+structural states. The class labels combine three damage axes and do not form
+a single ordinal severity scale.
+
+The prospective four-block framework addresses the separate question of
+continuous support-stiffness-loss estimation on held-out structural states.
+It specifies F40-S, F40-M, L99-S, and L99-M; semantic state grouping and
+common-random-number pairing where catalogues overlap; a sealed outer test;
+grouped-development out-of-fold adjudication; a fixed channel screen;
+independent selected-pair optimization in each block; and disjoint report-only
+initialization seeds. F25 results do not complete those analyses.
+
+\pending{Summarize authenticated four-block outcomes after execution: RAW/PAA
+factorial winners, selected pair, block-local scour performance and stability,
+multi-pier localization, bearing leakage, and paired S--M comparisons.}
+
+Both experiments remain simulation studies. Their modeled response channels
+are not validated transducer packages, the wheelset proxies are excluded from
+learning, and the stiffness-loss labels are not scour depth. Field deployment
+requires measured crossings, a hardware-specific observation model, alternative
+track profiles, and explicit evaluation of the simulation-to-field gap.

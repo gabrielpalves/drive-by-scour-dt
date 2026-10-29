@@ -1,0 +1,27 @@
+% Interim abstract: observed F25 classification and prospective regression
+% are different experiments. Replace the pending outcomes only with the
+% authenticated four-block artifacts when those become available.
+Drive-by monitoring uses a passing train's vibration to infer bridge
+condition, but choices of signal representation, neural architecture, and
+response channel remain conditional on the simulated task and search budget.
+This interim study reports a publication-faithful reconstruction and extension
+of a ten-class railway-bridge damage-classification benchmark, alongside a
+prospectively specified design for continuous multi-pier scour regression.
+The completed F25 experiment uses 2,000 simulated passages of a 39.9~m
+two-span bridge, ten fixed combinations of scour, bearing fixity, and local
+flexural-rigidity loss, and one stored rail-profile realization. Its
+class-stratified split contains 800 training, 200 validation, and 1,000 test
+passages. RAW and Piecewise Aggregate Approximation inputs are compared using
+CNNs; the extension adds multi-rate pooling and evaluates six eligible vehicle
+responses. Each reported configuration is evaluated over 20 initialization
+seeds. In the separately reoptimized single-channel analysis, PAA with
+multi-rate pooling on carbody pitch rate achieves a mean ten-class test
+accuracy of $77.63\%$ with a standard deviation of $2.24$ percentage points.
+This is a descriptive result conditional on the fixed classes, partition,
+profile, and finite search; it does not establish a universal architecture or
+channel optimum. The prospective four-block regression design instead holds
+out structural states, compares a 16-cell architecture factorial, and separates
+channel selection from sealed-test reporting. Its continuous targets represent
+modeled support-stiffness loss, not scour depth.
+\pending{Authenticated four-block regression, selected-pair, and multi-pier
+outcomes remain unavailable; F25 classification does not estimate them.}

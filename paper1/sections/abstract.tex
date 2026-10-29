@@ -1,30 +1,27 @@
-% NOTE: single paragraph, plain language, no citations. Target 200--250 words.
-% The two \pending sentences must be rewritten with observed effect sizes after
-% the authenticated four-block campaign; do not soften the pending markers.
-Scour --- erosion around bridge foundations during floods --- is a leading
-cause of bridge failure but is difficult to inspect. Drive-by monitoring uses
-an in-service train's vibration to infer support condition. Previous studies
-established feasibility but leave key pre-deployment choices unresolved:
-whether to process raw or compressed signals, which neural components help,
-and which response channels are informative. This study addresses
-those questions with a prospectively specified, source-locked experiment based
-on two-dimensional train--track--bridge simulations of two- and four-span
-geometries. Four blocks separate scour-only from tasks adding nominal bearing
-fixity and a local flexural-rigidity-loss surrogate. One generated
-FRA-class-4 profile realization is shared by every semantic state and passage.
-Speed, temperature, and vehicle properties vary
-between passages, while track damage, wheel polygonization, and suspension
-damage are deferred.
-A 16-cell factorial compares raw and Piecewise Aggregate Approximation inputs,
-positional encoding, recurrence, and fixed-width multi-rate pooling. A sealed,
-state-grouped protocol then screens six learning-eligible single channels
-descriptively and all 15 eligible two-channel pairs for four retained
-pipelines. Two additional constrained-wheelset kinematic proxies remain in the
-eight-response payload only as diagnostics and never enter learning or
-selection.
-\pending{State the authenticated RAW/PAA factorial and selected-pair outcomes,
-with effect sizes and explicitly descriptive finite-design uncertainty.}
-\pending{State the authenticated block-local scour, multi-damage, and
-multi-pier results without importing pilot or pre-freeze values.} The resulting
-workflow provides an auditable template for simulation-based design decisions
-before field validation.
+Drive-by monitoring infers the condition of a bridge from the dynamic response
+of a passing vehicle. Recent studies have classified combinations of scour,
+bearing damage, and cracks in railway bridges from on-board vertical
+accelerations with convolutional neural networks (CNNs), but the reported
+accuracies refer to one tuned network per sensor, two sensor positions, and the
+best of several training runs. This paper reconstructs the ten-class benchmark
+of Fernandes et al.\ (2025) and extends it to six responses of the leading
+vehicle and to a CNN with multi-rate pooling. The dataset comprises 2,000
+simulated passages of a five-vehicle train over a 39.9~m two-span bridge,
+generated with a train--track--bridge interaction model under varying speed,
+temperature, and vehicle properties, with one fixed rail profile.
+Hyperparameters are tuned by Bayesian optimization, and every configuration is
+trained with 20 random initializations on the same partition of 800 training,
+200 validation, and 1,000 test passages. The published accuracies were not
+recovered: with the two source channels, the best of 20 runs reached at most
+71.8\% for the carbody and 73.8\% for the front bogie, against published
+best-run accuracies of up to 86.7\% and 82.2\%. The carbody pitch rate, which
+the source study did not use, gave the highest mean accuracy in five of the six
+combinations of network and tuning strategy. With channel-specific tuning and
+multi-rate pooling, it reached a mean accuracy of 77.63\% with a standard
+deviation of 2.24 percentage points, no collapsed run, and 43,642 parameters.
+Bearing damage and scour level were recognized in 99.97\% and 97.63\% of the
+test passages, whereas the crack label limited the accuracy (77.76\%), and the
+bogie pitch rates remained near the chance level. Two-channel inputs did not
+systematically outperform the better of their two single channels. The results
+support reporting complete run distributions and including pitch rates in
+drive-by monitoring.

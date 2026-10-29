@@ -1,5 +1,11 @@
-\section{Numerical simulation}
+\section{Prospective four-block numerical model}
 \label{sec:simulation}
+
+This section describes the four-block regression configurations. The completed
+F25 classification experiment uses the same solver family with a distinct
+39.9~m geometry, 0.15~m deck mesh, stored profile, ten damage classes, and
+passage design, as detailed in its dedicated methods section. Four-block
+qualification studies below are not F25-specific validation evidence.
 
 \subsection{Train--track--bridge interaction model}
 \label{sec:ttbi}
@@ -40,13 +46,13 @@ the nominal healthy first frequency (approximately 4.13~Hz for F40 and
 
 \begin{figure}[htbp]
 \centering
-\framebox[0.95\linewidth]{\rule{0pt}{4.2cm}\parbox{0.9\linewidth}{\centering
-\footnotesize Figure placeholder --- F40 and L99 decks on vertical support
-springs, simplified layered track, five-vehicle train, and eight
-\texttt{physical8\_v1} channels on the leading vehicle. Redraw from the
-reviewed implementation.}}
-\caption{Two-dimensional TTBI model, bridge geometries, and candidate modeled
-response channels.}
+\includegraphics[width=\textwidth]{ttbi_model.pdf}
+\caption{Planar TTBI model schematic: (a) five-vehicle train and the six
+eligible leading-vehicle responses; constrained-wheelset acceleration proxies
+S03/S04 are diagnostic only; (b) retained track-layer inventory and inherited
+ballast-condensation boundary; (c) prospective F40/L99 bridge geometries and
+scour targets. Orange symbols denote abutment rotational springs in the M
+blocks. Not to scale; F25 uses its separate 39.9~m geometry.}
 \label{fig:model}
 \end{figure}
 
@@ -86,7 +92,8 @@ $(90~\mathrm{km/h},33\,^{\circ}\mathrm{C})$ with 6, 15, and 30~m clearances.
 All 18 cases completed. Both registered comparison tiers --- C06 versus C30
 and C15 versus C30 --- passed, so the rule selected 6~m for production. The
 verdict is bound to generator source-root SHA-256
-\nolinkurl{aa187204cb3f89e24cb8bc894034044bad38b0358f5e0cd586338f84a8418efb}.
+\texttt{aa187204cb3f89e2\allowbreak4cb8bc894034044b\allowbreak%
+ad38b0358f5e0cd5\allowbreak86338f84a8418efb}.
 Its supported claim is strictly finite-rail-domain selection for this
 source-locked case matrix; it is not general mesh/time-step convergence,
 damage-model validation, or physical/field validation.

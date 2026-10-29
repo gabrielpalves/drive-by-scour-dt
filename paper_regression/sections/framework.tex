@@ -1,13 +1,16 @@
-\section{Proposed framework}
+\section{Prospective four-block framework}
 \label{sec:framework}
 
-The study is organized as a prospectively specified, source-locked simulation
+The four-block regression study is organized as a prospectively specified, source-locked simulation
 experiment: the bridge-state catalogues, active-mechanism scope, model-selection
 policy, statistical analyses, and claim boundaries were fixed in versioned,
 hash-identified source before production generation. In this paper,
 ``registered'' means fixed in that repository source. This section gives an overview, while
 Sections~\ref{sec:simulation} and~\ref{sec:data_processing} provide the
-implementation details.
+implementation details. These sections specify the prospective regression
+campaign; the completed F25 classification experiment has separate methods
+and results below. F25 does not share this state-grouped split or its
+architecture-selection and reporting roles.
 
 Three principles govern the experiment.
 
@@ -38,13 +41,13 @@ contemporary challengers enter only after the F40-S pair is authenticated, use
 that exact pair, and cannot conduct or alter channel selection.
 
 \paragraph{A selection/report firewall.}
-States, never passages, are assigned to train, inner-validation, and sealed
-outer-test partitions. Hyperparameter search, the Option-C grouped-development
-out-of-fold adjudication, and the response-channel screen use development data
-only. The outer test remains unopened until the architecture vectors, selected
-pair, block-local hyperparameters, checkpoint policy, and comparator set are
-frozen. Post-freeze variability is then estimated with a disjoint,
-prospectively listed set of initialization seeds and is report-only.
+Each structural state is assigned to training, inner validation, or the sealed
+outer test. Its passages remain together. Hyperparameter search, grouped
+development adjudication with Option~C, and channel screening use development
+data only. Test evaluation begins after the architecture vectors, response
+pair, local hyperparameters, checkpoint policy, and comparator set are frozen.
+Variability is then reported using a disjoint, prospectively listed set of
+initialization seeds; those runs do not change selection.
 
 \subsection{Scientific blocks and estimands}
 \label{sec:estimands}
@@ -71,8 +74,8 @@ The design supports five distinct estimand classes:
   same authenticated F40-S pair as the primary pipelines. They cannot choose a
   separate pair or retroactively affect the primary factorial or screen.
   \item \textbf{Block-local primary performance.} The retained RAW/PAA winners
-  and their RAW/PAA CNN--GAP baselines receive independent selected-pair HPO in
-  every block. Performance on the sealed outer test therefore estimates each
+  and the two CNN--GAP baselines are tuned independently on the selected pair
+  in every block. Performance on the sealed outer test therefore estimates each
   pipeline under block-local calibration, not hyperparameter transport.
   \item \textbf{Paired damage/task comparisons.} F40-S versus F40-M is
   interpreted only on their 30 shared controlled states; L99-S versus L99-M
