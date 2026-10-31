@@ -1,0 +1,143 @@
+{
+  "fingerprint_sha256": "cc3255df2aed3b6f5f8459a9ef1dcbd0ee5cd086eccec6528b257c00714fbbd0",
+  "row": {
+    "best_epoch": 651,
+    "epochs_run": 701,
+    "flattened_units": 27840,
+    "metrics": {
+      "bearing_present_absent_accuracy": 1.0,
+      "confusion_matrix": [
+        [
+          44,
+          33,
+          19,
+          0,
+          0,
+          4,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          41,
+          33,
+          18,
+          0,
+          0,
+          8,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          22,
+          6,
+          48,
+          0,
+          0,
+          24,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          45,
+          1,
+          0,
+          28,
+          0,
+          15,
+          11
+        ],
+        [
+          0,
+          0,
+          0,
+          1,
+          52,
+          0,
+          3,
+          35,
+          3,
+          6
+        ],
+        [
+          4,
+          1,
+          13,
+          0,
+          0,
+          82,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          31,
+          0,
+          0,
+          47,
+          0,
+          14,
+          8
+        ],
+        [
+          0,
+          0,
+          0,
+          3,
+          40,
+          0,
+          1,
+          41,
+          7,
+          8
+        ],
+        [
+          0,
+          0,
+          0,
+          14,
+          4,
+          0,
+          6,
+          16,
+          26,
+          34
+        ],
+        [
+          0,
+          0,
+          0,
+          14,
+          4,
+          0,
+          4,
+          15,
+          32,
+          31
+        ]
+      ],
+      "crack_level_accuracy": 0.545,
+      "overall_ten_class_accuracy": 0.449,
+      "scour_level_accuracy": 0.723
+    },
+    "parameter_count": 1343962,
+    "seed": 1009,
+    "test_loss": 1.2534107036590576,
+    "validation_accuracy": 0.4,
+    "validation_loss": 1.16631356716156,
+    "wall_seconds": 43.423
+  },
+  "schema": "f25-published-finalist-seed-v1"
+}

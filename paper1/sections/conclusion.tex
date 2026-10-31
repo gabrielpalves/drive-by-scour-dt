@@ -11,7 +11,11 @@ conclusions are as follows:
   source channels, the best of 20 runs reached at most 71.8\% for the carbody
   and 73.8\% for the front bogie, against published values of up to 86.7\% and
   82.2\%, and the validation score used for tuning exceeded the subsequent test
-  mean by 10.5 percentage points on average. The benefit of PAA for the carbody
+  mean by 10.5 percentage points on average. Trained on the present data with
+  their reported hyperparameters, the published finalist architectures reached
+  at most 63.4\% and 67.8\%, also with the Keras defaults for initialization
+  and the Adam update, so the gap is explained neither by the optimization
+  outcome nor by these framework defaults. The benefit of PAA for the carbody
   channel and the confusion between DC9 and DC10 were reproduced qualitatively.
   Drive-by classifiers should therefore be reported with their complete run
   distributions, including collapsed runs, rather than with their best run.
@@ -38,8 +42,8 @@ conclusions are as follows:
 \end{enumerate}
 
 These conclusions are conditional on one simulated bridge, one rail profile,
-and a passage-level split. Future work should retrain the published finalist
-architectures on the present data to apportion the reconstruction gap, vary
-the rail profile and the operational ranges, estimate support-stiffness loss
+and a passage-level split. Future work should locate the origin of the
+remaining reconstruction gap, vary the rail profile and the operational ranges,
+estimate support-stiffness loss
 as a continuous quantity on unseen damage states, and validate the pitch-rate
 response with instrumented trains.

@@ -58,14 +58,12 @@ The reconstruction gap cannot be attributed to a single cause. The crack
 model, the deck mesh, the software framework, the random partition, and the
 optimization outcome all differ from the source, and the publication is
 internally inconsistent regarding padding and the dense-layer range
-(Table~\ref{tab:f25_deviations}). The published finalist architectures were not
-retrained. The validation objectives of the reconstruction optimizations
-(60.0--72.8\%) were also 8--26 percentage points higher than the corresponding
-20-run test means, a selection effect discussed in Section~\ref{sec:tuning}.
-The results therefore support an unresolved reconstruction gap rather than a
-replication of the published accuracies. The selected hyperparameters are
-listed in Table~\ref{tab:f25_hyperparameters}; the front-bogie vectors are the
-shared hyperparameters of the extension.
+(Table~\ref{tab:f25_deviations}). The validation objectives of the
+reconstruction optimizations (60.0--72.8\%) were also 8--26 percentage points
+higher than the corresponding 20-run test means, a selection effect discussed
+in Section~\ref{sec:tuning}. The selected hyperparameters are listed in
+Table~\ref{tab:f25_hyperparameters}; the front-bogie vectors are the shared
+hyperparameters of the extension.
 
 \begin{table}[htbp]
 \centering
@@ -77,6 +75,44 @@ a layer followed by max pooling.}
 \footnotesize
 \setlength{\tabcolsep}{3pt}
 \resizebox{\textwidth}{!}{\input{tables/f25_hyperparameters}}
+\end{table}
+
+The control with the published finalists (Table~\ref{tab:f25_finalists}) tests
+the optimization outcome and two framework defaults directly. Its 100 runs were
+made later, on an NVIDIA GeForce RTX 4070 Laptop GPU with PyTorch 2.7.0 and
+CUDA 12.8; evaluated on the inputs prepared for the control, the best stored
+PAA-CNN reconstruction checkpoints for CV and FV reproduced their confusion
+matrices exactly. With the PyTorch defaults, the best runs of the published
+architectures reached 59.3\% for the carbody and 65.5\% for the front bogie,
+below the best PAA-CNN reconstruction runs (66.6\% and 73.8\%). The Keras
+defaults made the carbody network train more reliably: the mean rose from
+31.33\% to 43.59\%, the median from 26.35\% to 53.90\%, and the number of runs
+at 10\% fell from six to three. The best carbody run, however, rose only to
+63.4\%. On the front bogie, the Keras defaults left the distribution nearly
+unchanged (mean 55.68\% against 56.21\%) and gave a best run of 67.8\%; without
+padding, the best run reached 65.6\%. Even with the same architectures,
+hyperparameters, and Keras defaults, the published best runs thus exceed the
+present ones by 23.3 points for the carbody and 14.3 points for the front
+bogie, more than the 20.1 and 8.3 points by which they exceed the best PAA-CNN
+reconstruction runs. The gap is therefore explained neither by the
+optimization outcome nor by these framework defaults; it lies in the data and
+the simulator or in training details that the source does not report. The
+results support an unresolved reconstruction gap rather than a replication of
+the published accuracies.
+
+\begin{table}[htbp]
+\centering
+\caption{Ten-class test accuracy of the two PAA-CNN finalists published by the
+source, trained on the present data with their reported hyperparameters (mean
+$\pm$ sample SD over 20 runs). With convolutions that preserve the length and
+pooling that rounds up (Same), the front-bogie network has the 7,008 flattened
+units implied by the source; without padding (None), it has 6,816. Keras
+denotes Glorot-uniform initialization with zero biases and the Keras form of
+the Adam update. The best PAA-CNN reconstruction runs reached 66.6\% (CV) and
+73.8\% (FV), and the source reports 86.7\% and 82.1\%.}
+\label{tab:f25_finalists}
+\small
+\input{tables/f25_published_finalists}
 \end{table}
 
 \subsection{Channel comparison with shared hyperparameters}

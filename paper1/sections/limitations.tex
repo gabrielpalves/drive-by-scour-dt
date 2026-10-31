@@ -37,10 +37,15 @@ uncertainty over datasets or structures. Comparisons between arms involve
 different parameter counts, independent 100-proposal searches, and the
 1,000-epoch limit, so an accuracy difference does not isolate a single
 mechanism. The published reference accuracies are best-run values, so they
-are compared with the best of the present runs rather than with their means,
-and the published finalist architectures were not retrained. Finally, all configurations were compared on the same test set, so
-the best configurations were identified after the test results were known and
-their rankings are descriptive.
+are compared with the best of the present runs rather than with their means.
+The control with the published finalists reproduced two Keras defaults, the
+initialization and the Adam update, on the assumption that the source used
+them; it did not reproduce the Keras implementations of the learning-rate
+schedule and early stopping or the numerical defaults of TensorFlow, and it
+cannot separate the simulator from the other unreported details of the source.
+Finally, all configurations were compared on the same test set, so the best
+configurations were identified after the test results were known and their
+rankings are descriptive.
 
 Field application requires several further steps. The carbody pitch rate can be
 measured with a gyroscope, such as those of common inertial measurement units,

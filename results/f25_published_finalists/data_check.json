@@ -1,0 +1,32 @@
+{
+  "loss_relative_tolerance": 0.0001,
+  "method": "F25 best-run checkpoints re-scored on this run's prepared test partition (CPU)",
+  "passed": true,
+  "rows": [
+    {
+      "checkpoint_sha256": "a57baf4c4894ff4ac54d5fcde487538b51c7fb2e8284669b0ecffa0a5093d4f3",
+      "configuration_id": "PAA__S00",
+      "confusion_matrix_identical": true,
+      "passed": true,
+      "recorded_overall_accuracy": 0.666,
+      "recorded_test_loss": 0.909755292892456,
+      "relative_test_loss_error": 1.266316979086634e-06,
+      "reproduced_overall_accuracy": 0.666,
+      "reproduced_test_loss": 0.9097541408538818,
+      "seed": 1019
+    },
+    {
+      "checkpoint_sha256": "29bc17dc4a50768b4a4dc3c3953259da7777a198f177bdcc97b85f0154082283",
+      "configuration_id": "PAA__S01",
+      "confusion_matrix_identical": true,
+      "passed": true,
+      "recorded_overall_accuracy": 0.738,
+      "recorded_test_loss": 0.581163381755352,
+      "relative_test_loss_error": 1.1835528902957995e-07,
+      "reproduced_overall_accuracy": 0.738,
+      "reproduced_test_loss": 0.581163312971592,
+      "seed": 1069
+    }
+  ],
+  "schema": "f25-published-finalist-data-check-v1"
+}

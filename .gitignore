@@ -308,3 +308,10 @@ multidamage_*.zip
 /paper_regression/*.run.xml
 /paper_regression/*.synctex.gz
 /paper_regression/*.toc
+
+# F25 per-run results cited by paper1 (small): keep the CSVs and run logs that
+# the global *.csv / *.log rules would drop; smoke outputs stay local.
+!/results/f25/*.csv
+!/results/f25_published_finalists/summary.csv
+!/results/f25_published_finalists/*.log
+/results/f25_published_finalists/smoke/

@@ -1,0 +1,83 @@
+{
+  "early_stopping_patience": 50,
+  "f25_contract_sha256": "a80b9c754f911737b1ce6d841bfb837d6ac3200c334508abd3f901f9167d48ce",
+  "finalist": {
+    "batch_size": 32,
+    "configuration_id": "PAA__S01",
+    "conv_padding": "valid",
+    "convolution_filters": [
+      128,
+      96,
+      96
+    ],
+    "convolution_kernel_sizes": [
+      3,
+      3,
+      3
+    ],
+    "dense_units": 96,
+    "finalist_id": "PAA-PUB-VALID__S01",
+    "flatten_units": 6816,
+    "input_samples": 583,
+    "learning_rate": 0.0005,
+    "max_pool_after_layer": [
+      true,
+      true,
+      true
+    ],
+    "model_class": "core.f25_models.F25CNN",
+    "parameter_count": 720618,
+    "pool_ceil_mode": false,
+    "published_flatten_units": 7008,
+    "role": "padding sensitivity: front-bogie finalist with F25 valid/floor layers",
+    "sensor_id": "front_bogie_vertical_acceleration",
+    "sensor_index": 1
+  },
+  "frozen_sources": {
+    "core/f25_experiment_contract.py": "1816c8637716594be61d7d1315ad5c7df0ffb55b5345285e322a9a2e5c88cdf6",
+    "core/f25_models.py": "a818e29fe782e57ba3a53b956c27a79e7c6ff79ae813583b1374d5bf3610fe4d",
+    "core/f25_training_contract.py": "5d8b864c80b9d3ba6e1b85fd1495f214aa791402c4e67376bb19e6918bc87690",
+    "core/temporal_pooling.py": "bb4bc2d87e63569736b3d81d2e8f53e500b1d86e66b71b3cbb1ff3658312c16b",
+    "training/f25_executor.py": "0c58a3cf3644e1651a92040dbebfde1395b4a88ef4d230f4e83cbbfb1e9e9b3f"
+  },
+  "gen_fingerprint": "9c6ba126306c78111692e9a101f03bc6439f10b3854ef5c71916049363cc444a",
+  "max_epochs": 1000,
+  "minmax": {
+    "maximum": [
+      0.566155195236206
+    ],
+    "minimum": [
+      -0.6015293002128601
+    ]
+  },
+  "params": {
+    "batch_size": 32,
+    "dense_units": 96,
+    "filters_l0": 128,
+    "filters_l1": 96,
+    "filters_l2": 96,
+    "kernel_l0": 3,
+    "kernel_l1": 3,
+    "kernel_l2": 3,
+    "learning_rate": 0.0005,
+    "n_conv_layers": 3,
+    "pool_l0": true,
+    "pool_l1": true,
+    "pool_l2": true
+  },
+  "partition_sha256": "96e61a6ef27c997a65d1755f3b2ed28505fac775ed12a8fa60f7cf8e8c1360cb",
+  "plateau": [
+    0.5,
+    30,
+    1e-06
+  ],
+  "runtime": {
+    "cudnn": 90701,
+    "device": "cuda",
+    "device_name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "torch": "2.7.0+cu128",
+    "torch_cuda": "12.8"
+  },
+  "schema": "f25-published-finalist-fingerprint-v1",
+  "verified_state_root_sha256": "16e86961630c01110e760b38f7b44cb4b1a0ac582f53b3d1807edc521b5fb769"
+}

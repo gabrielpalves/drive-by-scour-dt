@@ -94,7 +94,26 @@ deterministic GPU algorithms.
 \label{sec:design}
 
 The reconstruction tunes RAW-CNN and PAA-CNN separately for CV and FV, as in
-the source. The extension comprises three parts:
+the source. As a control, the two PAA-CNN finalists published by the source are
+also trained with their reported hyperparameters, without optimization. The
+carbody finalist has two convolutional layers of 48 filters with kernel sizes
+of 2 and 3, without padding or pooling (27,840 flattened units), a dense layer
+of 48 units, a learning rate of $10^{-3}$, and a batch size of 24 (1,343,962
+parameters). The front-bogie finalist has three layers of 128, 96, and 96
+filters with a kernel size of 3, each followed by max pooling, a dense layer of
+96 units, a learning rate of $5\times10^{-4}$, and a batch size of 32. It is
+trained with the padding implied by its reported 7,008 flattened units
+(convolutions that preserve the length and pooling that rounds up; 739,050
+parameters) and, as a variant, without padding (6,816 units; 720,618
+parameters). Both finalists are trained with the protocol of
+Section~\ref{sec:hpo} and the 20 reporting seeds, first with the PyTorch
+defaults used throughout this study and then with two defaults of the Keras
+interface of TensorFlow, on the assumption that the source used them:
+Glorot-uniform initialization of the weights with zero
+biases~\cite{glorot2010understanding}, and the Keras form of the Adam update,
+which adds $\epsilon=10^{-7}$ to the square root of the uncorrected
+second-moment estimate, whereas PyTorch adds $\epsilon=10^{-8}$ to that of the
+bias-corrected estimate. The extension comprises three parts:
 \begin{itemize}
   \item \textbf{Shared hyperparameters.} The vectors tuned in the
   reconstruction for the front bogie (FV) are applied to all six channels;
@@ -111,7 +130,8 @@ of tuning with the randomness of a finite search. The shared FV configurations
 of RAW-CNN and PAA-CNN repeat the reconstruction ones and reproduce their
 results exactly, so they are not additional evidence. In total, the study
 comprises 22 optimizations and 85 reported configurations, that is, 11,000
-tuning runs and 1,700 reported runs.
+tuning runs and 1,700 reported runs; the control adds five configurations and
+100 runs.
 
 \subsection{Deviations from the source study}
 \label{sec:deviations}
@@ -137,14 +157,14 @@ Deck mesh & 0.30~m; central support inside an element & 0.15~m uniform refinemen
 Crack model & Tapered local $EI$ law~\cite{sinha2002simplified} & Uniform 22\% or 14\% $EI$ reduction over the same 0.30~m zone \\
 Signal sampling & Recording at 1,000~Hz; 5,830 samples over 58.3~m & Resampling at 100 samples/m, consistent with the reported sample count \\
 Monitoring window & 5,830 samples & 5,831 inclusive samples, last one discarded \\
-Software & TensorFlow & PyTorch \\
+Software & TensorFlow & PyTorch; Keras initialization and Adam update in the control (Section~\ref{sec:design}) \\
 Data split & Counts reported; allocation not reported & One seeded permutation shared by all scenarios \\
 Min--max scaling & Calibration data not reported & Training set only, per channel \\
 Optimizer & Bayesian optimization; implementation not reported & Tree-structured Parzen estimator (Optuna) \\
 Learning-rate sampling & Range reported; distribution not reported & Logarithmic \\
 Restored weights & Not reported & Lowest validation loss \\
-Convolution padding & Carbody finalist implies no padding ($580\times48=27{,}840$ flattened units); front-bogie finalist implies padding ($73\times96=7{,}008$) & No padding in all networks \\
-Front-bogie finalist & Dense layer of 96 units, outside the reported 16--64 range & Search restricted to the reported range; published finalists not retrained \\
+Convolution padding & Carbody finalist implies no padding ($580\times48=27{,}840$ flattened units); front-bogie finalist implies padding ($73\times96=7{,}008$) & No padding in the optimized networks; both variants in the control \\
+Front-bogie finalist & Dense layer of 96 units, outside the reported 16--64 range & Search restricted to the reported range; finalist trained as published in the control \\
 \bottomrule
 \end{tabular}
 \end{table}

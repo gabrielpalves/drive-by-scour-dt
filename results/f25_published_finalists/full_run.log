@@ -1,0 +1,76 @@
+PAA-PUB__S00        580 x 48 = 27,840 flattened (published 27,840), 1,343,962 parameters
+PAA-PUB__S01        73 x 96 = 7,008 flattened (published 7,008), 739,050 parameters
+PAA-PUB-VALID__S01  71 x 96 = 6,816 flattened (published 7,008), 720,618 parameters
+F25 source: archive C:\Users\gabri\OneDrive\Desktop\Doutorado\Sandwich\DigitalTwins\drive-by-scour-dt\f25.zip (f25/workspace/)
+dataset ready: 2000 passages, channels [0, 1], 12 s
+data check PAA__S00: F25 seed 1019 re-scored 0.6660 (recorded 0.6660), confusion matrix identical, test-loss rel. error 1.3e-06
+data check PAA__S01: F25 seed 1069 re-scored 0.7380 (recorded 0.7380), confusion matrix identical, test-loss rel. error 1.2e-07
+training on NVIDIA GeForce RTX 4070 Laptop GPU (cuda); seeds 1009..1123 (20), max 1000 epochs
+
+[PAA-PUB__S00  1/20] seed 1009 trained: test acc 0.1000, best epoch 218 of 268, 36 s, ~11 min left on this finalist
+[PAA-PUB__S00  2/20] seed 1013 trained: test acc 0.5480, best epoch 791 of 841, 63 s, ~15 min left on this finalist
+[PAA-PUB__S00  3/20] seed 1019 trained: test acc 0.4630, best epoch 990 of 1000, 76 s, ~16 min left on this finalist
+[PAA-PUB__S00  4/20] seed 1021 trained: test acc 0.1890, best epoch 41 of 91, 7 s, ~12 min left on this finalist
+[PAA-PUB__S00  5/20] seed 1031 trained: test acc 0.1000, best epoch 302 of 352, 27 s, ~10 min left on this finalist
+[PAA-PUB__S00  6/20] seed 1033 trained: test acc 0.3530, best epoch 998 of 1000, 78 s, ~11 min left on this finalist
+[PAA-PUB__S00  7/20] seed 1039 trained: test acc 0.5450, best epoch 999 of 1000, 81 s, ~11 min left on this finalist
+[PAA-PUB__S00  8/20] seed 1049 trained: test acc 0.5930, best epoch 942 of 992, 81 s, ~11 min left on this finalist
+[PAA-PUB__S00  9/20] seed 1051 trained: test acc 0.1000, best epoch 166 of 216, 17 s, ~9 min left on this finalist
+[PAA-PUB__S00 10/20] seed 1061 trained: test acc 0.2260, best epoch 995 of 1000, 78 s, ~9 min left on this finalist
+[PAA-PUB__S00 11/20] seed 1063 trained: test acc 0.2160, best epoch 112 of 162, 13 s, ~8 min left on this finalist
+[PAA-PUB__S00 12/20] seed 1069 trained: test acc 0.5290, best epoch 993 of 1000, 97 s, ~7 min left on this finalist
+[PAA-PUB__S00 13/20] seed 1087 trained: test acc 0.3010, best epoch 1000 of 1000, 135 s, ~7 min left on this finalist
+[PAA-PUB__S00 14/20] seed 1091 trained: test acc 0.2040, best epoch 133 of 183, 17 s, ~6 min left on this finalist
+[PAA-PUB__S00 15/20] seed 1093 trained: test acc 0.5310, best epoch 613 of 663, 73 s, ~5 min left on this finalist
+[PAA-PUB__S00 16/20] seed 1097 trained: test acc 0.5580, best epoch 985 of 1000, 118 s, ~4 min left on this finalist
+[PAA-PUB__S00 17/20] seed 1103 trained: test acc 0.1000, best epoch 329 of 379, 37 s, ~3 min left on this finalist
+[PAA-PUB__S00 18/20] seed 1109 trained: test acc 0.1000, best epoch 216 of 266, 39 s, ~2 min left on this finalist
+[PAA-PUB__S00 19/20] seed 1117 trained: test acc 0.4090, best epoch 998 of 1000, 218 s, ~1 min left on this finalist
+[PAA-PUB__S00 20/20] seed 1123 trained: test acc 0.1000, best epoch 280 of 330, 85 s
+[PAA-PUB__S01  1/20] seed 1009 trained: test acc 0.6250, best epoch 691 of 741, 198 s, ~63 min left on this finalist
+[PAA-PUB__S01  2/20] seed 1013 trained: test acc 0.5240, best epoch 683 of 733, 201 s, ~60 min left on this finalist
+[PAA-PUB__S01  3/20] seed 1019 trained: test acc 0.5430, best epoch 805 of 855, 224 s, ~59 min left on this finalist
+[PAA-PUB__S01  4/20] seed 1021 trained: test acc 0.5510, best epoch 940 of 990, 255 s, ~59 min left on this finalist
+[PAA-PUB__S01  5/20] seed 1031 trained: test acc 0.5710, best epoch 522 of 572, 155 s, ~52 min left on this finalist
+[PAA-PUB__S01  6/20] seed 1033 trained: test acc 0.6420, best epoch 758 of 808, 90 s, ~44 min left on this finalist
+[PAA-PUB__S01  7/20] seed 1039 trained: test acc 0.6350, best epoch 436 of 486, 34 s, ~36 min left on this finalist
+[PAA-PUB__S01  8/20] seed 1049 trained: test acc 0.5620, best epoch 622 of 672, 101 s, ~31 min left on this finalist
+[PAA-PUB__S01  9/20] seed 1051 trained: test acc 0.5550, best epoch 989 of 1000, 256 s, ~31 min left on this finalist
+[PAA-PUB__S01 10/20] seed 1061 trained: test acc 0.5800, best epoch 668 of 718, 115 s, ~27 min left on this finalist
+[PAA-PUB__S01 11/20] seed 1063 trained: test acc 0.5790, best epoch 667 of 717, 46 s, ~23 min left on this finalist
+[PAA-PUB__S01 12/20] seed 1069 trained: test acc 0.5170, best epoch 461 of 511, 41 s, ~19 min left on this finalist
+[PAA-PUB__S01 13/20] seed 1087 trained: test acc 0.5930, best epoch 635 of 685, 71 s, ~16 min left on this finalist
+[PAA-PUB__S01 14/20] seed 1091 trained: test acc 0.5890, best epoch 988 of 1000, 100 s, ~13 min left on this finalist
+[PAA-PUB__S01 15/20] seed 1093 trained: test acc 0.6290, best epoch 553 of 603, 62 s, ~11 min left on this finalist
+[PAA-PUB__S01 16/20] seed 1097 trained: test acc 0.1000, best epoch 316 of 366, 28 s, ~8 min left on this finalist
+[PAA-PUB__S01 17/20] seed 1103 trained: test acc 0.5720, best epoch 902 of 952, 92 s, ~6 min left on this finalist
+[PAA-PUB__S01 18/20] seed 1109 trained: test acc 0.5880, best epoch 811 of 861, 220 s, ~4 min left on this finalist
+[PAA-PUB__S01 19/20] seed 1117 trained: test acc 0.6310, best epoch 527 of 577, 147 s, ~2 min left on this finalist
+[PAA-PUB__S01 20/20] seed 1123 trained: test acc 0.6550, best epoch 559 of 609, 157 s
+[PAA-PUB-VALID__S01  1/20] seed 1009 trained: test acc 0.6330, best epoch 730 of 780, 258 s, ~82 min left on this finalist
+[PAA-PUB-VALID__S01  2/20] seed 1013 trained: test acc 0.5290, best epoch 999 of 1000, 320 s, ~87 min left on this finalist
+[PAA-PUB-VALID__S01  3/20] seed 1019 trained: test acc 0.5800, best epoch 743 of 793, 262 s, ~79 min left on this finalist
+[PAA-PUB-VALID__S01  4/20] seed 1021 trained: test acc 0.6260, best epoch 653 of 703, 206 s, ~70 min left on this finalist
+[PAA-PUB-VALID__S01  5/20] seed 1031 trained: test acc 0.5440, best epoch 585 of 635, 215 s, ~63 min left on this finalist
+[PAA-PUB-VALID__S01  6/20] seed 1033 trained: test acc 0.5770, best epoch 720 of 770, 247 s, ~59 min left on this finalist
+[PAA-PUB-VALID__S01  7/20] seed 1039 trained: test acc 0.6560, best epoch 562 of 612, 200 s, ~53 min left on this finalist
+[PAA-PUB-VALID__S01  8/20] seed 1049 trained: test acc 0.5670, best epoch 756 of 806, 264 s, ~49 min left on this finalist
+[PAA-PUB-VALID__S01  9/20] seed 1051 trained: test acc 0.5980, best epoch 719 of 769, 253 s, ~45 min left on this finalist
+[PAA-PUB-VALID__S01 10/20] seed 1061 trained: test acc 0.5600, best epoch 814 of 864, 283 s, ~42 min left on this finalist
+[PAA-PUB-VALID__S01 11/20] seed 1063 trained: test acc 0.6120, best epoch 830 of 880, 288 s, ~38 min left on this finalist
+[PAA-PUB-VALID__S01 12/20] seed 1069 trained: test acc 0.6210, best epoch 953 of 1000, 239 s, ~34 min left on this finalist
+[PAA-PUB-VALID__S01 13/20] seed 1087 trained: test acc 0.6530, best epoch 961 of 1000, 219 s, ~29 min left on this finalist
+[PAA-PUB-VALID__S01 14/20] seed 1091 trained: test acc 0.5580, best epoch 454 of 504, 173 s, ~24 min left on this finalist
+[PAA-PUB-VALID__S01 15/20] seed 1093 trained: test acc 0.5940, best epoch 619 of 669, 228 s, ~20 min left on this finalist
+[PAA-PUB-VALID__S01 16/20] seed 1097 trained: test acc 0.5740, best epoch 794 of 844, 270 s, ~16 min left on this finalist
+[PAA-PUB-VALID__S01 17/20] seed 1103 trained: test acc 0.6520, best epoch 892 of 942, 333 s, ~13 min left on this finalist
+[PAA-PUB-VALID__S01 18/20] seed 1109 trained: test acc 0.6490, best epoch 646 of 696, 123 s, ~8 min left on this finalist
+[PAA-PUB-VALID__S01 19/20] seed 1117 trained: test acc 0.5490, best epoch 504 of 554, 118 s, ~4 min left on this finalist
+[PAA-PUB-VALID__S01 20/20] seed 1123 trained: test acc 0.5660, best epoch 880 of 930, 235 s
+
+test accuracy, %     flatten    params     mean+-sd    min    med    max | F25 tuned max | published
+PAA-PUB__S00          27,840 1,343,962   31.3+-19.1   10.0   26.4   59.3 |          66.6 |      86.7
+PAA-PUB__S01           7,008   739,050   56.2+-11.6   10.0   57.9   65.5 |          73.8 |      82.1
+PAA-PUB-VALID__S01     6,816   720,618   59.5+- 4.0   52.9   58.7   65.6 |          73.8 |      82.1
+
+written: C:\Users\gabri\OneDrive\Desktop\Doutorado\Sandwich\DigitalTwins\drive-by-scour-dt\results\f25_published_finalists\summary.csv and <finalist>/metrics.json under C:\Users\gabri\OneDrive\Desktop\Doutorado\Sandwich\DigitalTwins\drive-by-scour-dt\results\f25_published_finalists

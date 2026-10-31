@@ -104,14 +104,22 @@ Execute na raiz: `python analyze_f25_results.py --archive f25.zip`
 - `audit.json`, `configuration_summary.csv`, `seed_metrics.csv`,
   `hpo_summary.csv`, `tuning_differences.csv`, `mean_confusion_matrices.csv`.
 - `paper1/tables/f25_*.tex`: cinco tabelas (médias arredondadas meio-para-cima
-  a partir das razões exatas; inclui os hiperparâmetros selecionados).
+  a partir das razões exatas; inclui os hiperparâmetros selecionados). A sexta,
+  `f25_published_finalists.tex`, vem do controle com as finalistas publicadas
+  (`results/f25_published_finalists/`, `run_f25_published_finalists.py
+  --paper-table`).
 - `paper1/figures/f25_*.{pdf,png}`: boxplots dos singles, pares e matriz média.
+
+Os CSVs desta pasta são versionados (exceção no `.gitignore` desde
+31/10/2026); o `f25.zip` (1,08 GB) não.
 
 ## Artigo
 
 Por decisão do autor (29/10/2026), `paper1/` agora é um **artigo independente
-só do F25**, no formato de Fernandes et al., com 28 páginas. O desenho da
-campanha de regressão de quatro blocos foi preservado sem alterações em
-`paper_regression/` para o futuro artigo de regressão. Faltam apenas itens dos
-autores (agradecimentos, contribuições, financiamento, link do repositório,
-periódico), marcados em vermelho no PDF.
+só do F25**, no formato de Fernandes et al. O desenho da campanha de regressão
+de quatro blocos foi preservado sem alterações em `paper_regression/` para o
+futuro artigo de regressão. Em 31/10/2026 entrou o controle com as finalistas
+publicadas (29 páginas), e a disponibilidade de dados passou a ser "sob pedido
+ao autor correspondente". Faltam apenas itens dos autores (agradecimentos,
+contribuições, financiamento, periódico e título), marcados em vermelho no
+PDF.
